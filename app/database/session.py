@@ -51,10 +51,22 @@ def _asyncpg_ssl_connect_args(url: str) -> dict:
     """
     Render PostgreSQL expects TLS. asyncpg does not always infer SSL from the URL alone;
     passing ssl=True avoids OperationalError / connection refused on first query.
+
+    DATABASE_SSL_INSECURE=true uses an unverified TLS context (self-signed / SSL inspection).
     """
+    import ssl as ssl_module
+
+    raw = (url or "").strip()
+    if settings.DATABASE_SSL_INSECURE and raw:
+        ctx = ssl_module.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl_module.CERT_NONE
+        logger.warning(
+            "DATABASE_SSL_INSECURE=true: asyncpg TLS certificate verification is disabled"
+        )
+        return {"ssl": ctx}
     if os.getenv("RENDER", "").lower() not in {"true", "1"}:
         return {}
-    raw = (url or "").strip()
     if not raw:
         return {}
     try:

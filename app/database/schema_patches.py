@@ -11,6 +11,8 @@ import logging
 
 from sqlalchemy import create_engine, inspect, text
 
+from app.database.ssl_connect import psycopg2_engine_connect_args
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,7 +32,7 @@ def ensure_hospitals_tenant_database_name_column(sync_dsn: str) -> None:
         logger.warning("ensure_hospitals_tenant_database_name_column: empty DSN, skipping")
         return
 
-    eng = create_engine(dsn)
+    eng = create_engine(dsn, connect_args=psycopg2_engine_connect_args())
     try:
         insp = inspect(eng)
         if not insp.has_table("hospitals"):
@@ -66,7 +68,7 @@ def ensure_patient_profiles_opd_schema(sync_dsn: str) -> None:
         logger.warning("ensure_patient_profiles_opd_schema: empty DSN, skipping")
         return
 
-    eng = create_engine(dsn)
+    eng = create_engine(dsn, connect_args=psycopg2_engine_connect_args())
     try:
         insp = inspect(eng)
         if not insp.has_table("patient_profiles"):
@@ -146,7 +148,7 @@ def ensure_doctor_profiles_consultation_schema(sync_dsn: str) -> None:
         logger.warning("ensure_doctor_profiles_consultation_schema: empty DSN, skipping")
         return
 
-    eng = create_engine(dsn)
+    eng = create_engine(dsn, connect_args=psycopg2_engine_connect_args())
     try:
         insp = inspect(eng)
         if not insp.has_table("doctor_profiles"):

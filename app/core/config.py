@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     DATABASE_URL_SYNC: str = Field(default="", env="DATABASE_URL_SYNC")
     DB_PRUNE_UNUSED_TABLES: bool = Field(default=False, env="DB_PRUNE_UNUSED_TABLES")
     DB_BOOTSTRAP_FROM_MODELS: bool = Field(default=True, env="DB_BOOTSTRAP_FROM_MODELS")
+    # Dev / private networks only: skip TLS certificate verification for Postgres (asyncpg + psycopg2)
+    DATABASE_SSL_INSECURE: bool = Field(default=False, env="DATABASE_SSL_INSECURE")
+    # Corporate TLS proxies / misconfigured SMTP: skip cert verify for aiosmtplib
+    SMTP_TLS_INSECURE: bool = Field(default=False, env="SMTP_TLS_INSECURE")
 
     # Per-hospital PostgreSQL databases (same server as DATABASE_URL / pgAdmin)
     TENANT_DB_AUTO_PROVISION: bool = Field(

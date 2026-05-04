@@ -1,50 +1,94 @@
 # ============================================================
-# Hospital Management SaaS - Environment Configuration
-# NEVER commit real credentials to version control.
+# Hospital backend — copy this file to ".env" for local dev.
+# On Render: set the same variables in the Web Service UI (no file).
+# NEVER commit real passwords or production SECRET_KEY to git.
 # ============================================================
 
-# Application
+# --- App ---
 DEBUG=True
-LOG_LEVEL=DEBUG
+LOG_LEVEL=INFO
+OPENAPI_DOCS=True
+# Public API base (links in JSON); local:
+APP_PUBLIC_URL=http://localhost:8000
+# Comma-separated browser origins allowed to call the API:
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:8080
 
-# Database — CHANGE ALL VALUES before deployment
+# --- Database (pick ONE style) ---
+#
+# Style A — URLs (recommended for Render): paste Internal Database URL twice.
+# User is often "user_database"; last path segment is DATABASE NAME (not username).
+#   DATABASE_URL=postgresql://user_database:PASSWORD@dpg-xxxxx-a/dbname
+#   DATABASE_URL_SYNC=postgresql://user_database:PASSWORD@dpg-xxxxx-a/dbname
+#
+# Style B — local pieces (used only if both URL vars are empty):
 DB_HOST=localhost
 DB_PORT=5432
 DB_USER=123
 DB_PASSWORD=123
 DB_NAME=123
+#
+# Style C — explicit local URLs (overrides Style B if set):
 DATABASE_URL=postgresql+asyncpg://123:123@localhost:5432/123
 DATABASE_URL_SYNC=postgresql://123:123@localhost:5432/123
-# Security — generate with: python -c "import secrets; print(secrets.token_hex(32))"
-SECRET_KEY=9932eabac13b053287420e526d77eb3ae47d2b0e8f59c4a1684845c4997f0879
 
-# Super Admin — change immediately after first login
+DB_POOL_SIZE=5
+DB_MAX_OVERFLOW=10
+# Only if you see SSLCertVerificationError / self-signed Postgres (dev/private):
+DATABASE_SSL_INSECURE=False
+DB_BOOTSTRAP_FROM_MODELS=True
+DB_PRUNE_UNUSED_TABLES=False
+
+# Multi-tenant: set false on Render if Postgres user cannot CREATE DATABASE
+TENANT_DB_AUTO_PROVISION=True
+TENANT_DB_ROUTE_QUERIES=True
+TENANT_DB_NAME_PREFIX=hosp_
+TENANT_TEMPLATE_DATABASE=
+TENANT_DB_ADMIN_DATABASE=postgres
+
+# --- Security ---
+# Generate:  python -c "import secrets; print(secrets.token_hex(32))"
+SECRET_KEY=change-me-use-secrets-token-hex-32-locally
+
+# --- Super Admin (seed / sync from env) ---
 SUPERADMIN_EMAIL=superadmin@hsm.com
 SUPERADMIN_PASSWORD=SuperAdmin123!
 SUPERADMIN_FIRST_NAME=Super
 SUPERADMIN_LAST_NAME=Admin
 
-# Email (SMTP) — Brevo: https://app.brevo.com → SMTP & API (SMTP_USER = your login email, SMTP_PASS = SMTP key)
+# --- Redis ---
+REDIS_URL=redis://localhost:6379/0
+
+# --- SMTP (Brevo etc.) ---
 SMTP_HOST=smtp-relay.brevo.com
 SMTP_PORT=587
 SMTP_USER=
 SMTP_PASS=
+# Only if SMTP fails with SSLCertVerificationError (e.g. corporate SSL inspection):
+SMTP_TLS_INSECURE=False
 EMAIL_FROM=
 
-# Payment Gateways
-RAZORPAY_KEY_ID=rzp_test_jUuqoNowtoLjk6
-RAZORPAY_KEY_SECRET=n3HOE6demZT8nQfV0Sb5H1Ox
-RAZORPAY_WEBHOOK_SECRET=iamironman
+SENDGRID_API_KEY=
 
+# --- Payments (fill only what you use) ---
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 STRIPE_PUBLISHABLE_KEY=
-
+RAZORPAY_KEY_ID=
+RAZORPAY_KEY_SECRET=
+RAZORPAY_WEBHOOK_SECRET=
 PAYTM_MID=
 PAYTM_KEY=
 PAYTM_ENV=sandbox
 PAYTM_WEBSITE=WEBSTAGING
 PAYTM_CALLBACK_URL=
 
-# Redis — for DB-backed idempotency (required in production)
-REDIS_URL=redis://localhost:6379/0
+# --- Twilio (optional) ---
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_FROM_NUMBER=
+
+# --- Misc ---
+DEMO_REQUEST_NOTIFY_EMAIL=
+CONTACT_MESSAGE_NOTIFY_EMAIL=
+HOSPITAL_NAME=City General Hospital
+HOSPITAL_EMAIL=billing@hospital.com

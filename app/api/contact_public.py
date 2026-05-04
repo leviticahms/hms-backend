@@ -362,7 +362,12 @@ async def render_diagnostics():
             "start_tls": True,
         }
         
-        smtp = aiosmtplib.SMTP(hostname=settings.SMTP_HOST, port=port, timeout=10)
+        smtp = aiosmtplib.SMTP(
+            hostname=settings.SMTP_HOST,
+            port=port,
+            timeout=10,
+            validate_certs=not settings.SMTP_TLS_INSECURE,
+        )
         await smtp.connect()
         method["connect"] = "✅"
         
@@ -403,7 +408,8 @@ async def render_diagnostics():
             hostname=settings.SMTP_HOST,
             port=port,
             use_tls=True,
-            timeout=10
+            timeout=10,
+            validate_certs=not settings.SMTP_TLS_INSECURE,
         )
         await smtp.connect()
         method["connect"] = "✅"
@@ -436,7 +442,12 @@ async def render_diagnostics():
             "start_tls": False,
         }
         
-        smtp = aiosmtplib.SMTP(hostname=settings.SMTP_HOST, port=port, timeout=10)
+        smtp = aiosmtplib.SMTP(
+            hostname=settings.SMTP_HOST,
+            port=port,
+            timeout=10,
+            validate_certs=not settings.SMTP_TLS_INSECURE,
+        )
         await smtp.connect()
         method["connect"] = "✅"
         method["starttls"] = "⏭️ SKIPPED"

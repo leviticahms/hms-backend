@@ -34,7 +34,11 @@ class EmailService:
         
         if not self.smtp_user or not self.smtp_pass:
             logger.warning("⚠️  SMTP credentials not configured")
-        
+        if settings.SMTP_TLS_INSECURE:
+            logger.warning(
+                "SMTP_TLS_INSECURE=true: SMTP TLS certificate verification is disabled"
+            )
+
         logger.info(
             f"EmailService initialized:\n"
             f"  Host: {self.smtp_host}:{self.smtp_port}\n"
@@ -91,6 +95,7 @@ class EmailService:
                     username=self.smtp_user,
                     password=self.smtp_pass,
                     timeout=timeout,
+                    validate_certs=not settings.SMTP_TLS_INSECURE,
                 ),
                 timeout=timeout + 5
             )
@@ -235,6 +240,7 @@ class EmailService:
                     username=self.smtp_user,
                     password=self.smtp_pass,
                     timeout=timeout,
+                    validate_certs=not settings.SMTP_TLS_INSECURE,
                 ),
                 timeout=timeout + 5
             )

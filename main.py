@@ -15,6 +15,8 @@ from alembic.config import Config
 from alembic import command
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import create_engine, text
+
+from app.database.ssl_connect import psycopg2_engine_connect_args
 from sqlalchemy.exc import IntegrityError, OperationalError, DBAPIError
 
 from app.core.config import settings
@@ -51,7 +53,7 @@ _setup_lock = asyncio.Lock()
 
 def acquire_advisory_lock(db_url: str, lock_id: int) -> bool:
     """Acquire PostgreSQL advisory lock for concurrency safety"""
-    engine = create_engine(db_url)
+    engine = create_engine(db_url, connect_args=psycopg2_engine_connect_args())
     with engine.connect() as conn:
         result = conn.execute(text("SELECT pg_try_advisory_lock(:lock_id)"), {"lock_id": lock_id})
         acquired = result.scalar()
@@ -62,7 +64,7 @@ def acquire_advisory_lock(db_url: str, lock_id: int) -> bool:
 def release_advisory_lock(db_url: str, lock_id: int):
     """Release PostgreSQL advisory lock"""
     try:
-        engine = create_engine(db_url)
+        engine = create_engine(db_url, connect_args=psycopg2_engine_connect_args())
         with engine.connect() as conn:
             conn.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": lock_id})
             logger.info(f"Advisory lock {lock_id} released")
@@ -702,7 +704,9 @@ def prune_unused_tables():
 
     logger.info("Pruning legacy tables not used by current models...")
     try:
-        engine = create_engine(settings.DATABASE_URL_SYNC)
+        engine = create_engine(
+            settings.DATABASE_URL_SYNC, connect_args=psycopg2_engine_connect_args()
+        )
         with engine.connect() as conn:
             res = conn.execute(
                 text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
