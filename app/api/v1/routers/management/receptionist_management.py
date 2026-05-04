@@ -329,6 +329,11 @@ async def check_in_patient(
 
 @router.get("/patients/search")
 async def search_patients(
+    search: Optional[str] = Query(
+        None,
+        description="Single search box: matches name, email, phone, patient ID, or MRN (partial)",
+    ),
+    q: Optional[str] = Query(None, description="Alias for `search` (frontend compatibility)"),
     phone: Optional[str] = Query(None, description="Search by phone number"),
     email: Optional[str] = Query(None, description="Search by email"),
     name: Optional[str] = Query(None, description="Search by name"),
@@ -346,11 +351,9 @@ async def search_patients(
     - Only Receptionists can search patients
     
     Search Options:
-    - By phone number
-    - By email
-    - By name (first or last)
-    - By patient ID
-    - By MRN (Medical Record Number)
+    - search or q: one box — partial match on name, email, phone, patient ID, or MRN
+    - phone, email, name, patient_id, mrn: specific fields (AND when several are set)
+    - With no filters: all patients for this hospital (paginated, newest first)
     
     Returns:
     - List of matching patients
@@ -362,7 +365,9 @@ async def search_patients(
     appointment_service = AppointmentService(db)
     
     # Build search parameters
+    combined = (search or "").strip() or (q or "").strip() or None
     search_params = {
+        "search": combined,
         "phone": phone,
         "email": email,
         "name": name,

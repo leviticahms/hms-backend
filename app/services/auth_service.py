@@ -989,7 +989,7 @@ class AuthService:
         
         token_data = {
             "sub": str(user.id),
-            "hospital_id": str(user.hospital_id),
+            "hospital_id": str(user.hospital_id) if user.hospital_id else None,
             "roles": user_roles,
             "permissions": user_permissions
         }

@@ -266,6 +266,12 @@ class ClinicalService:
         
         hospital_id_str = user_context.get("hospital_id")
         if not hospital_id_str:
+            from app.utils.hospital_id_resolve import resolve_effective_hospital_id
+
+            resolved = await resolve_effective_hospital_id(self.db, current_user)
+            if resolved:
+                hospital_id_str = str(resolved)
+        if not hospital_id_str:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Hospital ID is required. Receptionist must be associated with a hospital.",

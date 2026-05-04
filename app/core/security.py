@@ -152,7 +152,9 @@ async def get_current_user(
     # Extract user information
     user_id = payload.get("sub")  # Use "sub" as per JWT standard
     hospital_id = payload.get("hospital_id")
-    
+    if hospital_id is not None and str(hospital_id).strip().lower() in ("", "none", "null"):
+        hospital_id = None
+
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

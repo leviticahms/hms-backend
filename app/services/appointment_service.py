@@ -17,6 +17,7 @@ from app.models.hospital import Department
 from app.models.user import User
 from app.core.enums import AppointmentStatus, UserRole
 from app.core.utils import generate_appointment_ref, generate_patient_ref
+from app.utils.hospital_id_resolve import resolve_effective_hospital_id
 
 
 def _normalize_appointment_time_parts(appointment_time: str) -> tuple[str, str]:
@@ -401,12 +402,37 @@ class AppointmentService:
         current_user: User
     ) -> Dict[str, Any]:
         """Search patients by phone, email, name, patient_id, or MRN (receptionist)."""
-        hospital_id = current_user.hospital_id
+        hospital_id = current_user.hospital_id or await resolve_effective_hospital_id(
+            self.db, current_user
+        )
         if not hospital_id:
             return {"patients": [], "total": 0, "page": 1, "limit": 20}
         query = select(PatientProfile).join(User, PatientProfile.user_id == User.id).where(
             PatientProfile.hospital_id == hospital_id
         )
+        generic = (search_params.get("search") or search_params.get("q") or "").strip()
+        if generic:
+            term = f"%{generic}%"
+            full_name = func.lower(
+                func.trim(
+                    func.concat(
+                        func.coalesce(User.first_name, ""),
+                        " ",
+                        func.coalesce(User.last_name, ""),
+                    )
+                )
+            )
+            query = query.where(
+                or_(
+                    User.first_name.ilike(term),
+                    User.last_name.ilike(term),
+                    full_name.ilike(f"%{generic.lower()}%"),
+                    User.email.ilike(term),
+                    User.phone.ilike(term),
+                    PatientProfile.patient_id.ilike(term),
+                    PatientProfile.mrn.ilike(term),
+                )
+            )
         if search_params.get("phone"):
             query = query.where(User.phone.ilike(f"%{search_params['phone']}%"))
         if search_params.get("email"):
@@ -438,6 +464,28 @@ class AppointmentService:
         limit = min(search_params.get("limit", 20), 100)
         offset = (page - 1) * limit
         count_query = select(func.count(PatientProfile.id)).select_from(PatientProfile).join(User, PatientProfile.user_id == User.id).where(PatientProfile.hospital_id == hospital_id)
+        if generic:
+            term = f"%{generic}%"
+            full_name = func.lower(
+                func.trim(
+                    func.concat(
+                        func.coalesce(User.first_name, ""),
+                        " ",
+                        func.coalesce(User.last_name, ""),
+                    )
+                )
+            )
+            count_query = count_query.where(
+                or_(
+                    User.first_name.ilike(term),
+                    User.last_name.ilike(term),
+                    full_name.ilike(f"%{generic.lower()}%"),
+                    User.email.ilike(term),
+                    User.phone.ilike(term),
+                    PatientProfile.patient_id.ilike(term),
+                    PatientProfile.mrn.ilike(term),
+                )
+            )
         if search_params.get("phone"):
             count_query = count_query.where(User.phone.ilike(f"%{search_params['phone']}%"))
         if search_params.get("email"):
