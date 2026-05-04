@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 import uuid
 from typing import AsyncGenerator, Dict, Optional, Tuple
+from urllib.parse import urlparse
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import (
@@ -45,6 +47,26 @@ _schema_drift_applied: set[str] = set()
 _schema_drift_lock = threading.Lock()
 
 
+def _asyncpg_ssl_connect_args(url: str) -> dict:
+    """
+    Render PostgreSQL expects TLS. asyncpg does not always infer SSL from the URL alone;
+    passing ssl=True avoids OperationalError / connection refused on first query.
+    """
+    if os.getenv("RENDER", "").lower() not in {"true", "1"}:
+        return {}
+    raw = (url or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = urlparse(raw)
+        host = (parsed.hostname or "").lower()
+    except Exception:
+        return {}
+    if host in {"", "localhost", "127.0.0.1", "::1"}:
+        return {}
+    return {"ssl": True}
+
+
 async def _ensure_schema_drift_for_sync_dsn(sync_dsn: str) -> None:
     """Run patient + doctor column patches once per process per database URL (idempotent)."""
     dsn = (sync_dsn or "").strip()
@@ -67,14 +89,16 @@ def get_async_engine() -> AsyncEngine:
     """
     global _async_engine
     if _async_engine is None:
+        ca = _asyncpg_ssl_connect_args(settings.DATABASE_URL)
         _async_engine = create_async_engine(
             settings.DATABASE_URL,
             echo=settings.DEBUG,
-            pool_size=10,
-            max_overflow=20,
+            pool_size=settings.DB_POOL_SIZE,
+            max_overflow=settings.DB_MAX_OVERFLOW,
             pool_pre_ping=True,
             pool_recycle=3600,
             future=True,
+            connect_args=ca if ca else {},
         )
     return _async_engine
 
@@ -107,6 +131,7 @@ def get_tenant_session_factory(db_name: str) -> async_sessionmaker[AsyncSession]
             from app.services.tenant_database_provisioning import async_url_for_tenant_database
 
             url = async_url_for_tenant_database(db_name)
+            tca = _asyncpg_ssl_connect_args(url)
             eng = create_async_engine(
                 url,
                 echo=settings.DEBUG,
@@ -115,6 +140,7 @@ def get_tenant_session_factory(db_name: str) -> async_sessionmaker[AsyncSession]
                 pool_pre_ping=True,
                 pool_recycle=3600,
                 future=True,
+                connect_args=tca if tca else {},
             )
             _tenant_engines[db_name] = eng
             _tenant_session_factories[db_name] = async_sessionmaker(
