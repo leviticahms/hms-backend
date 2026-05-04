@@ -548,6 +548,15 @@ async def setup_database_once() -> bool:
             return True
             
         except Exception as e:
+            err_text = f"{type(e).__name__}: {e}"
+            if "not permitted to log in" in err_text.lower():
+                logger.error(
+                    "PostgreSQL refused this database user (role has LOGIN disabled or wrong username). "
+                    "Fix: in Render, open your Postgres service → copy the Internal Database URL exactly "
+                    "into DATABASE_URL and DATABASE_URL_SYNC on the web service (do not invent a username). "
+                    "If you must use this role, connect as a superuser and run: "
+                    'ALTER ROLE "username" WITH LOGIN;'
+                )
             logger.exception(f" Database setup failed: {e}")
             return False
         finally:
