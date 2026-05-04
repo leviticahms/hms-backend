@@ -377,8 +377,36 @@ async def check_in_patient(
 
 
 # ============================================================================
-# PATIENT SEARCH
+# PATIENT LIST & SEARCH
 # ============================================================================
+
+@router.get("/patients")
+async def list_all_patients(
+    search: Optional[str] = Query(
+        None,
+        description="Optional: filter by name, email, phone, patient ID, or MRN (partial match)",
+    ),
+    q: Optional[str] = Query(None, description="Alias for `search`"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """
+    List all registered OPD patients for the receptionist's hospital (paginated, newest first).
+
+    Omit ``search`` / ``q`` to return every patient for this hospital (within ``page`` / ``limit``).
+    """
+    from app.services.appointment_service import AppointmentService
+
+    combined = (search or "").strip() or (q or "").strip() or None
+    appointment_service = AppointmentService(db)
+    result = await appointment_service.search_patients(
+        {"search": combined, "page": page, "limit": limit},
+        current_user,
+    )
+    return success_response(message="Patients retrieved successfully", data=result)
+
 
 @router.get("/patients/search")
 async def search_patients(
