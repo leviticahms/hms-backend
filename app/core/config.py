@@ -7,7 +7,7 @@ from pydantic import Field, model_validator, field_validator
 from typing import Optional
 import os
 import logging
-from urllib.parse import urlparse, quote_plus
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -224,9 +224,50 @@ class Settings(BaseSettings):
             elif self._is_local_url(sync_url) and not self._is_local_url(async_url):
                 sync_url = self._to_sync_url(async_url)
 
-        self.DATABASE_URL = async_url
+        self.DATABASE_URL = Settings._strip_libpq_only_params_from_asyncpg_url(async_url)
         self.DATABASE_URL_SYNC = sync_url
         return self
+
+    @staticmethod
+    def _strip_libpq_only_params_from_asyncpg_url(url: str) -> str:
+        """
+        asyncpg.connect() does not accept libpq query keys (e.g. sslmode, sslrootcert).
+        Render's DATABASE_URL often includes ?sslmode=require — keep that on the sync URL
+        for psycopg2, but drop it from postgresql+asyncpg URLs (SSL is via connect_args / ssl).
+        """
+        value = (url or "").strip()
+        if not value or "postgresql+asyncpg://" not in value:
+            return value
+        try:
+            parsed = urlparse(value)
+            if not parsed.query:
+                return value
+            skip = frozenset(
+                name.lower()
+                for name in (
+                    "sslmode",
+                    "sslrootcert",
+                    "sslcert",
+                    "sslkey",
+                    "sslcrl",
+                    "sslcompression",
+                    "ssl_min_protocol_version",
+                    "ssl_max_protocol_version",
+                    "gssencmode",
+                    "krbsrvname",
+                    "channel_binding",
+                )
+            )
+            pairs = [
+                (k, v)
+                for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+                if k.lower() not in skip
+            ]
+            new_query = urlencode(pairs)
+            return urlunparse(parsed._replace(query=new_query))
+        except Exception:
+            logger.warning("Could not sanitize asyncpg URL query; using original", exc_info=True)
+            return value
 
     @staticmethod
     def _to_async_url(url: str) -> str:
@@ -239,7 +280,7 @@ class Settings(BaseSettings):
             value = value.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
         elif value.startswith("postgresql://"):
             value = value.replace("postgresql://", "postgresql+asyncpg://", 1)
-        return value
+        return Settings._strip_libpq_only_params_from_asyncpg_url(value)
 
     @staticmethod
     def _to_sync_url(url: str) -> str:

@@ -18,7 +18,7 @@ from typing import Any, Optional
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.database.ssl_connect import psycopg2_engine_connect_args
 
 logger = logging.getLogger(__name__)
@@ -190,12 +190,14 @@ def async_url_for_tenant_database(db_name: str) -> str:
     u = make_url(s)
     driver = (u.drivername or "").lower()
     if driver == "postgresql+asyncpg":
-        return u.render_as_string(hide_password=False)
-    if driver.startswith("postgresql"):
-        return u.set(drivername="postgresql+asyncpg").render_as_string(hide_password=False)
-    if driver == "postgres":
-        return u.set(drivername="postgresql+asyncpg").render_as_string(hide_password=False)
-    return s
+        out = u.render_as_string(hide_password=False)
+    elif driver.startswith("postgresql"):
+        out = u.set(drivername="postgresql+asyncpg").render_as_string(hide_password=False)
+    elif driver == "postgres":
+        out = u.set(drivername="postgresql+asyncpg").render_as_string(hide_password=False)
+    else:
+        out = s
+    return Settings._strip_libpq_only_params_from_asyncpg_url(out)
 
 
 def ensure_tenant_schema(db_name: str) -> None:
