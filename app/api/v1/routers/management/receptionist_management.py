@@ -34,6 +34,7 @@ from app.services.clinical_service import ClinicalService, send_opd_portal_crede
 from app.services.email_service import EmailService
 from app.schemas.clinical import (
     PatientRegistrationCreate,
+    ReceptionistPatientPatch,
     AppointmentSchedulingCreate,
     AppointmentUpdate,
     PatientCheckInCreate,
@@ -178,6 +179,58 @@ async def register_patient(
             )
 
     return success_response(message="Patient registered successfully", data=result)
+
+
+@router.patch("/patients/{patient_ref}")
+async def patch_opd_patient(
+    patient_ref: str,
+    body: ReceptionistPatientPatch,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """
+    Update an existing OPD patient (same hospital as receptionist).
+
+    Send only fields to change (PATCH semantics). Setting ``password`` enables portal login;
+    patient must have an email on record or include ``email`` in the same request.
+    Optional credential email uses ``send_credentials_email`` (default true when password is sent).
+    """
+    payload = body.model_dump(exclude_unset=True)
+    send_cred = payload.pop("send_credentials_email", True)
+    pwd_plain = payload.pop("password", None)
+
+    clinical_service = ClinicalService(db)
+    result = await clinical_service.patch_opd_patient(
+        patient_ref,
+        payload,
+        new_password_plain=pwd_plain,
+        send_credentials_email=send_cred,
+        current_user=current_user,
+    )
+
+    login_email = (result.get("email") or "").strip().lower()
+    first_nm = result.get("first_name") or ""
+    if pwd_plain and str(pwd_plain).strip() and login_email and send_cred:
+        mail_svc = EmailService()
+        if not mail_svc.is_smtp_configured():
+            result["credentials_email_queued"] = False
+            result["credentials_email_sent"] = False
+            result["credentials_email_hint"] = (
+                "SMTP is not configured (set SMTP_USER/SMTP_PASS). Share login email and password manually."
+            )
+        else:
+            background_tasks.add_task(
+                send_opd_portal_credentials_email_task,
+                login_email,
+                first_nm,
+                str(pwd_plain).strip(),
+                result.get("hospital_name"),
+            )
+            result["credentials_email_queued"] = True
+            result["credentials_email_sent"] = False
+
+    return success_response(message="Patient updated successfully", data=result)
 
 
 # ============================================================================

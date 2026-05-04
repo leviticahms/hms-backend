@@ -475,6 +475,237 @@ class ClinicalService:
 
         return result
 
+    async def patch_opd_patient(
+        self,
+        patient_ref: str,
+        updates: Dict[str, Any],
+        *,
+        new_password_plain: Optional[str],
+        send_credentials_email: bool,
+        current_user: User,
+    ) -> Dict[str, Any]:
+        """Apply partial updates to an OPD patient in the receptionist's hospital."""
+        user_context = self.get_user_context(current_user)
+        await self.validate_receptionist_access(user_context)
+
+        hospital_id_str = user_context.get("hospital_id")
+        if not hospital_id_str:
+            from app.utils.hospital_id_resolve import resolve_effective_hospital_id
+
+            resolved = await resolve_effective_hospital_id(self.db, current_user)
+            if resolved:
+                hospital_id_str = str(resolved)
+        if not hospital_id_str:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Hospital ID is required. Receptionist must be associated with a hospital.",
+            )
+
+        try:
+            hospital_id_uuid = uuid.UUID(hospital_id_str) if isinstance(hospital_id_str, str) else hospital_id_str
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid hospital_id in user context.",
+            )
+
+        pr = (patient_ref or "").strip()
+        if not pr:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="patient_ref is required")
+
+        payload_keys = {k for k in updates.keys()}
+        if not payload_keys and not (new_password_plain and str(new_password_plain).strip()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No fields to update. Send at least one profile field or password.",
+            )
+
+        result = await self.db.execute(
+            select(PatientProfile)
+            .where(
+                and_(
+                    PatientProfile.patient_id == pr,
+                    PatientProfile.hospital_id == hospital_id_uuid,
+                )
+            )
+            .options(selectinload(PatientProfile.user).selectinload(User.roles))
+        )
+        profile = result.scalar_one_or_none()
+        if not profile or not profile.user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Patient '{pr}' not found for this hospital.",
+            )
+
+        pu = profile.user
+        role_names = [getattr(r, "name", "") for r in (pu.roles or [])]
+        if UserRole.PATIENT.value not in role_names:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This account is not a patient record.",
+            )
+
+        email_norm: Optional[str] = None
+
+        phone_norm = updates.get("phone", None)
+        if phone_norm is not None:
+            phone_norm = str(phone_norm).strip()
+            if not phone_norm:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="phone cannot be empty")
+            dup_phone = await self.db.execute(
+                select(User.id).where(
+                    and_(
+                        User.phone == phone_norm,
+                        User.hospital_id == hospital_id_uuid,
+                        User.id != pu.id,
+                    )
+                )
+            )
+            if dup_phone.first():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Another patient already uses this phone number at this hospital.",
+                )
+            pu.phone = phone_norm
+
+        if "email" in updates:
+            raw_em = updates.get("email")
+            if raw_em is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="email cannot be removed; omit the field to leave unchanged.",
+                )
+            email_norm = str(raw_em).strip().lower()
+            dup_em = await self.db.execute(
+                select(User.id).where(
+                    and_(
+                        User.email == email_norm,
+                        User.hospital_id == hospital_id_uuid,
+                        User.id != pu.id,
+                    )
+                )
+            )
+            if dup_em.first():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Another user already uses this email at this hospital.",
+                )
+            pu.email = email_norm
+
+        if "first_name" in updates:
+            fn = str(updates["first_name"] or "").strip()
+            if not fn:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="first_name cannot be empty")
+            pu.first_name = fn
+
+        if "last_name" in updates:
+            ln = str(updates["last_name"] or "").strip()
+            if not ln:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="last_name cannot be empty")
+            pu.last_name = ln
+
+        if new_password_plain and str(new_password_plain).strip():
+            pw = str(new_password_plain).strip()
+            eff_email = (
+                email_norm
+                if email_norm is not None
+                else (pu.email or "").strip().lower()
+            )
+            if not eff_email:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="email is required on the patient account before setting a portal password",
+                )
+            from app.services.auth_service import PasswordValidator
+
+            pwd_check = PasswordValidator.validate_password(pw, eff_email, pu.phone or "")
+            if not pwd_check["valid"]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "PWD_001",
+                        "message": "Password does not meet security requirements",
+                        "errors": pwd_check["errors"],
+                    },
+                )
+            pu.password_hash = self.security.hash_password(pw)
+            pu.email_verified = True
+
+        profile_field_map = {
+            "date_of_birth": "date_of_birth",
+            "gender": "gender",
+            "address": "address",
+            "pincode": "pincode",
+            "city": "city",
+            "district": "district",
+            "state": "state",
+            "country": "country",
+            "id_type": "id_type",
+            "id_number": "id_number",
+            "id_name": "id_name",
+            "emergency_contact_name": "emergency_contact_name",
+            "emergency_contact_phone": "emergency_contact_phone",
+            "emergency_contact_relation": "emergency_contact_relation",
+            "medical_history": "medical_history",
+            "blood_group": "blood_group",
+            "blood_group_value": "blood_group_value",
+        }
+        for key, col in profile_field_map.items():
+            if key not in updates:
+                continue
+            val = updates[key]
+            if key == "gender":
+                setattr(profile, col, _normalize_opd_gender(val))
+            elif key == "blood_group":
+                setattr(profile, col, _normalize_opd_blood_group(val))
+            else:
+                setattr(profile, col, val)
+
+        eff_bg = profile.blood_group
+        eff_bg_val = profile.blood_group_value
+        if eff_bg == "OTHER" and not (eff_bg_val or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="blood_group_value is required when blood_group is OTHER",
+            )
+
+        eff_id_type = (profile.id_type or "").strip().upper()
+        if eff_id_type == "OTHER" and not (profile.id_name or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="id_name is required when id_type is Other",
+            )
+
+        hospital_name = None
+        try:
+            hops = await self.db.execute(select(Hospital).where(Hospital.id == hospital_id_uuid))
+            hrow = hops.scalar_one_or_none()
+            if hrow:
+                hospital_name = hrow.name
+        except Exception:
+            hospital_name = None
+
+        await self.db.commit()
+        await self.db.refresh(profile)
+        await self.db.refresh(pu)
+
+        out = self._receptionist_patient_detail_dict(profile)
+        out["patient_ref"] = profile.patient_id
+        out["hospital_id"] = hospital_id_str
+        out["hospital_name"] = hospital_name
+        out["portal_password_updated"] = bool(new_password_plain and str(new_password_plain).strip())
+        login_email_norm = (pu.email or "").strip().lower()
+        out["send_credentials_email_requested"] = bool(
+            send_credentials_email and out["portal_password_updated"] and bool(login_email_norm)
+        )
+        if out["portal_password_updated"] and login_email_norm:
+            out["credentials_email_hint"] = (
+                "If SMTP is configured, credentials email was queued from the API layer."
+                if send_credentials_email
+                else "Credential email skipped (send_credentials_email=false)."
+            )
+        return out
+
     def _receptionist_patient_detail_dict(self, patient: PatientProfile) -> Dict[str, Any]:
         """Serialize patient + user for receptionist schedule / lookup (excludes password)."""
         u = patient.user
