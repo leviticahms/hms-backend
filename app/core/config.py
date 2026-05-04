@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     DB_BOOTSTRAP_FROM_MODELS: bool = Field(default=True, env="DB_BOOTSTRAP_FROM_MODELS")
     # Dev / private networks only: skip TLS certificate verification for Postgres (asyncpg + psycopg2)
     DATABASE_SSL_INSECURE: bool = Field(default=False, env="DATABASE_SSL_INSECURE")
+    # When true, asyncpg/psycopg2 verify the Postgres server certificate (strict). On Render the default
+    # is false so TLS still encrypts but chain verification is skipped (avoids SSLCertVerificationError).
+    DATABASE_SSL_VERIFY: bool = Field(default=False, env="DATABASE_SSL_VERIFY")
     # Corporate TLS proxies / misconfigured SMTP: skip cert verify for aiosmtplib
     SMTP_TLS_INSECURE: bool = Field(default=False, env="SMTP_TLS_INSECURE")
 

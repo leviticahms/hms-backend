@@ -45,14 +45,27 @@ _tenant_lab_schema_cache: Dict[str, Tuple[bool, float]] = {}
 # setup due to the advisory lock) need the same idempotent DDL applied lazily per DSN.
 _schema_drift_applied: set[str] = set()
 _schema_drift_lock = threading.Lock()
+_render_asyncpg_ssl_logged = False
+
+
+def _asyncpg_unverified_ssl_context():
+    """TLS to Postgres without verifying server cert (Render / self-signed chains)."""
+    import ssl as ssl_module
+
+    ctx = ssl_module.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl_module.CERT_NONE
+    return ctx
 
 
 def _asyncpg_ssl_connect_args(url: str) -> dict:
     """
-    Render PostgreSQL expects TLS. asyncpg does not always infer SSL from the URL alone;
-    passing ssl=True avoids OperationalError / connection refused on first query.
+    Render PostgreSQL requires TLS. asyncpg does not accept libpq ?sslmode= in the URL (stripped in config).
 
-    DATABASE_SSL_INSECURE=true uses an unverified TLS context (self-signed / SSL inspection).
+    - DATABASE_SSL_INSECURE=true: always unverified TLS (explicit dev escape hatch).
+    - On Render (non-local): default is encrypted + **no** remote cert verify (avoids
+      SSLCertVerificationError with some Python/Postgres combinations). Set DATABASE_SSL_VERIFY=true
+      for strict certificate verification (ssl=True).
     """
     import ssl as ssl_module
 
@@ -76,7 +89,16 @@ def _asyncpg_ssl_connect_args(url: str) -> dict:
         return {}
     if host in {"", "localhost", "127.0.0.1", "::1"}:
         return {}
-    return {"ssl": True}
+    if settings.DATABASE_SSL_VERIFY:
+        return {"ssl": True}
+    global _render_asyncpg_ssl_logged
+    if not _render_asyncpg_ssl_logged:
+        _render_asyncpg_ssl_logged = True
+        logger.info(
+            "Render: asyncpg uses TLS without server cert verification by default "
+            "(set DATABASE_SSL_VERIFY=true for strict verification)"
+        )
+    return {"ssl": _asyncpg_unverified_ssl_context()}
 
 
 async def _ensure_schema_drift_for_sync_dsn(sync_dsn: str) -> None:
