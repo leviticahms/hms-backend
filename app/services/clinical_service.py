@@ -707,8 +707,12 @@ class ClinicalService:
         return out
 
     def _receptionist_patient_detail_dict(self, patient: PatientProfile) -> Dict[str, Any]:
-        """Serialize patient + user for receptionist schedule / lookup (excludes password)."""
+        """Serialize patient + user for receptionist schedule / lookup (password never returned)."""
         u = patient.user
+        ec_phone = patient.emergency_contact_phone
+        ec_rel = patient.emergency_contact_relation
+        em_verified = bool(getattr(u, "email_verified", False))
+        has_email = bool((u.email or "").strip())
         return {
             "patient_ref": patient.patient_id,
             "first_name": u.first_name,
@@ -728,23 +732,34 @@ class ClinicalService:
             "state": patient.state,
             "country": patient.country,
             "emergency_contact_name": patient.emergency_contact_name,
-            "emergency_contact_relationship": patient.emergency_contact_relation,
-            "emergency_contact": patient.emergency_contact_phone,
+            "emergency_contact_phone": ec_phone,
+            "emergency_contact_relation": ec_rel,
+            "emergency_contact_relationship": ec_rel,
+            "emergency_contact": ec_phone,
             "medical_history": patient.medical_history,
             "blood_group": patient.blood_group,
             "blood_group_value": patient.blood_group_value,
+            "password": None,
+            "portal_login_enabled": has_email and em_verified,
         }
 
     async def get_receptionist_patient_by_ref(self, patient_ref: str, current_user: User) -> Dict[str, Any]:
         """Return full OPD profile for autofill (receptionist)."""
         user_context = self.get_user_context(current_user)
         await self.get_receptionist_profile(user_context)
-        if not user_context.get("hospital_id"):
+        hospital_id_str = user_context.get("hospital_id")
+        if not hospital_id_str:
+            from app.utils.hospital_id_resolve import resolve_effective_hospital_id
+
+            resolved = await resolve_effective_hospital_id(self.db, current_user)
+            if resolved:
+                hospital_id_str = str(resolved)
+        if not hospital_id_str:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Hospital ID is required. Receptionist must be associated with a hospital.",
             )
-        hospital_id_uuid = uuid.UUID(user_context["hospital_id"])
+        hospital_id_uuid = uuid.UUID(hospital_id_str)
         pr = (patient_ref or "").strip()
         result = await self.db.execute(
             select(PatientProfile)

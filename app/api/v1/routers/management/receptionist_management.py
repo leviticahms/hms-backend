@@ -471,8 +471,10 @@ async def get_patient_profile_for_schedule(
     """
     Load full patient details for autofill (e.g. Schedule Appointment form after choosing a name).
 
-    Returns the same registration fields as stored for the patient (no password). Use with
-    GET /receptionist/patients/search?name=... to find `patient_ref`, then call this endpoint.
+    Returns registration fields plus explicit emergency contact columns (`emergency_contact_phone`,
+    `emergency_contact_relation`) and legacy aliases. `password` is always null (never exposed);
+    `portal_login_enabled` reflects verified email suitable for patient login. Use with
+    GET /receptionist/patients/search to find `patient_ref`.
     """
     clinical_service = ClinicalService(db)
     data = await clinical_service.get_receptionist_patient_by_ref(patient_ref, current_user)

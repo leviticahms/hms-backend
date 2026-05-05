@@ -298,7 +298,7 @@ class AppointmentSchedulingCreate(BaseModel):
 
 
 class ReceptionistPatientDetailOut(BaseModel):
-    """Full OPD patient profile for receptionist UI (no password). Matches registration fields."""
+    """Full OPD patient profile for receptionist UI. Password is never returned (always null)."""
 
     patient_ref: str
     first_name: str
@@ -318,11 +318,22 @@ class ReceptionistPatientDetailOut(BaseModel):
     state: Optional[str] = None
     country: Optional[str] = None
     emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    emergency_contact_relation: Optional[str] = None
+    # Legacy / form aliases (same DB columns as above)
     emergency_contact_relationship: Optional[str] = None
     emergency_contact: Optional[str] = None
     medical_history: Optional[str] = None
     blood_group: Optional[str] = None
     blood_group_value: Optional[str] = None
+    password: Optional[str] = Field(
+        default=None,
+        description="Always null — passwords are never exposed. Omit in PATCH forms or leave blank.",
+    )
+    portal_login_enabled: bool = Field(
+        default=False,
+        description="True when patient email is verified and suitable for POST /auth/patient/login.",
+    )
 
 
 class DebugPatientEditUpdate(BaseModel):
