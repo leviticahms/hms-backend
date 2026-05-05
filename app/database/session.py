@@ -1,104 +1,44 @@
 """
-Database session management for async SQLAlchemy.
-- Platform DB: registry (hospitals, users, subscriptions, super admin).
-- Tenant DB: one PostgreSQL database per hospital (tenant_database_name); hospital-scoped routes use it when configured.
+Database sessions (async SQLAlchemy).
 
-Authentication always loads User from the platform database (see get_platform_db_session).
+Architecture:
+- app.database.engines     — connection pools (platform + per-tenant)
+- app.database.async_ssl   — asyncpg TLS connect_args
+- app.database.ssl_connect — psycopg2 TLS (migrations / DDL)
+- app.database.tenant_context — registry lookups (`tenant_database_name`)
+- app.database.routing      — map Request → platform vs tenant DB
+
+Authentication resolves users from the platform DB (see get_platform_db_session).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import threading
-import time
-import uuid
-from typing import AsyncGenerator, Dict, Optional, Tuple
-from urllib.parse import urlparse
+from typing import AsyncGenerator, Dict, Optional
 
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.requests import Request
 
 from app.core.config import settings
-from app.database.base import Base  # Re-export Base for convenience
+from app.database import engines as db_engines
+from app.database.base import Base  # noqa: F401 — re-export for convenience
+from app.database.routing import resolve_database_route
+from app.database.tenant_context import (
+    invalidate_hospital_tenant_cache,
+    resolve_tenant_database_name_for_hospital,
+)
+from app.services.tenant_database_provisioning import sync_url_for_tenant_database
 
 logger = logging.getLogger(__name__)
 
-_async_engine: Optional[AsyncEngine] = None
 _async_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
-
-_tenant_engines: Dict[str, AsyncEngine] = {}
 _tenant_session_factories: Dict[str, async_sessionmaker[AsyncSession]] = {}
-_tenant_lock = threading.Lock()
+_tenant_session_lock = threading.Lock()
 
-_hospital_tenant_cache: Dict[str, Tuple[Optional[str], float]] = {}
-_CACHE_TTL_SEC = 60.0
-_tenant_lab_schema_cache: Dict[str, Tuple[bool, float]] = {}
-
-# Startup patches in main.py target DATABASE_URL_SYNC only. Tenant DBs (and workers that skip
-# setup due to the advisory lock) need the same idempotent DDL applied lazily per DSN.
 _schema_drift_applied: set[str] = set()
 _schema_drift_lock = threading.Lock()
-_render_asyncpg_ssl_logged = False
-
-
-def _asyncpg_unverified_ssl_context():
-    """TLS to Postgres without verifying server cert (Render / self-signed chains)."""
-    import ssl as ssl_module
-
-    ctx = ssl_module.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl_module.CERT_NONE
-    return ctx
-
-
-def _asyncpg_ssl_connect_args(url: str) -> dict:
-    """
-    Render PostgreSQL requires TLS. asyncpg does not accept libpq ?sslmode= in the URL (stripped in config).
-
-    - DATABASE_SSL_INSECURE=true: always unverified TLS (explicit dev escape hatch).
-    - On Render (non-local): default is encrypted + **no** remote cert verify (avoids
-      SSLCertVerificationError with some Python/Postgres combinations). Set DATABASE_SSL_VERIFY=true
-      for strict certificate verification (ssl=True).
-    """
-    import ssl as ssl_module
-
-    raw = (url or "").strip()
-    if settings.DATABASE_SSL_INSECURE and raw:
-        ctx = ssl_module.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl_module.CERT_NONE
-        logger.warning(
-            "DATABASE_SSL_INSECURE=true: asyncpg TLS certificate verification is disabled"
-        )
-        return {"ssl": ctx}
-    if os.getenv("RENDER", "").lower() not in {"true", "1"}:
-        return {}
-    if not raw:
-        return {}
-    try:
-        parsed = urlparse(raw)
-        host = (parsed.hostname or "").lower()
-    except Exception:
-        return {}
-    if host in {"", "localhost", "127.0.0.1", "::1"}:
-        return {}
-    if settings.DATABASE_SSL_VERIFY:
-        return {"ssl": True}
-    global _render_asyncpg_ssl_logged
-    if not _render_asyncpg_ssl_logged:
-        _render_asyncpg_ssl_logged = True
-        logger.info(
-            "Render: asyncpg uses TLS without server cert verification by default "
-            "(set DATABASE_SSL_VERIFY=true for strict verification)"
-        )
-    return {"ssl": _asyncpg_unverified_ssl_context()}
 
 
 async def _ensure_schema_drift_for_sync_dsn(sync_dsn: str) -> None:
@@ -117,24 +57,8 @@ async def _ensure_schema_drift_for_sync_dsn(sync_dsn: str) -> None:
 
 
 def get_async_engine() -> AsyncEngine:
-    """
-    Lazily create async engine (platform database).
-    Avoids DB initialization side effects during module import on Render.
-    """
-    global _async_engine
-    if _async_engine is None:
-        ca = _asyncpg_ssl_connect_args(settings.DATABASE_URL)
-        _async_engine = create_async_engine(
-            settings.DATABASE_URL,
-            echo=settings.DEBUG,
-            pool_size=settings.DB_POOL_SIZE,
-            max_overflow=settings.DB_MAX_OVERFLOW,
-            pool_pre_ping=True,
-            pool_recycle=3600,
-            future=True,
-            connect_args=ca if ca else {},
-        )
-    return _async_engine
+    """Platform (registry) database async engine — shared pool."""
+    return db_engines.get_platform_engine()
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -156,99 +80,21 @@ def AsyncSessionLocal() -> AsyncSession:
 
 
 def get_tenant_session_factory(db_name: str) -> async_sessionmaker[AsyncSession]:
-    """Async session factory for a hospital-specific database (same cluster as platform)."""
-    if not db_name or not str(db_name).strip():
+    """Async session factory for a hospital-specific database."""
+    key = str(db_name).strip()
+    if not key:
         raise ValueError("tenant database name is required")
-    db_name = str(db_name).strip()
-    with _tenant_lock:
-        if db_name not in _tenant_session_factories:
-            from app.services.tenant_database_provisioning import async_url_for_tenant_database
-
-            url = async_url_for_tenant_database(db_name)
-            tca = _asyncpg_ssl_connect_args(url)
-            eng = create_async_engine(
-                url,
-                echo=settings.DEBUG,
-                pool_size=5,
-                max_overflow=10,
-                pool_pre_ping=True,
-                pool_recycle=3600,
-                future=True,
-                connect_args=tca if tca else {},
-            )
-            _tenant_engines[db_name] = eng
-            _tenant_session_factories[db_name] = async_sessionmaker(
+    with _tenant_session_lock:
+        if key not in _tenant_session_factories:
+            eng = db_engines.get_or_create_tenant_engine(key)
+            _tenant_session_factories[key] = async_sessionmaker(
                 bind=eng,
                 class_=AsyncSession,
                 expire_on_commit=False,
                 autoflush=False,
                 autocommit=False,
             )
-        return _tenant_session_factories[db_name]
-
-
-def invalidate_hospital_tenant_cache(hospital_id: uuid.UUID) -> None:
-    _hospital_tenant_cache.pop(str(hospital_id), None)
-
-
-async def resolve_tenant_database_name_for_hospital(hospital_id: uuid.UUID) -> Optional[str]:
-    """Read hospitals.tenant_database_name from the platform DB (cached)."""
-    key = str(hospital_id)
-    now = time.monotonic()
-    cached = _hospital_tenant_cache.get(key)
-    if cached is not None:
-        name, ts = cached
-        if now - ts < _CACHE_TTL_SEC:
-            return name
-
-    from app.models.tenant import Hospital
-
-    async with get_session_factory()() as session:
-        r = await session.execute(select(Hospital.tenant_database_name).where(Hospital.id == hospital_id))
-        name = r.scalar_one_or_none()
-    _hospital_tenant_cache[key] = (name, now)
-    return name
-
-
-def _use_platform_for_path(path: str) -> bool:
-    """Routes that must use the platform database only."""
-    if path.startswith("/api/v1/super-admin"):
-        return True
-    if path.startswith("/api/v1/analytics"):
-        return True
-    return False
-
-
-async def _tenant_has_core_lab_tables(db_name: str) -> bool:
-    """
-    Best-effort guard for legacy tenant DBs that were provisioned before lab migrations.
-    Returns True only when core lab tables exist in that tenant DB.
-    """
-    key = str(db_name or "").strip()
-    if not key:
-        return False
-    now = time.monotonic()
-    cached = _tenant_lab_schema_cache.get(key)
-    if cached is not None:
-        ok, ts = cached
-        if now - ts < _CACHE_TTL_SEC:
-            return ok
-
-    fac = get_tenant_session_factory(key)
-    ok = False
-    async with fac() as session:
-        result = await session.execute(
-            text(
-                """
-                SELECT
-                    to_regclass('public.lab_equipment') IS NOT NULL
-                    AND to_regclass('public.equipment_maintenance_logs') IS NOT NULL
-                """
-            )
-        )
-        ok = bool(result.scalar())
-    _tenant_lab_schema_cache[key] = (ok, now)
-    return ok
+        return _tenant_session_factories[key]
 
 
 async def get_platform_db_session() -> AsyncGenerator[AsyncSession, None]:
@@ -266,11 +112,13 @@ async def get_platform_db_session() -> AsyncGenerator[AsyncSession, None]:
 
 async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
     """
-    Primary FastAPI dependency: platform or tenant DB based on request path + hospital context.
+    Primary FastAPI dependency: platform or tenant DB based on routing rules.
     """
     await _ensure_schema_drift_for_sync_dsn(settings.DATABASE_URL_SYNC)
 
-    if not settings.TENANT_DB_ROUTE_QUERIES:
+    route = await resolve_database_route(request)
+
+    if route.use_platform or not route.tenant_database_name:
         async with AsyncSessionLocal() as session:
             try:
                 yield session
@@ -281,79 +129,9 @@ async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]
                 await session.close()
         return
 
-    path = request.url.path or ""
-
-    if _use_platform_for_path(path):
-        async with AsyncSessionLocal() as session:
-            try:
-                yield session
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
-        return
-
-    hospital_id = getattr(request.state, "hospital_id", None)
-    if hospital_id is None:
-        async with AsyncSessionLocal() as session:
-            try:
-                yield session
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
-        return
-
-    db_name = await resolve_tenant_database_name_for_hospital(hospital_id)
-    if not db_name:
-        logger.warning(
-            "Hospital %s has no tenant_database_name; using platform DB for this request",
-            hospital_id,
-        )
-        async with AsyncSessionLocal() as session:
-            try:
-                yield session
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
-        return
-
-    from app.services.tenant_database_provisioning import sync_url_for_tenant_database
-
-    await _ensure_schema_drift_for_sync_dsn(sync_url_for_tenant_database(db_name))
-    # Lab endpoints can fail with DB 500 on older tenant DBs where lab tables don't exist.
-    # Fall back to platform DB instead of crashing.
-    if path.startswith("/api/v1/lab/"):
-        try:
-            has_lab_schema = await _tenant_has_core_lab_tables(db_name)
-        except Exception as e:
-            logger.warning(
-                "Failed to check lab schema for tenant DB '%s': %s; using platform DB",
-                db_name,
-                e,
-            )
-            has_lab_schema = False
-
-        if not has_lab_schema:
-            logger.warning(
-                "Tenant DB '%s' missing core lab tables; routing lab request to platform DB",
-                db_name,
-            )
-            async with AsyncSessionLocal() as session:
-                try:
-                    yield session
-                except Exception:
-                    await session.rollback()
-                    raise
-                finally:
-                    await session.close()
-            return
-
-    fac = get_tenant_session_factory(db_name)
+    tn = route.tenant_database_name
+    await _ensure_schema_drift_for_sync_dsn(sync_url_for_tenant_database(tn))
+    fac = get_tenant_session_factory(tn)
     async with fac() as session:
         try:
             yield session
@@ -368,7 +146,7 @@ get_db = get_db_session
 
 
 async def init_database():
-    """Initialize database connection"""
+    """Verify database connectivity."""
     try:
         engine = get_async_engine()
         async with engine.begin() as conn:
@@ -382,13 +160,8 @@ async def init_database():
 
 async def close_database():
     """Close platform and tenant database connection pools."""
-    global _async_engine, _async_session_factory, _tenant_engines, _tenant_session_factories
-    if _async_engine is not None:
-        await _async_engine.dispose()
-        _async_engine = None
+    global _async_session_factory, _tenant_session_factories
+    await db_engines.dispose_all_async_engines()
     _async_session_factory = None
-    for eng in list(_tenant_engines.values()):
-        await eng.dispose()
-    _tenant_engines.clear()
     _tenant_session_factories.clear()
     logger.info("Database connections closed")

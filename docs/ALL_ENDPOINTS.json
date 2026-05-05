@@ -1,0 +1,3754 @@
+[
+  {
+    "path": "/admin/verify",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "main.verify_superadmin"
+  },
+  {
+    "path": "/api/v1/analytics/audit-logs",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.analytics.get_audit_logs"
+  },
+  {
+    "path": "/api/v1/analytics/overview",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.analytics.get_analytics_overview"
+  },
+  {
+    "path": "/api/v1/analytics/reports/business",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.analytics.get_reports_business_analytics"
+  },
+  {
+    "path": "/api/v1/analytics/reports/system-monitoring",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.analytics.get_reports_system_monitoring"
+  },
+  {
+    "path": "/api/v1/auth/2fa/disable",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.auth_2fa.disable_totp"
+  },
+  {
+    "path": "/api/v1/auth/2fa/setup",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.auth_2fa.setup_totp"
+  },
+  {
+    "path": "/api/v1/auth/2fa/validate",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.auth_2fa.validate_totp_on_login"
+  },
+  {
+    "path": "/api/v1/auth/2fa/verify",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.auth_2fa.verify_and_enable_totp"
+  },
+  {
+    "path": "/api/v1/auth/hospital-admin/change-password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.auth.hospital_admin_change_password"
+  },
+  {
+    "path": "/api/v1/auth/hospitals",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.auth.get_available_hospitals"
+  },
+  {
+    "path": "/api/v1/auth/login",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.auth.login"
+  },
+  {
+    "path": "/api/v1/auth/logout",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.auth.logout"
+  },
+  {
+    "path": "/api/v1/auth/me",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.auth.get_current_user_info"
+  },
+  {
+    "path": "/api/v1/auth/patient/change-password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.auth.patient_change_password"
+  },
+  {
+    "path": "/api/v1/auth/patient/forgot-password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.auth.patient_forgot_password"
+  },
+  {
+    "path": "/api/v1/auth/patient/login",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.auth.patient_login"
+  },
+  {
+    "path": "/api/v1/auth/patient/register",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.auth.patient_register"
+  },
+  {
+    "path": "/api/v1/auth/patient/reset-password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.auth.patient_reset_password"
+  },
+  {
+    "path": "/api/v1/auth/patient/verify-otp",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.auth.patient_verify_otp"
+  },
+  {
+    "path": "/api/v1/auth/staff/change-password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.auth.staff_change_password"
+  },
+  {
+    "path": "/api/v1/auth/super-admin/hospitals",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.auth.create_hospital"
+  },
+  {
+    "path": "/api/v1/auth/super-admin/hospitals/{hospital_id}/admins",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.auth.create_hospital_admin"
+  },
+  {
+    "path": "/api/v1/billing/bills",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.list_bills"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/apply-discount",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.apply_discount"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/balance",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.get_bill_balance"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/cancel",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.cancel_bill"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/discount/approve",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.approve_discount"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/finalize",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.finalize_bill"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/invoice/pdf",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.get_bill_invoice_pdf"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/items",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.list_bill_items"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/items",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.add_bill_items"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/items/{item_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.delete_bill_item"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/items/{item_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.update_bill_item"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/payments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.list_bill_payments"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/payments",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.collect_bill_payment"
+  },
+  {
+    "path": "/api/v1/billing/bills/{bill_id}/reopen",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.reopen_bill"
+  },
+  {
+    "path": "/api/v1/billing/ipd/bills",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.list_ipd_bills"
+  },
+  {
+    "path": "/api/v1/billing/ipd/bills",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.create_ipd_bill"
+  },
+  {
+    "path": "/api/v1/billing/ipd/bills/{bill_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.get_ipd_bill"
+  },
+  {
+    "path": "/api/v1/billing/ipd/bills/{bill_id}/run-daily-bed-charges",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.run_daily_bed_charges"
+  },
+  {
+    "path": "/api/v1/billing/opd/bills",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.list_opd_bills"
+  },
+  {
+    "path": "/api/v1/billing/opd/bills",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.create_opd_bill"
+  },
+  {
+    "path": "/api/v1/billing/opd/bills/{bill_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.bills.get_opd_bill"
+  },
+  {
+    "path": "/api/v1/billing/services",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.services.list_services"
+  },
+  {
+    "path": "/api/v1/billing/services",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.billing.services.create_service"
+  },
+  {
+    "path": "/api/v1/billing/services/{service_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.billing.services.delete_service"
+  },
+  {
+    "path": "/api/v1/billing/services/{service_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.services.get_service"
+  },
+  {
+    "path": "/api/v1/billing/services/{service_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.billing.services.update_service"
+  },
+  {
+    "path": "/api/v1/billing/services/{service_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.billing.services.set_service_status"
+  },
+  {
+    "path": "/api/v1/billing/tax-profiles",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.services.list_tax_profiles"
+  },
+  {
+    "path": "/api/v1/billing/tax-profiles",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.billing.services.create_tax_profile"
+  },
+  {
+    "path": "/api/v1/billing/tax-profiles/{tax_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.billing.services.update_tax_profile"
+  },
+  {
+    "path": "/api/v1/billing/tax-profiles/{tax_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.billing.services.set_tax_profile_status"
+  },
+  {
+    "path": "/api/v1/doctor-appointment-tracking/appointments/delays/today",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_appointment_tracking.get_todays_delays"
+  },
+  {
+    "path": "/api/v1/doctor-appointment-tracking/appointments/today",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_appointment_tracking.get_todays_appointment_tracking"
+  },
+  {
+    "path": "/api/v1/doctor-appointment-tracking/appointments/upcoming",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_appointment_tracking.get_upcoming_appointments_tracking"
+  },
+  {
+    "path": "/api/v1/doctor-appointment-tracking/appointments/{appointment_ref}/delay",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_appointment_tracking.update_appointment_delay"
+  },
+  {
+    "path": "/api/v1/doctor-appointment-tracking/appointments/{appointment_ref}/tracking",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_appointment_tracking.get_appointment_tracking_details"
+  },
+  {
+    "path": "/api/v1/doctor-appointment-tracking/communication/log",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_appointment_tracking.get_communication_log"
+  },
+  {
+    "path": "/api/v1/doctor-appointment-tracking/communication/log",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_appointment_tracking.create_communication_log_entry"
+  },
+  {
+    "path": "/api/v1/doctor-appointment-tracking/metrics/summary",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_appointment_tracking.get_appointment_metrics_summary"
+  },
+  {
+    "path": "/api/v1/doctor-appointment-tracking/notifications/bulk-send",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_appointment_tracking.send_bulk_notifications"
+  },
+  {
+    "path": "/api/v1/doctor-appointment-tracking/notifications/history",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_appointment_tracking.get_notification_history"
+  },
+  {
+    "path": "/api/v1/doctor-appointment-tracking/notifications/send",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_appointment_tracking.send_appointment_notification"
+  },
+  {
+    "path": "/api/v1/doctor-appointment-tracking/settings/notifications",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_appointment_tracking.get_notification_settings"
+  },
+  {
+    "path": "/api/v1/doctor-dashboard/appointments/today",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_dashboard.get_todays_appointments"
+  },
+  {
+    "path": "/api/v1/doctor-dashboard/overview",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_dashboard.get_doctor_dashboard_overview"
+  },
+  {
+    "path": "/api/v1/doctor-dashboard/patients/admitted",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_dashboard.get_admitted_patients"
+  },
+  {
+    "path": "/api/v1/doctor-dashboard/patients/recent",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_dashboard.get_recent_patients"
+  },
+  {
+    "path": "/api/v1/doctor-dashboard/stats/quick",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_dashboard.get_quick_stats"
+  },
+  {
+    "path": "/api/v1/doctor-dashboard/tasks/pending",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_dashboard.get_pending_tasks"
+  },
+  {
+    "path": "/api/v1/doctor-management/appointments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.get_doctor_appointments"
+  },
+  {
+    "path": "/api/v1/doctor-management/appointments/{appointment_ref}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.get_appointment_details"
+  },
+  {
+    "path": "/api/v1/doctor-management/appointments/{appointment_ref}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.update_appointment"
+  },
+  {
+    "path": "/api/v1/doctor-management/appointments/{appointment_ref}/cancel",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.cancel_appointment"
+  },
+  {
+    "path": "/api/v1/doctor-management/appointments/{appointment_ref}/complete",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.complete_appointment"
+  },
+  {
+    "path": "/api/v1/doctor-management/consultation/medical-record",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.create_medical_record"
+  },
+  {
+    "path": "/api/v1/doctor-management/consultation/{patient_ref}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.get_patient_consultation_details"
+  },
+  {
+    "path": "/api/v1/doctor-management/patients/search",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.search_patients"
+  },
+  {
+    "path": "/api/v1/doctor-management/schedule/create",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.create_schedule_slot"
+  },
+  {
+    "path": "/api/v1/doctor-management/schedule/slots",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.get_schedule_slots"
+  },
+  {
+    "path": "/api/v1/doctor-management/schedule/weekly",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.get_weekly_schedule"
+  },
+  {
+    "path": "/api/v1/doctor-management/schedule/{schedule_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.delete_schedule_slot"
+  },
+  {
+    "path": "/api/v1/doctor-management/schedule/{schedule_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.update_schedule_slot"
+  },
+  {
+    "path": "/api/v1/doctor-management/statistics/summary",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_management.get_doctor_statistics_summary"
+  },
+  {
+    "path": "/api/v1/doctor-patient-records/medical-records",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_patient_records.get_all_medical_records"
+  },
+  {
+    "path": "/api/v1/doctor-patient-records/medical-records",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_patient_records.create_medical_record"
+  },
+  {
+    "path": "/api/v1/doctor-patient-records/medical-records/{record_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_patient_records.get_medical_record_details"
+  },
+  {
+    "path": "/api/v1/doctor-patient-records/medical-records/{record_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_patient_records.update_medical_record"
+  },
+  {
+    "path": "/api/v1/doctor-patient-records/patients/advanced-search",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_patient_records.advanced_patient_search"
+  },
+  {
+    "path": "/api/v1/doctor-patient-records/patients/search",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_patient_records.search_patients"
+  },
+  {
+    "path": "/api/v1/doctor-patient-records/patients/{patient_ref}/case-history",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_patient_records.analyze_case_history"
+  },
+  {
+    "path": "/api/v1/doctor-patient-records/patients/{patient_ref}/clinical-alerts",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_patient_records.get_clinical_alerts"
+  },
+  {
+    "path": "/api/v1/doctor-patient-records/patients/{patient_ref}/documents",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_patient_records.get_patient_documents"
+  },
+  {
+    "path": "/api/v1/doctor-patient-records/patients/{patient_ref}/medical-records",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_patient_records.get_patient_medical_records"
+  },
+  {
+    "path": "/api/v1/doctor-patient-records/patients/{patient_ref}/summary",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_patient_records.get_patient_summary"
+  },
+  {
+    "path": "/api/v1/doctor-patient-records/patients/{patient_ref}/timeline",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_patient_records.get_patient_timeline"
+  },
+  {
+    "path": "/api/v1/doctor-reports-analytics/appointment-analytics",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_reports_analytics.get_appointment_analytics"
+  },
+  {
+    "path": "/api/v1/doctor-reports-analytics/clinical-outcomes",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_reports_analytics.get_clinical_outcomes"
+  },
+  {
+    "path": "/api/v1/doctor-reports-analytics/comparative-analysis",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_reports_analytics.get_comparative_analysis"
+  },
+  {
+    "path": "/api/v1/doctor-reports-analytics/export-options",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_reports_analytics.get_export_options"
+  },
+  {
+    "path": "/api/v1/doctor-reports-analytics/financial-summary",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_reports_analytics.get_financial_summary"
+  },
+  {
+    "path": "/api/v1/doctor-reports-analytics/generate-custom-report",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_reports_analytics.generate_custom_report"
+  },
+  {
+    "path": "/api/v1/doctor-reports-analytics/patient-analytics",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_reports_analytics.get_patient_analytics"
+  },
+  {
+    "path": "/api/v1/doctor-reports-analytics/performance-metrics",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_reports_analytics.get_performance_metrics"
+  },
+  {
+    "path": "/api/v1/doctor-reports-analytics/practice-overview",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_reports_analytics.get_practice_overview"
+  },
+  {
+    "path": "/api/v1/doctor-reports-analytics/prescription-analytics",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_reports_analytics.get_prescription_analytics"
+  },
+  {
+    "path": "/api/v1/doctor-sidebar/appointments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_sidebar.sidebar_appointments"
+  },
+  {
+    "path": "/api/v1/doctor-sidebar/inpatient-visits",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_sidebar.sidebar_inpatient_visits"
+  },
+  {
+    "path": "/api/v1/doctor-sidebar/inpatient-visits/{admission_id}/vitals",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_sidebar.sidebar_update_inpatient_vitals"
+  },
+  {
+    "path": "/api/v1/doctor-sidebar/lab-results",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_sidebar.sidebar_lab_results"
+  },
+  {
+    "path": "/api/v1/doctor-sidebar/lab-results/{medical_record_id}/review",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_sidebar.sidebar_review_lab_result"
+  },
+  {
+    "path": "/api/v1/doctor-sidebar/messages",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_sidebar.sidebar_messages"
+  },
+  {
+    "path": "/api/v1/doctor-sidebar/messages",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_sidebar.sidebar_send_message"
+  },
+  {
+    "path": "/api/v1/doctor-sidebar/messages/read",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_sidebar.sidebar_mark_message_read"
+  },
+  {
+    "path": "/api/v1/doctor-sidebar/prescriptions",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_sidebar.sidebar_prescriptions"
+  },
+  {
+    "path": "/api/v1/doctor-sidebar/prescriptions",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_sidebar.sidebar_create_prescription"
+  },
+  {
+    "path": "/api/v1/doctor-sidebar/profile",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_sidebar.sidebar_get_profile"
+  },
+  {
+    "path": "/api/v1/doctor-sidebar/profile",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_sidebar.sidebar_patch_profile"
+  },
+  {
+    "path": "/api/v1/doctor-treatment-plans/analytics/summary",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_treatment_plans.get_treatment_plan_analytics"
+  },
+  {
+    "path": "/api/v1/doctor-treatment-plans/maintenance/cleanup-dates",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_treatment_plans.cleanup_invalid_dates"
+  },
+  {
+    "path": "/api/v1/doctor-treatment-plans/plans",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_treatment_plans.get_treatment_plans"
+  },
+  {
+    "path": "/api/v1/doctor-treatment-plans/plans",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_treatment_plans.create_treatment_plan"
+  },
+  {
+    "path": "/api/v1/doctor-treatment-plans/plans/from-template",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_treatment_plans.create_plan_from_template"
+  },
+  {
+    "path": "/api/v1/doctor-treatment-plans/plans/{plan_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_treatment_plans.get_treatment_plan_details"
+  },
+  {
+    "path": "/api/v1/doctor-treatment-plans/plans/{plan_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_treatment_plans.update_treatment_plan"
+  },
+  {
+    "path": "/api/v1/doctor-treatment-plans/plans/{plan_id}/outcome",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_treatment_plans.get_treatment_outcome"
+  },
+  {
+    "path": "/api/v1/doctor-treatment-plans/plans/{plan_id}/outcome",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_treatment_plans.record_treatment_outcome"
+  },
+  {
+    "path": "/api/v1/doctor-treatment-plans/plans/{plan_id}/progress",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_treatment_plans.update_treatment_progress"
+  },
+  {
+    "path": "/api/v1/doctor-treatment-plans/plans/{plan_id}/status",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_treatment_plans.get_treatment_plan_status"
+  },
+  {
+    "path": "/api/v1/doctor-treatment-plans/templates",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.doctor_treatment_plans.get_treatment_plan_templates"
+  },
+  {
+    "path": "/api/v1/doctors",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.get_all_doctors"
+  },
+  {
+    "path": "/api/v1/doctors",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.create_doctor"
+  },
+  {
+    "path": "/api/v1/doctors/{id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.update_doctor"
+  },
+  {
+    "path": "/api/v1/doctors/{id}/deactivate",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.deactivate_doctor"
+  },
+  {
+    "path": "/api/v1/doctors/{id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.update_doctor_status"
+  },
+  {
+    "path": "/api/v1/finance/audit",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.audit_finance.audit.list_audit_logs"
+  },
+  {
+    "path": "/api/v1/finance/audit/{audit_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.audit_finance.audit.get_audit_log"
+  },
+  {
+    "path": "/api/v1/finance/documents/templates",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.billing.documents.list_templates"
+  },
+  {
+    "path": "/api/v1/finance/documents/templates/{template_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.billing.documents.update_template"
+  },
+  {
+    "path": "/api/v1/finance/documents/{doc_id}/duplicate",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.billing.documents.duplicate_document"
+  },
+  {
+    "path": "/api/v1/finance/documents/{doc_id}/email",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.billing.documents.email_document"
+  },
+  {
+    "path": "/api/v1/finance/reconciliation/daily",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.reports_finance.reconciliation.get_daily_reconciliation"
+  },
+  {
+    "path": "/api/v1/finance/reconciliation/discrepancies",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.reports_finance.reconciliation.list_discrepancies"
+  },
+  {
+    "path": "/api/v1/finance/reconciliation/run",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.reports_finance.reconciliation.run_reconciliation"
+  },
+  {
+    "path": "/api/v1/finance/reconciliation/{recon_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.reports_finance.reconciliation.get_reconciliation"
+  },
+  {
+    "path": "/api/v1/finance/reports/department-revenue",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.reports_finance.reports.department_revenue"
+  },
+  {
+    "path": "/api/v1/finance/reports/doctor-revenue",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.reports_finance.reports.doctor_revenue"
+  },
+  {
+    "path": "/api/v1/finance/reports/outstanding",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.reports_finance.reports.outstanding_report"
+  },
+  {
+    "path": "/api/v1/finance/reports/revenue",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.reports_finance.reports.revenue_report"
+  },
+  {
+    "path": "/api/v1/finance/reports/tax-gst",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.reports_finance.reports.tax_gst_report"
+  },
+  {
+    "path": "/api/v1/health",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.api.health_check"
+  },
+  {
+    "path": "/api/v1/hospital-admin/admissions",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.list_admissions"
+  },
+  {
+    "path": "/api/v1/hospital-admin/admissions",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.create_admission"
+  },
+  {
+    "path": "/api/v1/hospital-admin/admissions/{admission_id}/assign-bed",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.assign_bed_to_admission"
+  },
+  {
+    "path": "/api/v1/hospital-admin/admissions/{admission_id}/discharge",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.discharge_patient"
+  },
+  {
+    "path": "/api/v1/hospital-admin/appointments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.list_appointments"
+  },
+  {
+    "path": "/api/v1/hospital-admin/appointments/{appointment_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_appointment_details"
+  },
+  {
+    "path": "/api/v1/hospital-admin/appointments/{appointment_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_appointment_status"
+  },
+  {
+    "path": "/api/v1/hospital-admin/audit-logs",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.list_hospital_admin_audit_logs"
+  },
+  {
+    "path": "/api/v1/hospital-admin/beds",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.list_beds"
+  },
+  {
+    "path": "/api/v1/hospital-admin/beds",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.create_bed"
+  },
+  {
+    "path": "/api/v1/hospital-admin/beds/{bed_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_bed_details"
+  },
+  {
+    "path": "/api/v1/hospital-admin/beds/{bed_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_bed_status"
+  },
+  {
+    "path": "/api/v1/hospital-admin/dashboard/appointment-stats",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_appointment_statistics"
+  },
+  {
+    "path": "/api/v1/hospital-admin/dashboard/overview",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_dashboard_overview"
+  },
+  {
+    "path": "/api/v1/hospital-admin/dashboard/staff-stats",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_staff_statistics"
+  },
+  {
+    "path": "/api/v1/hospital-admin/departments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.list_departments"
+  },
+  {
+    "path": "/api/v1/hospital-admin/departments",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.create_department"
+  },
+  {
+    "path": "/api/v1/hospital-admin/departments/assign-staff",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.assign_staff_to_department"
+  },
+  {
+    "path": "/api/v1/hospital-admin/departments/unassign-staff",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.unassign_staff_from_department"
+  },
+  {
+    "path": "/api/v1/hospital-admin/departments/{department_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_department_details"
+  },
+  {
+    "path": "/api/v1/hospital-admin/departments/{department_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_department"
+  },
+  {
+    "path": "/api/v1/hospital-admin/departments/{department_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_department_status"
+  },
+  {
+    "path": "/api/v1/hospital-admin/departments/{department_name}/staff",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_department_staff"
+  },
+  {
+    "path": "/api/v1/hospital-admin/patients",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.list_patients"
+  },
+  {
+    "path": "/api/v1/hospital-admin/patients/{patient_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_patient_status"
+  },
+  {
+    "path": "/api/v1/hospital-admin/platform-settings/features",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_hospital_subscription_features"
+  },
+  {
+    "path": "/api/v1/hospital-admin/reports/bed-occupancy",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_bed_occupancy_report"
+  },
+  {
+    "path": "/api/v1/hospital-admin/reports/department-performance",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_department_performance_report"
+  },
+  {
+    "path": "/api/v1/hospital-admin/reports/revenue-summary",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_revenue_summary_report"
+  },
+  {
+    "path": "/api/v1/hospital-admin/staff",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.list_staff_users"
+  },
+  {
+    "path": "/api/v1/hospital-admin/staff",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.create_staff_user"
+  },
+  {
+    "path": "/api/v1/hospital-admin/staff/doctors/{staff_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_doctor_staff_profile"
+  },
+  {
+    "path": "/api/v1/hospital-admin/staff/lab-techs/{staff_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_lab_tech_staff_profile"
+  },
+  {
+    "path": "/api/v1/hospital-admin/staff/nurses/{staff_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_nurse_staff_profile"
+  },
+  {
+    "path": "/api/v1/hospital-admin/staff/pharmacists/{staff_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_pharmacist_staff_profile"
+  },
+  {
+    "path": "/api/v1/hospital-admin/staff/receptionists/{staff_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_receptionist_staff_profile"
+  },
+  {
+    "path": "/api/v1/hospital-admin/staff/{staff_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_staff_details"
+  },
+  {
+    "path": "/api/v1/hospital-admin/staff/{staff_id}/reset-password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.reset_staff_password"
+  },
+  {
+    "path": "/api/v1/hospital-admin/staff/{staff_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_staff_status"
+  },
+  {
+    "path": "/api/v1/hospital-admin/staff/{staff_name}/departments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.get_staff_departments"
+  },
+  {
+    "path": "/api/v1/hospital-admin/wards",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.list_wards"
+  },
+  {
+    "path": "/api/v1/hospital-admin/wards",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.create_ward"
+  },
+  {
+    "path": "/api/v1/hospital-admin/wards/{ward_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_ward"
+  },
+  {
+    "path": "/api/v1/hospital-admin/wards/{ward_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.hospital_admin.update_ward_status"
+  },
+  {
+    "path": "/api/v1/insurance/claims",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.insurance.claims.list_claims"
+  },
+  {
+    "path": "/api/v1/insurance/claims",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.insurance.claims.create_claim"
+  },
+  {
+    "path": "/api/v1/insurance/claims/{claim_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.insurance.claims.get_claim"
+  },
+  {
+    "path": "/api/v1/insurance/claims/{claim_id}/record-settlement",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.insurance.claims.record_settlement"
+  },
+  {
+    "path": "/api/v1/insurance/claims/{claim_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.insurance.claims.update_claim_status"
+  },
+  {
+    "path": "/api/v1/ipd-management/admissions",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.patient.ipd_management.admit_patient_to_ipd"
+  },
+  {
+    "path": "/api/v1/ipd-management/admissions/{admission_number}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.ipd_management.get_ipd_admission_details"
+  },
+  {
+    "path": "/api/v1/ipd-management/available-patients",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.ipd_management.get_available_patients_for_admission"
+  },
+  {
+    "path": "/api/v1/ipd-management/dashboard",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.ipd_management.get_ipd_dashboard"
+  },
+  {
+    "path": "/api/v1/ipd-management/debug/all-patients",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.ipd_management.debug_list_all_patients"
+  },
+  {
+    "path": "/api/v1/ipd-management/debug/all-patients/{patient_ref}",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.patient.ipd_management.debug_edit_patient"
+  },
+  {
+    "path": "/api/v1/ipd-management/doctor-rounds",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.patient.ipd_management.create_doctor_rounds"
+  },
+  {
+    "path": "/api/v1/ipd-management/nursing-assessments",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.patient.ipd_management.create_nursing_assessment"
+  },
+  {
+    "path": "/api/v1/ipd-management/patients",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.ipd_management.get_ipd_patients"
+  },
+  {
+    "path": "/api/v1/lab/critical-results",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_critical_results.get_critical_results_dashboard"
+  },
+  {
+    "path": "/api/v1/lab/critical-results/{alert_id}/notify",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_critical_results.start_notification_protocol"
+  },
+  {
+    "path": "/api/v1/lab/equipment-qc/equipment",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_equipment.get_equipment_list"
+  },
+  {
+    "path": "/api/v1/lab/equipment-qc/equipment",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_equipment.create_equipment"
+  },
+  {
+    "path": "/api/v1/lab/equipment-qc/equipment/logs",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_equipment.get_all_maintenance_logs"
+  },
+  {
+    "path": "/api/v1/lab/equipment-qc/equipment/logs/{log_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_equipment.get_maintenance_log"
+  },
+  {
+    "path": "/api/v1/lab/equipment-qc/equipment/{equipment_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_equipment.get_equipment"
+  },
+  {
+    "path": "/api/v1/lab/equipment-qc/equipment/{equipment_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_equipment.update_equipment"
+  },
+  {
+    "path": "/api/v1/lab/equipment-qc/equipment/{equipment_id}/logs",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_equipment.get_equipment_logs"
+  },
+  {
+    "path": "/api/v1/lab/equipment-qc/equipment/{equipment_id}/logs",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_equipment.create_maintenance_log"
+  },
+  {
+    "path": "/api/v1/lab/equipment-qc/equipment/{equipment_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_equipment.update_equipment_status"
+  },
+  {
+    "path": "/api/v1/lab/equipment-tracking",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_equipment_tracking.get_equipment_tracking"
+  },
+  {
+    "path": "/api/v1/lab/equipment-tracking/equipment",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_equipment_tracking.add_equipment_tracking"
+  },
+  {
+    "path": "/api/v1/lab/equipment-tracking/quick-action/{action}",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_equipment_tracking.run_equipment_quick_action"
+  },
+  {
+    "path": "/api/v1/lab/profile",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_profile.get_lab_profile"
+  },
+  {
+    "path": "/api/v1/lab/profile/action/{action}",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_profile.run_lab_profile_action"
+  },
+  {
+    "path": "/api/v1/lab/profile/change-password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_profile.change_lab_profile_password"
+  },
+  {
+    "path": "/api/v1/lab/profile/configure-settings",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_profile.configure_lab_settings"
+  },
+  {
+    "path": "/api/v1/lab/profile/edit",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_profile.edit_lab_profile"
+  },
+  {
+    "path": "/api/v1/lab/quality-control",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_quality_control.get_quality_control_dashboard"
+  },
+  {
+    "path": "/api/v1/lab/quality-control/run",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_quality_control.record_qc_run"
+  },
+  {
+    "path": "/api/v1/lab/quality-control/workflow/{action}",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_quality_control.trigger_qc_workflow_action"
+  },
+  {
+    "path": "/api/v1/lab/report-generation",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_report_generation.list_reports"
+  },
+  {
+    "path": "/api/v1/lab/report-generation/generate",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_report_generation.generate_report"
+  },
+  {
+    "path": "/api/v1/lab/report-generation/ready-tests",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_report_generation.list_ready_tests"
+  },
+  {
+    "path": "/api/v1/lab/report-generation/{report_id}/preview",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_report_generation.preview_report"
+  },
+  {
+    "path": "/api/v1/lab/report-generation/{report_id}/print",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_report_generation.print_report"
+  },
+  {
+    "path": "/api/v1/lab/result-access",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_result_access.get_result_access_dashboard"
+  },
+  {
+    "path": "/api/v1/lab/result-access/grant",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_result_access.grant_result_access"
+  },
+  {
+    "path": "/api/v1/lab/sample-tracking",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_sample_tracking.list_sample_tracking"
+  },
+  {
+    "path": "/api/v1/lab/sample-tracking/action",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_sample_tracking.apply_sample_status_action"
+  },
+  {
+    "path": "/api/v1/lab/sample-tracking/lookup",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_sample_tracking.lookup_sample_barcode"
+  },
+  {
+    "path": "/api/v1/lab/sample-tracking/simulate-scan",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_sample_tracking.simulate_scan"
+  },
+  {
+    "path": "/api/v1/lab/tech-dashboard",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_tech_dashboard.get_lab_tech_dashboard"
+  },
+  {
+    "path": "/api/v1/lab/test-catalogue",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_test_catalogue.list_test_catalogue"
+  },
+  {
+    "path": "/api/v1/lab/test-catalogue/bulk/{action}",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_test_catalogue.run_catalogue_bulk_action"
+  },
+  {
+    "path": "/api/v1/lab/test-catalogue/category",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_test_catalogue.add_test_category"
+  },
+  {
+    "path": "/api/v1/lab/test-catalogue/test",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_test_catalogue.add_catalogue_test"
+  },
+  {
+    "path": "/api/v1/lab/test-registration",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_test_registration.list_test_registrations"
+  },
+  {
+    "path": "/api/v1/lab/test-registration",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.lab.lab_test_registration.register_new_test"
+  },
+  {
+    "path": "/api/v1/notifications/history",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.list_history"
+  },
+  {
+    "path": "/api/v1/notifications/jobs/{job_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.get_job"
+  },
+  {
+    "path": "/api/v1/notifications/jobs/{job_id}/cancel",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.cancel_job"
+  },
+  {
+    "path": "/api/v1/notifications/jobs/{job_id}/retry",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.retry_job"
+  },
+  {
+    "path": "/api/v1/notifications/otp/send",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.otp_send"
+  },
+  {
+    "path": "/api/v1/notifications/otp/verify",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.otp_verify"
+  },
+  {
+    "path": "/api/v1/notifications/preferences/me",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.get_preferences_me"
+  },
+  {
+    "path": "/api/v1/notifications/preferences/me",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.update_preferences_me"
+  },
+  {
+    "path": "/api/v1/notifications/preferences/{owner_type}/{owner_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.get_preferences_admin"
+  },
+  {
+    "path": "/api/v1/notifications/providers",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.list_providers"
+  },
+  {
+    "path": "/api/v1/notifications/providers/{provider_id}/config",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.update_provider_config"
+  },
+  {
+    "path": "/api/v1/notifications/providers/{provider_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.update_provider_status"
+  },
+  {
+    "path": "/api/v1/notifications/providers/{provider_id}/test",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.test_provider"
+  },
+  {
+    "path": "/api/v1/notifications/queue",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.list_queue"
+  },
+  {
+    "path": "/api/v1/notifications/schedule",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.schedule"
+  },
+  {
+    "path": "/api/v1/notifications/send",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.send"
+  },
+  {
+    "path": "/api/v1/notifications/sms/bulk",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.bulk_sms"
+  },
+  {
+    "path": "/api/v1/notifications/ticket-email",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.notifications.notifications.ticket_email"
+  },
+  {
+    "path": "/api/v1/nurse-management/care-plans",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.create_care_plan"
+  },
+  {
+    "path": "/api/v1/nurse-management/care-plans/{care_plan_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.update_care_plan"
+  },
+  {
+    "path": "/api/v1/nurse-management/dashboard",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_nurse_dashboard"
+  },
+  {
+    "path": "/api/v1/nurse-management/orders/my-executed",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_my_executed_orders"
+  },
+  {
+    "path": "/api/v1/nurse-management/orders/pending",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_pending_doctor_orders"
+  },
+  {
+    "path": "/api/v1/nurse-management/orders/{order_id}/execute",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.execute_doctor_order"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_patients_list"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients/{patient_ref}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_patient_profile"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients/{patient_ref}/care-plans",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_patient_care_plans"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients/{patient_ref}/medication-administration",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.record_medication_administration"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients/{patient_ref}/medication-administration/history",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_medication_administration_history"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients/{patient_ref}/nursing-notes",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_nursing_notes"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients/{patient_ref}/nursing-notes",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.add_nursing_note"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients/{patient_ref}/reports/upload",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.upload_nursing_report"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients/{patient_ref}/vitals",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.update_patient_vitals"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients/{patient_ref}/vitals/alerts",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_vitals_alerts"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients/{patient_ref}/vitals/history",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_patient_vitals_history"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients/{patient_ref}/vitals/summary",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_vitals_summary"
+  },
+  {
+    "path": "/api/v1/nurse-management/patients/{patient_ref}/vitals/trend",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_vitals_trend"
+  },
+  {
+    "path": "/api/v1/nurse-management/shift-handover",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.create_shift_handover"
+  },
+  {
+    "path": "/api/v1/nurse-management/shift-handover/history",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_shift_handover_history"
+  },
+  {
+    "path": "/api/v1/nurse-management/shift-handover/latest",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_latest_shift_handover"
+  },
+  {
+    "path": "/api/v1/nurse-management/wards/overview",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_wards_overview"
+  },
+  {
+    "path": "/api/v1/nurse-management/wards/{ward_name}/patients",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.nurse_management.get_ward_patients"
+  },
+  {
+    "path": "/api/v1/opd/consultation",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.create_opd_consultation"
+  },
+  {
+    "path": "/api/v1/opd/consultation/{patient_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.get_consultations_for_patient"
+  },
+  {
+    "path": "/api/v1/opd/consultations/start",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.start_consultation"
+  },
+  {
+    "path": "/api/v1/opd/consultations/{id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.get_consultation"
+  },
+  {
+    "path": "/api/v1/opd/consultations/{id}/complete",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.complete_consultation"
+  },
+  {
+    "path": "/api/v1/opd/dashboard",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.get_opd_dashboard_stats"
+  },
+  {
+    "path": "/api/v1/opd/doctor",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.configure_opd_doctor_route"
+  },
+  {
+    "path": "/api/v1/opd/doctor/{doctor_user_id}/toggle-status",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.toggle_opd_doctor"
+  },
+  {
+    "path": "/api/v1/opd/doctors",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.list_opd_doctors"
+  },
+  {
+    "path": "/api/v1/opd/patient",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.create_opd_patient"
+  },
+  {
+    "path": "/api/v1/opd/patient/{visit_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.delete_opd_patient"
+  },
+  {
+    "path": "/api/v1/opd/patient/{visit_id}/status",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.update_opd_patient_status"
+  },
+  {
+    "path": "/api/v1/opd/patients",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.list_opd_patients"
+  },
+  {
+    "path": "/api/v1/opd/tokens",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.get_all_tokens"
+  },
+  {
+    "path": "/api/v1/opd/tokens",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.create_token"
+  },
+  {
+    "path": "/api/v1/opd/tokens/{id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.cancel_token"
+  },
+  {
+    "path": "/api/v1/opd/tokens/{id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.get_token_by_id"
+  },
+  {
+    "path": "/api/v1/opd/transfer",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.transfer_opd_patient"
+  },
+  {
+    "path": "/api/v1/opd/transfer-patient",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.opd_management.transfer_patient_modal"
+  },
+  {
+    "path": "/api/v1/patient-appointment-booking/appointment/{appointment_ref}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_appointment_booking.get_appointment_details"
+  },
+  {
+    "path": "/api/v1/patient-appointment-booking/appointment/{appointment_ref}/cancel",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_appointment_booking.cancel_appointment"
+  },
+  {
+    "path": "/api/v1/patient-appointment-booking/book-appointment",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_appointment_booking.book_appointment"
+  },
+  {
+    "path": "/api/v1/patient-appointment-booking/departments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_appointment_booking.get_departments"
+  },
+  {
+    "path": "/api/v1/patient-appointment-booking/departments/{department_name}/doctors",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_appointment_booking.get_department_doctors"
+  },
+  {
+    "path": "/api/v1/patient-appointment-booking/doctors/{doctor_name}/available-slots",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_appointment_booking.get_doctor_available_slots"
+  },
+  {
+    "path": "/api/v1/patient-appointment-booking/my-appointments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_appointment_booking.get_my_appointments"
+  },
+  {
+    "path": "/api/v1/patient-discharge-summary/admissions/ready-for-discharge",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_discharge_summary.get_admissions_ready_for_discharge"
+  },
+  {
+    "path": "/api/v1/patient-discharge-summary/admissions/{admission_number}/discharge-template",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_discharge_summary.get_discharge_summary_template"
+  },
+  {
+    "path": "/api/v1/patient-discharge-summary/discharge-summaries",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_discharge_summary.create_discharge_summary"
+  },
+  {
+    "path": "/api/v1/patient-discharge-summary/discharge-summaries/statistics",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_discharge_summary.get_discharge_statistics"
+  },
+  {
+    "path": "/api/v1/patient-discharge-summary/discharge-summaries/{summary_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_discharge_summary.get_discharge_summary"
+  },
+  {
+    "path": "/api/v1/patient-discharge-summary/discharge-summaries/{summary_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_discharge_summary.update_discharge_summary"
+  },
+  {
+    "path": "/api/v1/patient-discharge-summary/discharge-summaries/{summary_id}/finalize",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_discharge_summary.finalize_discharge_summary"
+  },
+  {
+    "path": "/api/v1/patient-discharge-summary/my/discharge-summaries",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_discharge_summary.get_my_discharge_summaries"
+  },
+  {
+    "path": "/api/v1/patient-discharge-summary/patients/{patient_ref}/discharge-summaries",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_discharge_summary.get_patient_discharge_summaries"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/my/documents",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.get_my_documents"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/my/documents/statistics",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.get_my_document_statistics"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/my/documents/upload",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.upload_my_document"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/my/documents/{document_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.delete_my_document"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/my/documents/{document_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.get_my_document_details"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/my/documents/{document_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.update_my_document_metadata"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/my/documents/{document_id}/download",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.download_my_document"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/patients/{patient_ref}/documents",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.get_patient_documents"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/patients/{patient_ref}/documents/statistics",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.get_document_statistics"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/patients/{patient_ref}/documents/upload",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.upload_patient_document"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.delete_document"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.get_document_details"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.update_document_metadata"
+  },
+  {
+    "path": "/api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}/download",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_document_storage.download_document"
+  },
+  {
+    "path": "/api/v1/patient-medical-history/my/medical-records",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_medical_history.get_my_medical_records"
+  },
+  {
+    "path": "/api/v1/patient-medical-history/my/medical-records/{record_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_medical_history.get_my_medical_record_details"
+  },
+  {
+    "path": "/api/v1/patient-medical-history/my/summary",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_medical_history.get_my_medical_summary"
+  },
+  {
+    "path": "/api/v1/patient-medical-history/my/timeline",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_medical_history.get_my_medical_timeline"
+  },
+  {
+    "path": "/api/v1/patient-medical-history/patients/{patient_ref}/medical-records",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_medical_history.get_patient_medical_records"
+  },
+  {
+    "path": "/api/v1/patient-medical-history/patients/{patient_ref}/medical-records/{record_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_medical_history.get_medical_record_details"
+  },
+  {
+    "path": "/api/v1/patient-medical-history/patients/{patient_ref}/summary",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_medical_history.get_patient_medical_summary"
+  },
+  {
+    "path": "/api/v1/patient-medical-history/patients/{patient_ref}/timeline",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.patient.patient_medical_history.get_patient_medical_timeline"
+  },
+  {
+    "path": "/api/v1/payments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.list_payments"
+  },
+  {
+    "path": "/api/v1/payments/advance",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.advance_payment"
+  },
+  {
+    "path": "/api/v1/payments/collect",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.collect_payment"
+  },
+  {
+    "path": "/api/v1/payments/initiate",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.initiate_payment"
+  },
+  {
+    "path": "/api/v1/payments/ledger",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.get_ledger"
+  },
+  {
+    "path": "/api/v1/payments/outstanding",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.get_outstanding"
+  },
+  {
+    "path": "/api/v1/payments/providers",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.list_providers"
+  },
+  {
+    "path": "/api/v1/payments/providers/{provider}/config",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.update_provider_config"
+  },
+  {
+    "path": "/api/v1/payments/providers/{provider}/status",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.provider_status"
+  },
+  {
+    "path": "/api/v1/payments/reports/daily-summary",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.daily_summary"
+  },
+  {
+    "path": "/api/v1/payments/reports/reconciliation",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.reconciliation_report"
+  },
+  {
+    "path": "/api/v1/payments/verify",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.verify_payment"
+  },
+  {
+    "path": "/api/v1/payments/webhooks/{provider}",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.payment_webhooks.webhook_receive.webhook_receive"
+  },
+  {
+    "path": "/api/v1/payments/webhooks/{provider}/events",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.payment_webhooks.webhook_events.webhook_events"
+  },
+  {
+    "path": "/api/v1/payments/{payment_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.get_payment"
+  },
+  {
+    "path": "/api/v1/payments/{payment_id}/receipt/duplicate",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.duplicate_receipt"
+  },
+  {
+    "path": "/api/v1/payments/{payment_id}/receipt/email",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.email_receipt"
+  },
+  {
+    "path": "/api/v1/payments/{payment_id}/receipt/pdf",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.get_receipt_pdf"
+  },
+  {
+    "path": "/api/v1/payments/{payment_id}/refund",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.refund_payment"
+  },
+  {
+    "path": "/api/v1/payments/{payment_id}/refunds",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.payments_gateway.collect.list_payment_refunds"
+  },
+  {
+    "path": "/api/v1/pharmacy/alerts",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.alerts.list_alerts"
+  },
+  {
+    "path": "/api/v1/pharmacy/alerts/run-expiry-scan",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.alerts.run_expiry_scan"
+  },
+  {
+    "path": "/api/v1/pharmacy/alerts/{alert_id}/ack",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.alerts.acknowledge_alert"
+  },
+  {
+    "path": "/api/v1/pharmacy/grn",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.grn.list_grns"
+  },
+  {
+    "path": "/api/v1/pharmacy/grn",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.grn.create_grn"
+  },
+  {
+    "path": "/api/v1/pharmacy/grn/{grn_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.grn.get_grn"
+  },
+  {
+    "path": "/api/v1/pharmacy/grn/{grn_id}/finalize",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.grn.finalize_grn"
+  },
+  {
+    "path": "/api/v1/pharmacy/grn/{grn_id}/items",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.grn.add_grn_item"
+  },
+  {
+    "path": "/api/v1/pharmacy/medicines",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.medicines.list_medicines"
+  },
+  {
+    "path": "/api/v1/pharmacy/medicines",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.medicines.create_medicine"
+  },
+  {
+    "path": "/api/v1/pharmacy/medicines/{medicine_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.medicines.delete_medicine"
+  },
+  {
+    "path": "/api/v1/pharmacy/medicines/{medicine_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.medicines.get_medicine"
+  },
+  {
+    "path": "/api/v1/pharmacy/medicines/{medicine_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.medicines.update_medicine"
+  },
+  {
+    "path": "/api/v1/pharmacy/purchase-orders",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.purchase_orders.list_purchase_orders"
+  },
+  {
+    "path": "/api/v1/pharmacy/purchase-orders",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.purchase_orders.create_purchase_order"
+  },
+  {
+    "path": "/api/v1/pharmacy/purchase-orders/{po_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.purchase_orders.delete_purchase_order"
+  },
+  {
+    "path": "/api/v1/pharmacy/purchase-orders/{po_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.purchase_orders.get_purchase_order"
+  },
+  {
+    "path": "/api/v1/pharmacy/purchase-orders/{po_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.purchase_orders.update_purchase_order"
+  },
+  {
+    "path": "/api/v1/pharmacy/purchase-orders/{po_id}/approve",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.purchase_orders.approve_purchase_order"
+  },
+  {
+    "path": "/api/v1/pharmacy/purchase-orders/{po_id}/cancel",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.purchase_orders.cancel_purchase_order"
+  },
+  {
+    "path": "/api/v1/pharmacy/purchase-orders/{po_id}/send",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.purchase_orders.send_purchase_order"
+  },
+  {
+    "path": "/api/v1/pharmacy/purchase-orders/{po_id}/submit",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.purchase_orders.submit_purchase_order"
+  },
+  {
+    "path": "/api/v1/pharmacy/reports/expiry",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.reports.get_expiry_report"
+  },
+  {
+    "path": "/api/v1/pharmacy/reports/fast-slow-moving",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.reports.get_fast_slow_moving"
+  },
+  {
+    "path": "/api/v1/pharmacy/reports/profit-margins",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.reports.get_profit_margins"
+  },
+  {
+    "path": "/api/v1/pharmacy/reports/sales-summary",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.reports.get_sales_summary"
+  },
+  {
+    "path": "/api/v1/pharmacy/reports/stock-valuation",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.reports.get_stock_valuation"
+  },
+  {
+    "path": "/api/v1/pharmacy/returns",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.returns.list_returns"
+  },
+  {
+    "path": "/api/v1/pharmacy/returns/patient",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.returns.create_patient_return"
+  },
+  {
+    "path": "/api/v1/pharmacy/returns/supplier",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.returns.create_supplier_return"
+  },
+  {
+    "path": "/api/v1/pharmacy/sales",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.sales.list_sales"
+  },
+  {
+    "path": "/api/v1/pharmacy/sales",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.sales.create_sale"
+  },
+  {
+    "path": "/api/v1/pharmacy/sales/{sale_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.sales.get_sale"
+  },
+  {
+    "path": "/api/v1/pharmacy/sales/{sale_id}/complete",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.sales.complete_sale"
+  },
+  {
+    "path": "/api/v1/pharmacy/sales/{sale_id}/items",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.sales.add_sale_item"
+  },
+  {
+    "path": "/api/v1/pharmacy/sales/{sale_id}/receipt",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.sales.get_sale_receipt"
+  },
+  {
+    "path": "/api/v1/pharmacy/sales/{sale_id}/void",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.sales.void_sale"
+  },
+  {
+    "path": "/api/v1/pharmacy/stock",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.stock.list_stock"
+  },
+  {
+    "path": "/api/v1/pharmacy/stock/adjustments",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.stock.create_stock_adjustment"
+  },
+  {
+    "path": "/api/v1/pharmacy/stock/ledger",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.stock.get_stock_ledger"
+  },
+  {
+    "path": "/api/v1/pharmacy/suppliers",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.suppliers.list_suppliers"
+  },
+  {
+    "path": "/api/v1/pharmacy/suppliers",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.suppliers.create_supplier"
+  },
+  {
+    "path": "/api/v1/pharmacy/suppliers/{supplier_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.suppliers.delete_supplier"
+  },
+  {
+    "path": "/api/v1/pharmacy/suppliers/{supplier_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.suppliers.get_supplier"
+  },
+  {
+    "path": "/api/v1/pharmacy/suppliers/{supplier_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.pharmacy.suppliers.update_supplier"
+  },
+  {
+    "path": "/api/v1/receptionist/appointments/schedule",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.schedule_appointment"
+  },
+  {
+    "path": "/api/v1/receptionist/appointments/statistics",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.get_appointment_statistics"
+  },
+  {
+    "path": "/api/v1/receptionist/appointments/today",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.get_todays_appointments"
+  },
+  {
+    "path": "/api/v1/receptionist/appointments/{appointment_ref}",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.modify_appointment"
+  },
+  {
+    "path": "/api/v1/receptionist/appointments/{appointment_ref}/check-in",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.check_in_patient"
+  },
+  {
+    "path": "/api/v1/receptionist/dashboard",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.get_receptionist_dashboard"
+  },
+  {
+    "path": "/api/v1/receptionist/patients",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.list_all_patients"
+  },
+  {
+    "path": "/api/v1/receptionist/patients/register",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.register_patient"
+  },
+  {
+    "path": "/api/v1/receptionist/patients/search",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.search_patients"
+  },
+  {
+    "path": "/api/v1/receptionist/patients/{patient_ref}",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.patch_opd_patient"
+  },
+  {
+    "path": "/api/v1/receptionist/patients/{patient_ref}/profile",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.get_patient_profile_for_schedule"
+  },
+  {
+    "path": "/api/v1/receptionist/profile",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.get_receptionist_profile"
+  },
+  {
+    "path": "/api/v1/receptionist/profile",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.update_receptionist_profile"
+  },
+  {
+    "path": "/api/v1/receptionist/quick-actions",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.receptionist_management.get_quick_actions"
+  },
+  {
+    "path": "/api/v1/routes",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.api.list_routes"
+  },
+  {
+    "path": "/api/v1/simple-prescription/doctor/medicines/search",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.simple_prescription.search_real_medicines"
+  },
+  {
+    "path": "/api/v1/simple-prescription/doctor/prescriptions",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.simple_prescription.get_doctor_prescriptions"
+  },
+  {
+    "path": "/api/v1/simple-prescription/doctor/prescriptions/create",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.simple_prescription.create_simple_prescription"
+  },
+  {
+    "path": "/api/v1/simple-prescription/patient/prescriptions",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.simple_prescription.get_patient_prescriptions"
+  },
+  {
+    "path": "/api/v1/simple-prescription/pharmacist/prescriptions",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.simple_prescription.get_prescriptions_for_pharmacist"
+  },
+  {
+    "path": "/api/v1/simple-prescription/pharmacist/prescriptions/{prescription_id}/dispense",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.simple_prescription.dispense_prescription"
+  },
+  {
+    "path": "/api/v1/simple-prescription/prescriptions/{prescription_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.simple_prescription.get_prescription_details"
+  },
+  {
+    "path": "/api/v1/simple-prescription/prescriptions/{prescription_id}/pdf",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.doctor.simple_prescription.get_prescription_pdf"
+  },
+  {
+    "path": "/api/v1/staff/doctor-schedules/slots/{schedule_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.management.staff_doctor_schedules.staff_delete_doctor_schedule_slot"
+  },
+  {
+    "path": "/api/v1/staff/doctor-schedules/slots/{schedule_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.management.staff_doctor_schedules.staff_update_doctor_schedule_slot"
+  },
+  {
+    "path": "/api/v1/staff/doctor-schedules/{doctor_name:path}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.staff_doctor_schedules.staff_get_doctor_schedule_template"
+  },
+  {
+    "path": "/api/v1/staff/doctor-schedules/{doctor_name:path}",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.management.staff_doctor_schedules.staff_create_doctor_schedule_slot"
+  },
+  {
+    "path": "/api/v1/staff/doctor-schedules/{doctor_name:path}/check-slots",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.management.staff_doctor_schedules.staff_check_doctor_available_slots"
+  },
+  {
+    "path": "/api/v1/super-admin/analytics/overview",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.get_platform_analytics"
+  },
+  {
+    "path": "/api/v1/super-admin/audit-logs",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.get_audit_logs"
+  },
+  {
+    "path": "/api/v1/super-admin/dashboard/overview-cards",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.get_dashboard_overview_cards"
+  },
+  {
+    "path": "/api/v1/super-admin/financial-analytics",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.get_financial_analytics"
+  },
+  {
+    "path": "/api/v1/super-admin/financial-analytics",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.get_financial_analytics_filtered"
+  },
+  {
+    "path": "/api/v1/super-admin/hospital-admins/{admin_id}/reset-password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.reset_admin_password"
+  },
+  {
+    "path": "/api/v1/super-admin/hospital-admins/{admin_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.update_admin_status"
+  },
+  {
+    "path": "/api/v1/super-admin/hospitals",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.list_hospitals"
+  },
+  {
+    "path": "/api/v1/super-admin/hospitals/{hospital_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.delete_hospital"
+  },
+  {
+    "path": "/api/v1/super-admin/hospitals/{hospital_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.get_hospital_details"
+  },
+  {
+    "path": "/api/v1/super-admin/hospitals/{hospital_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.update_hospital"
+  },
+  {
+    "path": "/api/v1/super-admin/hospitals/{hospital_id}/admins",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.list_hospital_admins"
+  },
+  {
+    "path": "/api/v1/super-admin/hospitals/{hospital_id}/admins",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.create_hospital_admin"
+  },
+  {
+    "path": "/api/v1/super-admin/hospitals/{hospital_id}/deactivate",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.deactivate_hospital_post"
+  },
+  {
+    "path": "/api/v1/super-admin/hospitals/{hospital_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.update_hospital_status"
+  },
+  {
+    "path": "/api/v1/super-admin/hospitals/{hospital_name}/assign-plan",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.assign_subscription_plan"
+  },
+  {
+    "path": "/api/v1/super-admin/hospitals/{hospital_name}/subscription",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.get_hospital_subscription"
+  },
+  {
+    "path": "/api/v1/super-admin/me",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.get_super_admin_me"
+  },
+  {
+    "path": "/api/v1/super-admin/me",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.update_super_admin_me"
+  },
+  {
+    "path": "/api/v1/super-admin/me/avatar",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.upload_super_admin_avatar"
+  },
+  {
+    "path": "/api/v1/super-admin/me/change-password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.super_admin_change_password"
+  },
+  {
+    "path": "/api/v1/super-admin/me/change_password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.super_admin_change_password"
+  },
+  {
+    "path": "/api/v1/super-admin/notifications/send-to-hospital-admins",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.notify_hospital_admins"
+  },
+  {
+    "path": "/api/v1/super-admin/performance-analytics",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.get_performance_analytics"
+  },
+  {
+    "path": "/api/v1/super-admin/plans",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.list_subscription_plans"
+  },
+  {
+    "path": "/api/v1/super-admin/plans",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.create_subscription_plan"
+  },
+  {
+    "path": "/api/v1/super-admin/plans/{plan_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.delete_subscription_plan"
+  },
+  {
+    "path": "/api/v1/super-admin/plans/{plan_id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.update_subscription_plan"
+  },
+  {
+    "path": "/api/v1/super-admin/profile",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.get_super_admin_profile"
+  },
+  {
+    "path": "/api/v1/super-admin/profile",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.update_super_admin_profile"
+  },
+  {
+    "path": "/api/v1/super-admin/profile",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.update_super_admin_profile_post_compat"
+  },
+  {
+    "path": "/api/v1/super-admin/subscription-analytics",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.get_subscription_analytics"
+  },
+  {
+    "path": "/api/v1/super-admin/subscription-analytics",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.get_subscription_analytics_filtered"
+  },
+  {
+    "path": "/api/v1/super-admin/support/tickets",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.list_support_tickets"
+  },
+  {
+    "path": "/api/v1/super-admin/support/tickets/{ticket_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.update_support_ticket_status"
+  },
+  {
+    "path": "/api/v1/super_admin/me/change-password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.super_admin_change_password_legacy_prefix"
+  },
+  {
+    "path": "/api/v1/super_admin/me/change_password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.admin.super_admin.super_admin_change_password_legacy_prefix"
+  },
+  {
+    "path": "/api/v1/support/hospital-admin/tickets",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.support.tickets.list_tickets_for_hospital_admin"
+  },
+  {
+    "path": "/api/v1/support/hospital-admin/tickets",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.support.tickets.create_ticket_as_hospital_admin"
+  },
+  {
+    "path": "/api/v1/support/hospital-admin/tickets/completed",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.support.tickets.list_completed_tickets_for_hospital_admin"
+  },
+  {
+    "path": "/api/v1/support/hospital-admin/tickets/{ticket_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.support.tickets.update_ticket_status_as_hospital_admin"
+  },
+  {
+    "path": "/api/v1/support/staff/tickets",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.support.tickets.list_my_support_tickets_as_staff"
+  },
+  {
+    "path": "/api/v1/support/staff/tickets",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.support.tickets.create_ticket_as_staff"
+  },
+  {
+    "path": "/api/v1/surgery/doctor/cases",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.surgery.routes.create_surgery_case"
+  },
+  {
+    "path": "/api/v1/surgery/doctor/cases/{surgery_id}/status",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.surgery.routes.update_surgery_status"
+  },
+  {
+    "path": "/api/v1/surgery/doctor/cases/{surgery_id}/team",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.surgery.routes.assign_surgical_team"
+  },
+  {
+    "path": "/api/v1/surgery/doctor/documentation",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.surgery.routes.upload_surgery_documentation"
+  },
+  {
+    "path": "/api/v1/surgery/nurse/cases/{surgery_id}/video",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.surgery.routes.upload_surgery_video"
+  },
+  {
+    "path": "/api/v1/surgery/patient/cases",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.surgery.routes.patient_list_my_surgeries"
+  },
+  {
+    "path": "/api/v1/surgery/patient/cases/{surgery_id}/documentation",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.surgery.routes.patient_get_surgery_documentation"
+  },
+  {
+    "path": "/api/v1/surgery/patient/cases/{surgery_id}/videos",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.surgery.routes.patient_list_surgery_videos"
+  },
+  {
+    "path": "/api/v1/surgery/patient/videos/{video_id}/stream",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.surgery.routes.patient_stream_surgery_video"
+  },
+  {
+    "path": "/api/v1/surgery/patient/videos/{video_id}/stream-token",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.surgery.routes.patient_get_video_stream_token"
+  },
+  {
+    "path": "/api/v1/telemed/config",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.config.get_provider_config"
+  },
+  {
+    "path": "/api/v1/telemed/config",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.config.update_provider_config"
+  },
+  {
+    "path": "/api/v1/telemed/notifications/me",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.notifications.list_my_notifications"
+  },
+  {
+    "path": "/api/v1/telemed/notifications/me/{notification_id}/read",
+    "methods": [
+      "PATCH"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.notifications.mark_notification_read"
+  },
+  {
+    "path": "/api/v1/telemed/patients/me/prescriptions",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.vitals.list_my_prescriptions"
+  },
+  {
+    "path": "/api/v1/telemed/patients/me/vitals",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.vitals.list_my_vitals"
+  },
+  {
+    "path": "/api/v1/telemed/patients/{patient_id}/vitals",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.vitals.list_vitals"
+  },
+  {
+    "path": "/api/v1/telemed/patients/{patient_id}/vitals",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.vitals.create_vital"
+  },
+  {
+    "path": "/api/v1/telemed/prescriptions/me",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.prescriptions.list_my_telemed_prescriptions"
+  },
+  {
+    "path": "/api/v1/telemed/prescriptions/session/{session_id}",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.prescriptions.create_prescription_for_session"
+  },
+  {
+    "path": "/api/v1/telemed/prescriptions/{prescription_id}/pdf",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.prescriptions.get_telemed_prescription_pdf"
+  },
+  {
+    "path": "/api/v1/telemed/prescriptions/{prescription_id}/sign",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.prescriptions.sign_prescription"
+  },
+  {
+    "path": "/api/v1/telemed/sessions",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.list_sessions"
+  },
+  {
+    "path": "/api/v1/telemed/sessions",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.create_session"
+  },
+  {
+    "path": "/api/v1/telemed/sessions/{session_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.get_session"
+  },
+  {
+    "path": "/api/v1/telemed/sessions/{session_id}/end",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.end_session"
+  },
+  {
+    "path": "/api/v1/telemed/sessions/{session_id}/files",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.list_files"
+  },
+  {
+    "path": "/api/v1/telemed/sessions/{session_id}/files",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.register_file"
+  },
+  {
+    "path": "/api/v1/telemed/sessions/{session_id}/join-token",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.get_join_token"
+  },
+  {
+    "path": "/api/v1/telemed/sessions/{session_id}/messages",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.list_messages"
+  },
+  {
+    "path": "/api/v1/telemed/sessions/{session_id}/messages",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.send_message"
+  },
+  {
+    "path": "/api/v1/telemed/sessions/{session_id}/notes",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.list_notes"
+  },
+  {
+    "path": "/api/v1/telemed/sessions/{session_id}/notes",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.create_note"
+  },
+  {
+    "path": "/api/v1/telemed/sessions/{session_id}/prescriptions",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.create_prescription"
+  },
+  {
+    "path": "/api/v1/telemed/sessions/{session_id}/refresh-token",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.refresh_join_token"
+  },
+  {
+    "path": "/api/v1/telemed/sessions/{session_id}/start",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.sessions.start_session"
+  },
+  {
+    "path": "/api/v1/telemed/tele-appointments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.tele_appointments.list_tele_appointments"
+  },
+  {
+    "path": "/api/v1/telemed/tele-appointments",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.tele_appointments.create_tele_appointment"
+  },
+  {
+    "path": "/api/v1/telemed/tele-appointments/{tele_appointment_id}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.tele_appointments.get_tele_appointment"
+  },
+  {
+    "path": "/api/v1/telemed/tele-appointments/{tele_appointment_id}/cancel",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.tele_appointments.cancel_tele_appointment"
+  },
+  {
+    "path": "/api/v1/telemed/tele-appointments/{tele_appointment_id}/confirm",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.tele_appointments.confirm_tele_appointment"
+  },
+  {
+    "path": "/api/v1/telemed/tele-appointments/{tele_appointment_id}/reschedule",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.v1.routers.telemed.tele_appointments.reschedule_tele_appointment"
+  },
+  {
+    "path": "/contact/env-check",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.contact_public.check_environment_variables"
+  },
+  {
+    "path": "/contact/health",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.contact_public.contact_health_check"
+  },
+  {
+    "path": "/contact/render-diagnostics",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.contact_public.render_diagnostics"
+  },
+  {
+    "path": "/contact/send",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.contact_public.send_contact_message"
+  },
+  {
+    "path": "/contact/test-email",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.contact_public.test_email_sending"
+  },
+  {
+    "path": "/demo/request",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.demo_public.submit_demo_request"
+  },
+  {
+    "path": "/health",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "main.health_check"
+  },
+  {
+    "path": "/notifications/ticket-email",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.notifications_root.ticket_email_root"
+  }
+]

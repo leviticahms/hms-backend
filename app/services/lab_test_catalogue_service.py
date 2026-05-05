@@ -29,16 +29,6 @@ class LabTestCatalogueService:
         self.db = db
         self.hospital_id = hospital_id
 
-    def _demo_rows(self) -> list[TestCatalogueRow]:
-        return [
-            TestCatalogueRow("CBC", "Complete Blood Count", "Hematology", "Blood", "4 hours", 500, 18, "ACTIVE"),
-            TestCatalogueRow("LFT", "Liver Function Test", "Biochemistry", "Blood", "24 hours", 1200, 8, "ACTIVE"),
-            TestCatalogueRow("KFT", "Kidney Function Test", "Biochemistry", "Blood", "24 hours", 1000, 6, "ACTIVE"),
-            TestCatalogueRow("LIP", "Lipid Profile", "Biochemistry", "Blood", "24 hours", 800, 4, "ACTIVE"),
-            TestCatalogueRow("THY", "Thyroid Profile", "Hormones", "Blood", "48 hours", 1500, 3, "ACTIVE"),
-            TestCatalogueRow("URC", "Urine Culture", "Microbiology", "Urine", "72 hours", 600, 1, "ACTIVE"),
-        ]
-
     def _chips(self, rows: list[TestCatalogueRow]) -> list[TestCategoryChip]:
         counts: dict[str, int] = {}
         for r in rows:
@@ -50,11 +40,10 @@ class LabTestCatalogueService:
     async def list_catalogue(
         self,
         *,
-        demo: bool = False,
         search: Optional[str] = None,
         category: Optional[str] = None,
     ) -> TestCatalogueListResponse:
-        rows = self._demo_rows() if demo else await self._db_rows()
+        rows = await self._db_rows()
         if search:
             q = search.strip().lower()
             rows = [r for r in rows if q in r.test_name.lower() or q in r.test_code.lower()]
@@ -70,8 +59,8 @@ class LabTestCatalogueService:
         return TestCatalogueListResponse(
             meta=TestCatalogueMeta(
                 generated_at=datetime.now(timezone.utc),
-                live_data=False,
-                demo_data=demo,
+                live_data=True,
+                demo_data=False,
             ),
             category_chips=self._chips(rows),
             summary=summary,

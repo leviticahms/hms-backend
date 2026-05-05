@@ -3,9 +3,11 @@ Service layer for Report Generation UI.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,75 +38,13 @@ class LabReportGenerationService:
         self.db = db
         self.hospital_id = hospital_id
 
-    def _demo_rows(self) -> list[ReportGenerationRow]:
-        return [
-            ReportGenerationRow(
-                report_id="REP-2024-001",
-                patient_name="Rajesh Kumar",
-                test_type="CBC",
-                completion_date=date(2024, 1, 15),
-                status="READY",
-                verified_by="Dr. Sharma",
-            ),
-            ReportGenerationRow(
-                report_id="REP-2024-002",
-                patient_name="Priya Sharma",
-                test_type="Lipid Profile",
-                completion_date=date(2024, 1, 15),
-                status="PENDING_REVIEW",
-                verified_by=None,
-            ),
-            ReportGenerationRow(
-                report_id="REP-2024-003",
-                patient_name="Suresh Patel",
-                test_type="Kidney Function",
-                completion_date=date(2024, 1, 14),
-                status="READY",
-                verified_by="Dr. Mehta",
-            ),
-            ReportGenerationRow(
-                report_id="REP-2024-004",
-                patient_name="Anita Mehta",
-                test_type="Liver Function",
-                completion_date=date(2024, 1, 14),
-                status="READY",
-                verified_by="Dr. Rao",
-            ),
-        ]
-
-    def _demo_ready_tests(self) -> list[ReadyTestForReportRow]:
-        return [
-            ReadyTestForReportRow(
-                patient_name="Amit Shah",
-                patient_ref="PAT-005",
-                test_type="Diabetes Panel",
-                completed_on=date(2024, 1, 16),
-                source_test_id="TEST-2024-005",
-            ),
-            ReadyTestForReportRow(
-                patient_name="Meera Rai",
-                patient_ref="PAT-006",
-                test_type="Thyroid Profile",
-                completed_on=date(2024, 1, 16),
-                source_test_id="TEST-2024-006",
-            ),
-            ReadyTestForReportRow(
-                patient_name="Sanjay Dutt",
-                patient_ref="PAT-007",
-                test_type="Kidney Function",
-                completed_on=date(2024, 1, 17),
-                source_test_id="TEST-2024-007",
-            ),
-        ]
-
     async def list_reports(
         self,
         *,
-        demo: bool = False,
         search: Optional[str] = None,
         template: str = "STANDARD",
     ) -> ReportGenerationListResponse:
-        rows = self._demo_rows() if demo else await self._db_rows()
+        rows = await self._db_rows()
         if search:
             q = search.strip().lower()
             rows = [
@@ -123,8 +63,8 @@ class LabReportGenerationService:
         return ReportGenerationListResponse(
             meta=ReportGenerationMeta(
                 generated_at=datetime.now(timezone.utc),
-                live_data=False,
-                demo_data=demo,
+                live_data=True,
+                demo_data=False,
             ),
             selected_template=_normalize_template(template),  # type: ignore[arg-type]
             templates=["STANDARD", "COMPREHENSIVE", "DOCTOR_SUMMARY", "PATIENT_FRIENDLY", "CUSTOM"],
@@ -132,9 +72,7 @@ class LabReportGenerationService:
             rows=rows,
         )
 
-    async def ready_tests(self, *, demo: bool = False) -> ReadyTestsResponse:
-        if demo:
-            return ReadyTestsResponse(rows=self._demo_ready_tests())
+    async def ready_tests(self) -> ReadyTestsResponse:
         stmt = select(LabReportReadyTest).where(LabReportReadyTest.hospital_id == self.hospital_id)
         recs = (await self.db.execute(stmt)).scalars().all()
         return ReadyTestsResponse(rows=[
@@ -148,18 +86,30 @@ class LabReportGenerationService:
         ])
 
     async def generate(self, payload: GenerateReportRequest) -> GenerateReportResponse:
-        rid = f"REP-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        sid = payload.source_test_id.strip()
+        stmt = select(LabReportReadyTest).where(
+            LabReportReadyTest.hospital_id == self.hospital_id,
+            LabReportReadyTest.source_test_id == sid,
+        )
+        ready = (await self.db.execute(stmt)).scalar_one_or_none()
+        if ready is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No ready test found for source_test_id={sid!r}.",
+            )
+        rid = f"REP-{uuid.uuid4().hex[:12].upper()}"
+        tpl = _normalize_template(payload.template)
         rec = LabReportRecord(
             hospital_id=self.hospital_id,
             report_id=rid,
-            patient_ref="",
-            patient_name="Generated Patient",
-            doctor_name=None,
-            test_type=payload.source_test_id,
+            patient_ref=ready.patient_ref or "",
+            patient_name=ready.patient_name,
+            doctor_name=ready.doctor_name,
+            test_type=ready.test_type,
             completion_date=datetime.now(timezone.utc).date(),
             status="READY",
             verified_by=None,
-            template=payload.template,
+            template=tpl,
         )
         self.db.add(rec)
         await self.db.commit()
@@ -178,18 +128,18 @@ class LabReportGenerationService:
         return ReportPreviewResponse(
             report_id=report_id,
             title=f"Lab Report - {report_id}",
-            patient_name=rec.patient_name if rec else "Demo Patient",
-            test_type=rec.test_type if rec else "Comprehensive Panel",
-            status=rec.status if rec else "READY",
+            patient_name=rec.patient_name if rec else "",
+            test_type=rec.test_type if rec else "",
+            status=rec.status if rec else "",
             template=_normalize_template(template),  # type: ignore[arg-type]
-            preview_text="This is a preview payload for UI rendering.",
+            preview_text="",
         )
 
     async def print_report(self, report_id: str) -> PrintReportResponse:
         return PrintReportResponse(
             message="Report sent to print queue.",
             report_id=report_id,
-            print_job_id=f"PRINT-{datetime.now(timezone.utc).strftime('%H%M%S')}",
+            print_job_id=f"PRINT-{uuid.uuid4().hex[:10].upper()}",
         )
 
     async def _db_rows(self) -> list[ReportGenerationRow]:

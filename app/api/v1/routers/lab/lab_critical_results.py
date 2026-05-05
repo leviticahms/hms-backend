@@ -26,10 +26,6 @@ router = APIRouter(
 @router.get("", response_model=CriticalResultsDashboardResponse)
 async def get_critical_results_dashboard(
     for_date: Optional[date] = Query(None),
-    demo: bool = Query(
-        False,
-        description="Return static sample data matching UI cards/table.",
-    ),
     search: Optional[str] = Query(
         None,
         description="Filter by patient, test name, or test id.",
@@ -38,7 +34,7 @@ async def get_critical_results_dashboard(
     db: AsyncSession = Depends(get_db_session),
 ) -> CriticalResultsDashboardResponse:
     svc = LabCriticalResultsService(db, current_user.hospital_id)
-    return await svc.get_dashboard(for_date=for_date, demo=demo, search=search)
+    return await svc.get_dashboard(for_date=for_date, search=search)
 
 
 @router.post("/{alert_id}/notify", response_model=CriticalResultsActionResponse)

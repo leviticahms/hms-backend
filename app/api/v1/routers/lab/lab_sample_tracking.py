@@ -26,29 +26,27 @@ router = APIRouter(
 
 @router.get("", response_model=SampleTrackingListResponse)
 async def list_sample_tracking(
-    demo: bool = Query(False, description="Return static UI-matching sample rows."),
     search: Optional[str] = Query(None, description="Search by barcode, patient name, or test id."),
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> SampleTrackingListResponse:
     svc = LabSampleTrackingService(db, current_user.hospital_id)
-    return await svc.list_samples(demo=demo, search=search)
+    return await svc.list_samples(search=search)
 
 
 @router.get("/lookup", response_model=BarcodeLookupResponse)
 async def lookup_sample_barcode(
-    barcode: str = Query(..., description="Barcode (e.g. BC001)"),
-    demo: bool = Query(False, description="Lookup against static sample set for UI."),
+    barcode: str = Query(..., description="Barcode from the lab sample tracking table."),
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> BarcodeLookupResponse:
     svc = LabSampleTrackingService(db, current_user.hospital_id)
-    return await svc.lookup_barcode(barcode, demo=demo)
+    return await svc.lookup_barcode(barcode)
 
 
 @router.post("/simulate-scan", response_model=BarcodeLookupResponse)
 async def simulate_scan(
-    barcode: str = Query("BC001", description="Simulated barcode to return"),
+    barcode: str = Query(..., description="Barcode to look up (same as /lookup)."),
     current_user: User = Depends(
         require_roles(
             [
@@ -62,12 +60,9 @@ async def simulate_scan(
     ),
     db: AsyncSession = Depends(get_db_session),
 ) -> BarcodeLookupResponse:
-    """
-    UI helper for the scan modal's "Simulate Scan" button.
-    Uses the demo set intentionally.
-    """
+    """UI helper for the scan modal — resolves a barcode against stored samples."""
     svc = LabSampleTrackingService(db, current_user.hospital_id)
-    return await svc.lookup_barcode(barcode, demo=True)
+    return await svc.lookup_barcode(barcode)
 
 
 @router.post("/action", response_model=SampleActionResponse)

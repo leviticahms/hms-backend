@@ -1,6 +1,5 @@
 """
 Service for Lab Critical Results Management dashboard.
-Current implementation provides demo-ready payloads until result tables are rebuilt.
 """
 from __future__ import annotations
 
@@ -28,79 +27,14 @@ class LabCriticalResultsService:
         self.db = db
         self.hospital_id = hospital_id
 
-    def _demo_alerts(self) -> List[CriticalAlertRow]:
-        return [
-            CriticalAlertRow(
-                alert_id="ALRT-001",
-                test_id="TEST-2024-012",
-                patient_name="Ravi Kumar",
-                test_name="Creatinine",
-                result_value="4.2 mg/dL",
-                alert_level="CRITICAL_HIGH",
-                requested_by="Dr. Sharma",
-                result_time_label="09:45 AM",
-                status="PENDING",
-                acknowledged=False,
-            ),
-            CriticalAlertRow(
-                alert_id="ALRT-002",
-                test_id="TEST-2024-013",
-                patient_name="Sunita Rao",
-                test_name="Potassium",
-                result_value="6.5 mEq/L",
-                alert_level="CRITICAL_HIGH",
-                requested_by="Dr. Verma",
-                result_time_label="10:15 AM",
-                status="PENDING",
-                acknowledged=False,
-            ),
-            CriticalAlertRow(
-                alert_id="ALRT-003",
-                test_id="TEST-2024-014",
-                patient_name="Mohan Singh",
-                test_name="Glucose",
-                result_value="40 mg/dL",
-                alert_level="CRITICAL_LOW",
-                requested_by="Dr. Gupta",
-                result_time_label="10:30 AM",
-                status="NOTIFIED",
-                acknowledged=True,
-            ),
-            CriticalAlertRow(
-                alert_id="ALRT-004",
-                test_id="TEST-2024-020",
-                patient_name="Anjali Devi",
-                test_name="Hemoglobin",
-                result_value="6.2 g/dL",
-                alert_level="CRITICAL_LOW",
-                requested_by="Dr. Reddy",
-                result_time_label="11:15 AM",
-                status="NOTIFIED",
-                acknowledged=True,
-            ),
-            CriticalAlertRow(
-                alert_id="ALRT-005",
-                test_id="TEST-2024-021",
-                patient_name="Vijay Kumar",
-                test_name="Troponin I",
-                result_value="1.5 ng/mL",
-                alert_level="CRITICAL_HIGH",
-                requested_by="Dr. Khan",
-                result_time_label="12:00 PM",
-                status="NOTIFIED",
-                acknowledged=True,
-            ),
-        ]
-
     async def get_dashboard(
         self,
         *,
         for_date: Optional[date] = None,
-        demo: bool = False,
         search: Optional[str] = None,
     ) -> CriticalResultsDashboardResponse:
         d = for_date or datetime.now(timezone.utc).date()
-        alerts = self._demo_alerts() if demo else await self._db_alerts()
+        alerts = await self._db_alerts()
 
         if search:
             s = search.strip().lower()
@@ -120,8 +54,8 @@ class LabCriticalResultsService:
             meta=CriticalResultsMeta(
                 generated_at=datetime.now(timezone.utc),
                 for_date=d,
-                live_data=False,
-                demo_data=demo,
+                live_data=True,
+                demo_data=False,
             ),
             summary=CriticalSummary(
                 pending_notifications=CriticalSummaryCard(
@@ -185,7 +119,7 @@ class LabCriticalResultsService:
                 test_name=r.test_name,
                 result_value=r.result_value,
                 alert_level=r.alert_level,
-                requested_by=r.doctor_name or "Doctor",
+                requested_by=r.doctor_name or "",
                 result_time_label=r.result_time_label,
                 status=r.notify_status,
                 acknowledged=(str(r.acknowledged).lower() == "true"),

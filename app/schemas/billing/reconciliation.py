@@ -10,6 +10,18 @@ class ReconciliationRun(BaseModel):
     date: date
 
 
+class RunReconciliationBody(BaseModel):
+    """POST body when recording a reconciliation row for a date."""
+
+    date: str  # YYYY-MM-DD
+    total_cash: float = 0
+    total_card: float = 0
+    total_upi: float = 0
+    total_online: float = 0
+    gateway_report_total: float | None = None
+    notes: str | None = None
+
+
 class ReconciliationResponse(BaseModel):
     id: UUID
     hospital_id: UUID

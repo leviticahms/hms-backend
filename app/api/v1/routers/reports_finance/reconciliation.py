@@ -7,30 +7,22 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
-
 from app.database.session import get_db_session
 from app.core.security import get_current_user
 from app.api.deps import require_hospital_context, require_roles
 from app.core.enums import UserRole
 from app.models.user import User
 from app.models.billing import Reconciliation, BillingPayment
-from app.schemas.billing import ReconciliationRun, ReconciliationResponse
+from app.schemas.billing import (
+    ReconciliationRun,
+    RunReconciliationBody,
+    ReconciliationResponse,
+)
 from app.schemas.response import SuccessResponse
 from app.services.billing.billing_service import BillingService
 
 router = APIRouter(prefix="/finance/reconciliation", tags=["M1.7 Finance - Reconciliation"])
 require_billing = require_roles(UserRole.HOSPITAL_ADMIN, UserRole.RECEPTIONIST)
-
-
-class RunReconciliationBody(BaseModel):
-    date: str  # YYYY-MM-DD
-    total_cash: float = 0
-    total_card: float = 0
-    total_upi: float = 0
-    total_online: float = 0
-    gateway_report_total: float | None = None
-    notes: str | None = None
 
 
 @router.get("/daily", response_model=dict)

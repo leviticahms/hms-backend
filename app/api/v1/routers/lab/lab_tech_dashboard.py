@@ -26,8 +26,7 @@ router = APIRouter(
     summary="Lab technician dashboard (full payload)",
     description=(
         "Returns KPIs, charts, equipment status, and tables in one response. "
-        "Test and QC order metrics are zero/empty until the test pipeline is wired; "
-        "use `demo=true` for sample numbers matching the UI mock."
+        "Test and QC order metrics are zero/empty until the test pipeline is wired to live tables."
     ),
 )
 async def get_lab_tech_dashboard(
@@ -35,12 +34,8 @@ async def get_lab_tech_dashboard(
         None,
         description="Reporting date (hospital day); defaults to current UTC date.",
     ),
-    demo: bool = Query(
-        False,
-        description="If true, fill KPI/chart QC/test tables with static demo data for frontend development.",
-    ),
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> LabTechDashboardResponse:
     svc = LabTechDashboardService(db, current_user.hospital_id)
-    return await svc.get_dashboard(for_date=for_date, demo=demo)
+    return await svc.get_dashboard(for_date=for_date)

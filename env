@@ -46,6 +46,9 @@ TENANT_DB_ROUTE_QUERIES=True
 TENANT_DB_NAME_PREFIX=hosp_
 TENANT_TEMPLATE_DATABASE=
 TENANT_DB_ADMIN_DATABASE=postgres
+# Optional: async pool size per tenant PostgreSQL DB (defaults 5 / 10)
+# TENANT_DB_POOL_SIZE=5
+# TENANT_DB_MAX_OVERFLOW=10
 
 # --- Security ---
 # Generate:  python -c "import secrets; print(secrets.token_hex(32))"
@@ -92,5 +95,17 @@ TWILIO_FROM_NUMBER=
 # --- Misc ---
 DEMO_REQUEST_NOTIFY_EMAIL=
 CONTACT_MESSAGE_NOTIFY_EMAIL=
-HOSPITAL_NAME=City General Hospital
-HOSPITAL_EMAIL=billing@hospital.com
+
+# Platform hospital row created when seeding SuperAdmin (registration_number defaults from HOSPITAL_EMAIL if PLATFORM_REGISTRATION_NUMBER is empty)
+PLATFORM_REGISTRATION_NUMBER=
+HOSPITAL_NAME=Example Platform Hospital
+HOSPITAL_EMAIL=platform-hospital@example.com
+HOSPITAL_PHONE=+10000000000
+HOSPITAL_ADDRESS=Registry street address
+HOSPITAL_CITY=Example City
+HOSPITAL_STATE=Example State
+HOSPITAL_COUNTRY=Example Country
+HOSPITAL_PINCODE=000000
+
+# Daily IPD bed charge line amount when ward pricing is not set per admission (0 disables auto-posting)
+IPD_DEFAULT_BED_RATE_PER_DAY=0

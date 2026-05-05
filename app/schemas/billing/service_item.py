@@ -16,6 +16,18 @@ class TaxProfileUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class TaxProfileStatusPatch(BaseModel):
+    """PATCH body for activate/deactivate tax profile."""
+
+    is_active: bool
+
+
+class ServiceItemStatusPatch(BaseModel):
+    """PATCH body for activate/deactivate service item."""
+
+    is_active: bool
+
+
 class TaxProfileResponse(BaseModel):
     id: UUID
     hospital_id: UUID

@@ -27,10 +27,6 @@ router = APIRouter(
 @router.get("", response_model=TestRegistrationListResponse)
 async def list_test_registrations(
     for_date: Optional[date] = Query(None),
-    demo: bool = Query(
-        False,
-        description="Return static sample rows matching UI.",
-    ),
     search: Optional[str] = Query(None),
     status: Optional[str] = Query(None, description="SAMPLE_PENDING|SAMPLE_COLLECTED|IN_PROGRESS|COMPLETED"),
     priority: Optional[str] = Query(None, description="URGENT|ROUTINE"),
@@ -40,7 +36,6 @@ async def list_test_registrations(
     svc = LabTestRegistrationService(db, current_user.hospital_id)
     return await svc.list_tests(
         for_date=for_date,
-        demo=demo,
         search=search,
         status=status,
         priority=priority,

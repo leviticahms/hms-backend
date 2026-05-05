@@ -3,9 +3,8 @@ Service layer for Quality Control workflows UI.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
-
+import uuid
+from datetime import date, datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,79 +22,29 @@ from app.schemas.lab_quality_control import (
 )
 
 
+def _qc_run_date_is_today(run_date: str, *, today: date) -> bool:
+    s = (run_date or "").strip()
+    if len(s) < 8:
+        return False
+    chunk = s[:10]
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(chunk, fmt).date() == today
+        except ValueError:
+            continue
+    return False
+
+
 class LabQualityControlService:
     def __init__(self, db: AsyncSession, hospital_id):
         self.db = db
         self.hospital_id = hospital_id
 
-    def _demo_qc_runs(self) -> list[QcRunRow]:
-        return [
-            QcRunRow(
-                qc_id="QC-2024-001",
-                test="CBC",
-                qc_material="Hematology Control",
-                lot_number="LOT-123",
-                date="2024-01-15",
-                operator="Lab Tech Ravi",
-                status="PASSED",
-                observed_value=12.5,
-            ),
-            QcRunRow(
-                qc_id="QC-2024-002",
-                test="Glucose",
-                qc_material="Chemistry Control Level 1",
-                lot_number="LOT-456",
-                date="2024-01-15",
-                operator="Lab Tech Priya",
-                status="WARNING",
-                observed_value=105.0,
-            ),
-            QcRunRow(
-                qc_id="QC-2024-003",
-                test="Creatinine",
-                qc_material="Chemistry Control Level 2",
-                lot_number="LOT-789",
-                date="2024-01-14",
-                operator="Lab Tech Sanjay",
-                status="FAILED",
-                observed_value=2.5,
-            ),
-            QcRunRow(
-                qc_id="QC-2024-004",
-                test="Thyroid",
-                qc_material="Hormone Control",
-                lot_number="LOT-901",
-                date="2024-01-14",
-                operator="Lab Tech Neha",
-                status="PASSED",
-                observed_value=3.2,
-            ),
-        ]
-
-    def _demo_materials(self) -> list[QcMaterialRow]:
-        return [
-            QcMaterialRow("Hematology Control", "Hematology", "Sysmex", "LOT-123", "2024-06-30", "2-8°C", 25),
-            QcMaterialRow("Chemistry Control Level 1", "Chemistry", "Bio-Rad", "LOT-456", "2024-05-15", "2-8°C", 30),
-            QcMaterialRow("Chemistry Control Level 2", "Chemistry", "Bio-Rad", "LOT-789", "2024-05-15", "2-8°C", 28),
-        ]
-
-    def _demo_rules(self) -> list[QcRuleRow]:
-        return [
-            QcRuleRow("1-3s Rule", "One point beyond 3 SD from mean", "Westgard", "Reject run, investigate", "HIGH"),
-            QcRuleRow("2-2s Rule", "Two consecutive points beyond 2 SD on same side", "Westgard", "Reject run, investigate", "HIGH"),
-            QcRuleRow("R-4s Rule", "Range of 4 SD between two points", "Westgard", "Reject run", "HIGH"),
-            QcRuleRow("4-1s Rule", "Four consecutive points beyond 1 SD on same side", "Westgard", "Warning, check trend", "MEDIUM"),
-        ]
-
-    async def dashboard(self, *, demo: bool = False) -> QualityControlDashboardResponse:
-        if demo:
-            runs = self._demo_qc_runs()
-            mats = self._demo_materials()
-            rules = self._demo_rules()
-        else:
-            runs, mats, rules = await self._db_rows()
+    async def dashboard(self) -> QualityControlDashboardResponse:
+        runs, mats, rules = await self._db_rows()
+        today = datetime.now(timezone.utc).date()
         stats = QcStatCards(
-            todays_qc_runs=0 if demo else 0,
+            todays_qc_runs=sum(1 for r in runs if _qc_run_date_is_today(r.date, today=today)),
             passed_runs=sum(1 for r in runs if r.status == "PASSED"),
             warning_runs=sum(1 for r in runs if r.status == "WARNING"),
             failed_runs=sum(1 for r in runs if r.status == "FAILED"),
@@ -103,8 +52,8 @@ class LabQualityControlService:
         return QualityControlDashboardResponse(
             meta=QualityControlMeta(
                 generated_at=datetime.now(timezone.utc),
-                live_data=False,
-                demo_data=demo,
+                live_data=True,
+                demo_data=False,
             ),
             stats=stats,
             qc_runs=runs,
@@ -120,7 +69,7 @@ class LabQualityControlService:
             status = "WARNING"
         else:
             status = "PASSED"
-        qc_id = f"QC-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        qc_id = f"QC-{uuid.uuid4().hex[:12].upper()}"
         rec = LabQcRun(
             hospital_id=self.hospital_id,
             qc_id=qc_id,

@@ -181,83 +181,9 @@ def generate_qr_code(prescription_data: dict) -> str:
     return f"QR-{qr_hash[:12].upper()}"
 
 
-# ============================================================================
-# MOCK DRUG DATABASE (In production, this would be a real drug database)
-# ============================================================================
-
-MOCK_DRUG_DATABASE = {
-    "DRUG001": {
-        "drug_id": "DRUG001",
-        "generic_name": "Paracetamol",
-        "brand_names": ["Tylenol", "Crocin", "Dolo"],
-        "drug_class": "Analgesic",
-        "therapeutic_category": "Pain Relief",
-        "dosage_forms": ["tablet", "syrup", "injection"],
-        "strengths": ["500mg", "650mg", "100ml"],
-        "route_of_administration": ["oral", "iv"],
-        "contraindications": ["severe liver disease", "alcohol dependency"],
-        "side_effects": ["nausea", "skin rash", "liver toxicity"],
-        "drug_interactions": ["warfarin", "alcohol"],
-        "pregnancy_category": "B",
-        "pediatric_safe": True,
-        "geriatric_considerations": "Reduce dose in elderly",
-        "storage_conditions": "Store below 25°C",
-        "manufacturer": "Generic Pharma"
-    },
-    "DRUG002": {
-        "drug_id": "DRUG002",
-        "generic_name": "Amoxicillin",
-        "brand_names": ["Amoxil", "Augmentin"],
-        "drug_class": "Antibiotic",
-        "therapeutic_category": "Anti-infective",
-        "dosage_forms": ["capsule", "syrup", "injection"],
-        "strengths": ["250mg", "500mg", "125mg/5ml"],
-        "route_of_administration": ["oral", "iv"],
-        "contraindications": ["penicillin allergy", "mononucleosis"],
-        "side_effects": ["diarrhea", "nausea", "allergic reaction"],
-        "drug_interactions": ["methotrexate", "warfarin"],
-        "pregnancy_category": "B",
-        "pediatric_safe": True,
-        "geriatric_considerations": "Monitor kidney function",
-        "storage_conditions": "Store in refrigerator",
-        "manufacturer": "Antibiotic Corp"
-    },
-    "DRUG003": {
-        "drug_id": "DRUG003",
-        "generic_name": "Metformin",
-        "brand_names": ["Glucophage", "Glycomet"],
-        "drug_class": "Antidiabetic",
-        "therapeutic_category": "Diabetes Management",
-        "dosage_forms": ["tablet", "extended-release tablet"],
-        "strengths": ["500mg", "850mg", "1000mg"],
-        "route_of_administration": ["oral"],
-        "contraindications": ["kidney disease", "heart failure", "liver disease"],
-        "side_effects": ["nausea", "diarrhea", "lactic acidosis"],
-        "drug_interactions": ["contrast dye", "alcohol"],
-        "pregnancy_category": "B",
-        "pediatric_safe": False,
-        "geriatric_considerations": "Monitor kidney function closely",
-        "storage_conditions": "Store at room temperature",
-        "manufacturer": "Diabetes Pharma"
-    }
-}
-
-DRUG_INTERACTIONS_DB = {
-    ("DRUG001", "warfarin"): {
-        "interaction_type": "MODERATE",
-        "severity": "MEDIUM",
-        "description": "Paracetamol may enhance anticoagulant effect of warfarin",
-        "clinical_significance": "Monitor INR more frequently",
-        "management_strategy": "Consider dose adjustment of warfarin"
-    },
-    ("DRUG002", "methotrexate"): {
-        "interaction_type": "MAJOR",
-        "severity": "HIGH",
-        "description": "Amoxicillin may increase methotrexate toxicity",
-        "clinical_significance": "Risk of severe bone marrow suppression",
-        "management_strategy": "Avoid combination or monitor closely"
-    }
-}
+# In-memory drug catalogue (populate via your own data source / DB integration).
+MOCK_DRUG_DATABASE: dict[str, dict] = {}
+DRUG_INTERACTIONS_DB: dict[tuple[str, str], dict] = {}
 
 
 # ============================================================================

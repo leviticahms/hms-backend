@@ -66,6 +66,11 @@ class GrantResultAccessRequest(BaseModel):
         validation_alias=AliasChoices("patient_ref", "patient_id"),
         serialization_alias="patient_ref",
     )
+    patient_name: Optional[str] = Field(
+        None,
+        max_length=120,
+        description="Display name; defaults to patient_ref when omitted.",
+    )
     email: str = Field(..., min_length=5, max_length=255)
     access_type: AccessType = "VIEW_ONLY"
     expiry_date: Optional[str] = None

@@ -386,6 +386,7 @@ class HospitalAdminService:
         if active_only:
             count_query = count_query.where(Department.is_active == True)
         
+        count_query = count_query.with_only_columns(func.count(func.distinct(User.id)))
         total_result = await self.db.execute(count_query)
         total = total_result.scalar()
         
@@ -682,7 +683,7 @@ class HospitalAdminService:
         """Create staff user and role-specific profile (doctor / nurse / receptionist) when department is set."""
         from app.models.user import User, Role
         from app.models.tenant import Hospital
-        from app.models.hospital import Department
+        from app.models.hospital import Department, StaffDepartmentAssignment, StaffProfile
         from app.models.doctor import DoctorProfile
         from app.models.nurse import NurseProfile
         from app.models.receptionist import ReceptionistProfile
@@ -761,16 +762,32 @@ class HospitalAdminService:
         department_for_create = None
         dept_label = "GENERAL"
         dn = (staff_data.get("department_name") or "").strip()
-        if role_name == UserRole.DOCTOR and dn:
-            department_for_create = await self._get_department_by_name(dn)
-            if not department_for_create:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={
-                        "code": "DEPARTMENT_NOT_FOUND",
-                        "message": f"Department '{dn}' not found in this hospital",
-                    },
-                )
+        if role_name == UserRole.DOCTOR:
+            if dn:
+                department_for_create = await self._get_department_by_name(dn)
+                if not department_for_create:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "code": "DEPARTMENT_NOT_FOUND",
+                            "message": f"Department '{dn}' not found in this hospital",
+                        },
+                    )
+            else:
+                # DoctorProfile and StaffProfile both require department_id (non-null).
+                # If caller omits department_name, fallback to first active department.
+                department_for_create = await self._get_first_department()
+                if not department_for_create:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "code": "DEPARTMENT_REQUIRED",
+                            "message": (
+                                "Doctor creation requires a department. "
+                                "Create at least one department or pass department_name."
+                            ),
+                        },
+                    )
             dept_label = department_for_create.name
         elif role_name in (UserRole.NURSE, UserRole.RECEPTIONIST):
             if dn:
@@ -788,16 +805,30 @@ class HospitalAdminService:
                 department_for_create = await self._get_first_department()
                 if department_for_create:
                     dept_label = department_for_create.name
-        elif role_name in (UserRole.LAB_TECH, UserRole.PHARMACIST) and dn:
-            department_for_create = await self._get_department_by_name(dn)
-            if not department_for_create:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={
-                        "code": "DEPARTMENT_NOT_FOUND",
-                        "message": f"Department '{dn}' not found in this hospital",
-                    },
-                )
+        elif role_name in (UserRole.LAB_TECH, UserRole.PHARMACIST):
+            if dn:
+                department_for_create = await self._get_department_by_name(dn)
+                if not department_for_create:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "code": "DEPARTMENT_NOT_FOUND",
+                            "message": f"Department '{dn}' not found in this hospital",
+                        },
+                    )
+            else:
+                department_for_create = await self._get_first_department()
+                if not department_for_create:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "code": "DEPARTMENT_REQUIRED",
+                            "message": (
+                                f"{role_name.replace('_', ' ').title()} creation requires a department. "
+                                "Create at least one department or pass department_name."
+                            ),
+                        },
+                    )
             dept_label = department_for_create.name
 
         department = department_for_create
@@ -887,7 +918,6 @@ class HospitalAdminService:
         profiles_created: list[str] = []
 
         if role_name == UserRole.DOCTOR and department_for_create:
-            from app.models.hospital import StaffDepartmentAssignment, StaffProfile
             from app.core.utils import parse_date_string
 
             effective_from = parse_date_string(staff_data.get("joining_date")) or datetime.utcnow()
@@ -945,7 +975,8 @@ class HospitalAdminService:
                 self.db.add(assignment)
 
                 doc_ref = user.staff_id or f"DOC{str(uuid.uuid4())[:8].upper()}"
-                lic = f"AUTO-ML-{self.hospital_id.hex[:8]}-{uuid.uuid4().hex[:10]}".upper()
+                hosp_ref = str(self.hospital_id or "").replace("-", "").upper()[:8] or "HOSPITAL"
+                lic = f"AUTO-ML-{hosp_ref}-{uuid.uuid4().hex[:10]}".upper()
                 doc_designation = (
                     (extra_md.get("designation") or "").strip() or "Staff Physician"
                 )
@@ -1014,6 +1045,84 @@ class HospitalAdminService:
                     )
                 )
                 profiles_created.append("nurse_profile")
+
+        if role_name in (UserRole.NURSE, UserRole.RECEPTIONIST, UserRole.LAB_TECH, UserRole.PHARMACIST) and department:
+            has_staff_profile = await self.db.execute(
+                select(StaffProfile.id).where(
+                    and_(
+                        StaffProfile.user_id == user.id,
+                        StaffProfile.hospital_id == self.hospital_id,
+                    )
+                )
+            )
+            if not has_staff_profile.scalar_one_or_none():
+                designation_map = {
+                    UserRole.NURSE: (extra_md.get("nurse_designation") or "Staff Nurse"),
+                    UserRole.RECEPTIONIST: (extra_md.get("receptionist_designation") or "Front Desk Receptionist"),
+                    UserRole.LAB_TECH: "Lab Technician",
+                    UserRole.PHARMACIST: "Pharmacist",
+                }
+                experience_map = {
+                    UserRole.NURSE: _safe_int(extra_md.get("nurse_experience_years"), 0),
+                    UserRole.RECEPTIONIST: _safe_int(extra_md.get("receptionist_experience_years"), 0),
+                    UserRole.LAB_TECH: _safe_int(extra_md.get("lab_experience_years"), 0),
+                    UserRole.PHARMACIST: _safe_int(extra_md.get("pharmacist_experience_years"), 0),
+                }
+                profile_specialization = None
+                if role_name == UserRole.NURSE:
+                    profile_specialization = (extra_md.get("nurse_specialization") or "").strip() or None
+                elif role_name == UserRole.LAB_TECH:
+                    profile_specialization = "Laboratory"
+                elif role_name == UserRole.PHARMACIST:
+                    profile_specialization = "Pharmacy"
+
+                sp_join = joining_iso or datetime.utcnow().date().isoformat()
+                self.db.add(
+                    StaffProfile(
+                        id=uuid.uuid4(),
+                        hospital_id=self.hospital_id,
+                        user_id=user.id,
+                        department_id=department.id,
+                        employee_id=user.staff_id or user.email,
+                        designation=str(designation_map.get(role_name) or "Staff").strip(),
+                        joining_date=sp_join,
+                        qualification=None,
+                        experience_years=max(0, experience_map.get(role_name, 0) or 0),
+                        specialization=profile_specialization,
+                        emergency_contact_name=None,
+                        emergency_contact_phone=None,
+                        emergency_contact_relation=None,
+                        is_full_time=True,
+                        salary=None,
+                        skills=[],
+                        certifications=[],
+                    )
+                )
+                profiles_created.append("staff_profile")
+
+            has_assignment = await self.db.execute(
+                select(StaffDepartmentAssignment.id).where(
+                    and_(
+                        StaffDepartmentAssignment.staff_id == user.id,
+                        StaffDepartmentAssignment.department_id == department.id,
+                        StaffDepartmentAssignment.hospital_id == self.hospital_id,
+                    )
+                )
+            )
+            if not has_assignment.scalar_one_or_none():
+                self.db.add(
+                    StaffDepartmentAssignment(
+                        id=uuid.uuid4(),
+                        hospital_id=self.hospital_id,
+                        staff_id=user.id,
+                        department_id=department.id,
+                        is_primary=True,
+                        effective_from=datetime.utcnow(),
+                        notes=None,
+                        is_active=True,
+                    )
+                )
+                profiles_created.append("department_assignment")
 
         if role_name == UserRole.RECEPTIONIST and department:
             has_rc = await self.db.execute(
@@ -1147,7 +1256,7 @@ class HospitalAdminService:
         # Get paginated results
         query = query.offset(offset).limit(limit).order_by(User.first_name.asc(), User.last_name.asc())
         result = await self.db.execute(query)
-        users = result.scalars().all()
+        users = result.unique().scalars().all()
         
         # Format response
         staff_list = []

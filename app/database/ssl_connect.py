@@ -1,8 +1,7 @@
 """
-Optional TLS hints for PostgreSQL (psycopg2) via libpq connection parameters.
+TLS hints for PostgreSQL sync drivers (psycopg2 / libpq).
 
-psycopg2 passes connect_args through make_dsn() — only libpq keywords are allowed
-(not sslcontext). See: https://www.postgresql.org/docs/current/libpq-connect.html
+asyncpg TLS for SQLAlchemy async engines lives in app.database.async_ssl.
 """
 
 from __future__ import annotations

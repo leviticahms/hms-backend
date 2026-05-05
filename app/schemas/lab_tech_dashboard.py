@@ -1,6 +1,6 @@
 """
 Response models for the Lab Technician dashboard (Levitica-style UI).
-Test/QC order metrics are empty or demo-filled until the full lab order stack exists.
+Order/QC KPIs and charts may be empty until those pipelines are wired to real tables.
 """
 from __future__ import annotations
 
@@ -134,7 +134,7 @@ class EquipmentStatusRow(BaseModel):
 
 
 class QcStatusTodayRow(BaseModel):
-    """QC status table — populated when QC module exists; else empty or demo."""
+    """QC status table — populated from QC data when available."""
 
     test_name: str
     status: str  # Passed | Warning | Failed

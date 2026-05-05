@@ -28,7 +28,6 @@ router = APIRouter(
 
 @router.get("", response_model=TestCatalogueListResponse)
 async def list_test_catalogue(
-    demo: bool = Query(False),
     search: Optional[str] = Query(None, description="Search tests by code or name"),
     category: Optional[str] = Query(None, description="Filter by category chip label"),
     current_user: User = Depends(
@@ -37,7 +36,7 @@ async def list_test_catalogue(
     db: AsyncSession = Depends(get_db_session),
 ) -> TestCatalogueListResponse:
     svc = LabTestCatalogueService(db, current_user.hospital_id)
-    return await svc.list_catalogue(demo=demo, search=search, category=category)
+    return await svc.list_catalogue(search=search, category=category)
 
 
 @router.post("/category", response_model=AddCategoryResponse)

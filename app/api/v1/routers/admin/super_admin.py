@@ -1133,7 +1133,7 @@ class NotifyHospitalAdminsRequest(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
-                    "hospital_name": "City General Hospital",
+                    "hospital_name": "Example Hospital",
                     "subject": "Scheduled maintenance",
                     "message": "The admin portal will be unavailable Saturday 02:00–04:00 UTC.",
                 },

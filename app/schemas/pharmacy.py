@@ -128,7 +128,8 @@ class MedicineSearchResult(BaseModel):
 
 
 # ============================================================================
-# SUPPLIER SCHEMAS
+# SUPPLIER SCHEMAS (nested PO/GRN responses — not the supplier CRUD API shape)
+# CRUD request bodies live in ``app.schemas.pharmacy_suppliers_crud`` (matches ORM Supplier).
 # ============================================================================
 
 class SupplierBase(BaseModel):

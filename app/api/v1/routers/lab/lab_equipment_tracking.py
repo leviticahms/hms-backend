@@ -24,7 +24,6 @@ router = APIRouter(prefix="/lab/equipment-tracking", tags=["Lab - Equipment Trac
 
 @router.get("", response_model=EquipmentTrackingDashboardResponse)
 async def get_equipment_tracking(
-    demo: bool = Query(False),
     search: Optional[str] = Query(None),
     current_user: User = Depends(
         require_roles(LAB_GET_ROLES)
@@ -33,7 +32,7 @@ async def get_equipment_tracking(
 ) -> EquipmentTrackingDashboardResponse:
     lab = LabService(db, current_user.hospital_id)
     svc = LabEquipmentTrackingService(lab)
-    return await svc.dashboard(demo=demo, search=search)
+    return await svc.dashboard(search=search)
 
 
 @router.post("/equipment", response_model=AddEquipmentTrackingResponse)

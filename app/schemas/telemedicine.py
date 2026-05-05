@@ -43,7 +43,7 @@ class CallSummaryResponse(BaseModel):
     status: str
 
 class CallEventResponse(BaseModel):
-    """Legacy schema for video_service compatibility."""
+    """Legacy call-event payload shape for older telemedicine clients."""
     id: Optional[str] = None
     event_type: str
     event_time: datetime
