@@ -54,6 +54,9 @@ def serialize_user_for_receptionist(u: User) -> Dict[str, Any]:
 
 def serialize_patient_profile_for_receptionist(patient: PatientProfile) -> Dict[str, Any]:
     """All PatientProfile ORM fields as JSON-friendly dict."""
+    ec_name = patient.emergency_contact_name
+    ec_phone = patient.emergency_contact_phone
+    ec_rel = patient.emergency_contact_relation
     return {
         "id": str(patient.id),
         "patient_profile_id": str(patient.id),
@@ -75,9 +78,22 @@ def serialize_patient_profile_for_receptionist(patient: PatientProfile) -> Dict[
         "state": patient.state,
         "country": patient.country,
         "pincode": patient.pincode,
-        "emergency_contact_name": patient.emergency_contact_name,
-        "emergency_contact_phone": patient.emergency_contact_phone,
-        "emergency_contact_relation": patient.emergency_contact_relation,
+        "emergency_contact_name": ec_name,
+        "emergency_contact_phone": ec_phone,
+        "emergency_contact_relation": ec_rel,
+        # Names often used by receptionist edit forms (same columns as above)
+        "relationship": ec_rel,
+        "emergency_contact_number": ec_phone,
+        "emergencyContactName": ec_name,
+        "emergencyContactNumber": ec_phone,
+        "emergencyContactRelationship": ec_rel,
+        "emergency_contact_details": {
+            "name": ec_name,
+            "phone": ec_phone,
+            "number": ec_phone,
+            "relationship": ec_rel,
+            "relation": ec_rel,
+        },
         "medical_history": patient.medical_history,
         "allergies": patient.allergies or [],
         "chronic_conditions": patient.chronic_conditions or [],
@@ -99,6 +115,7 @@ def build_receptionist_patient_full_payload(patient: PatientProfile) -> Dict[str
     u = patient.user
     ec_phone = patient.emergency_contact_phone
     ec_rel = patient.emergency_contact_relation
+    ec_name = patient.emergency_contact_name
     em_verified = bool(getattr(u, "email_verified", False))
     has_email = bool((u.email or "").strip())
 
@@ -114,6 +131,7 @@ def build_receptionist_patient_full_payload(patient: PatientProfile) -> Dict[str
         "phone": u.phone,
         "email": u.email,
         "emergency_contact_relationship": ec_rel,
+        # Legacy: same value as emergency_contact_phone (some older clients read this key)
         "emergency_contact": ec_phone,
         "password": None,
         "portal_login_enabled": has_email and em_verified,

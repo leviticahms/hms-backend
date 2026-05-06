@@ -46,11 +46,20 @@ class PatientRegistrationCreate(BaseModel):
     )
     emergency_contact_phone: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("emergency_contact_phone", "emergencyContact"),
+        validation_alias=AliasChoices(
+            "emergency_contact_phone",
+            "emergencyContact",
+            "emergency_contact_number",
+            "emergencyContactNumber",
+        ),
     )
     emergency_contact_relation: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("emergency_contact_relation", "emergencyContactRelationship"),
+        validation_alias=AliasChoices(
+            "emergency_contact_relation",
+            "emergencyContactRelationship",
+            "relationship",
+        ),
     )
     medical_history: Optional[str] = Field(
         default=None,
@@ -182,11 +191,20 @@ class ReceptionistPatientPatch(BaseModel):
     )
     emergency_contact_phone: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("emergency_contact_phone", "emergencyContact"),
+        validation_alias=AliasChoices(
+            "emergency_contact_phone",
+            "emergencyContact",
+            "emergency_contact_number",
+            "emergencyContactNumber",
+        ),
     )
     emergency_contact_relation: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("emergency_contact_relation", "emergencyContactRelationship"),
+        validation_alias=AliasChoices(
+            "emergency_contact_relation",
+            "emergencyContactRelationship",
+            "relationship",
+        ),
     )
     medical_history: Optional[str] = Field(
         default=None,
@@ -322,6 +340,8 @@ class ReceptionistPatientDetailOut(BaseModel):
     emergency_contact_relation: Optional[str] = None
     # Legacy / form aliases (same DB columns as above)
     emergency_contact_relationship: Optional[str] = None
+    relationship: Optional[str] = None
+    emergency_contact_number: Optional[str] = None
     emergency_contact: Optional[str] = None
     medical_history: Optional[str] = None
     blood_group: Optional[str] = None
