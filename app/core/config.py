@@ -138,6 +138,13 @@ class Settings(BaseSettings):
     
     # CORS — set ALLOWED_ORIGINS in env (comma-separated); empty means no browser origins allowed
     ALLOWED_ORIGINS: list[str] = Field(default_factory=list, env="ALLOWED_ORIGINS")
+    # Optional frontend URL convenience (auto-added to ALLOWED_ORIGINS if set)
+    FRONTEND_URL: str = Field(default="", env="FRONTEND_URL")
+    VERCEL_URL: str = Field(
+        default="",
+        env="VERCEL_URL",
+        description="Optional Vercel hostname (without scheme). If set, will be converted to https://<host> for CORS.",
+    )
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
@@ -153,12 +160,46 @@ class Settings(BaseSettings):
             return [item.strip() for item in raw.split(",") if item.strip()]
         return v
 
+    @model_validator(mode="after")
+    def _add_frontend_origin(self):
+        """
+        Convenience: allow setting FRONTEND_URL / VERCEL_URL without manually editing ALLOWED_ORIGINS.
+        - FRONTEND_URL can be a full origin (https://...) or a bare host.
+        - VERCEL_URL is usually a bare host like: hospital-management-12.vercel.app
+        """
+        origins = list(self.ALLOWED_ORIGINS or [])
+        if "*" in origins:
+            return self
+
+        def _norm_origin(raw: str) -> str:
+            r = (raw or "").strip()
+            if not r:
+                return ""
+            if r.startswith("http://") or r.startswith("https://"):
+                return r.rstrip("/")
+            return f"https://{r.rstrip('/')}"
+
+        fe = _norm_origin(self.FRONTEND_URL)
+        if fe and fe not in origins:
+            origins.append(fe)
+
+        vz = _norm_origin(self.VERCEL_URL)
+        if vz and vz not in origins:
+            origins.append(vz)
+
+        self.ALLOWED_ORIGINS = origins
+        return self
+
     # Public URL of this backend (used for absolute /uploads/... links in JSON; set to your API origin)
     APP_PUBLIC_URL: str = Field(default="http://localhost:8000", env="APP_PUBLIC_URL")
     
     # Email — optional SendGrid HTTP API (notifications module); app mail uses SMTP below
     SENDGRID_API_KEY: str = Field(default="", env="SENDGRID_API_KEY")
-    EMAIL_FROM: str = Field(default="", env="EMAIL_FROM")
+    EMAIL_FROM: str = Field(
+        default="",
+        env="EMAIL_FROM",
+        description="Verified sender address (required by Brevo etc.). If empty, code falls back to SMTP_USER.",
+    )
     
     # SMTP (default: Brevo — smtp-relay.brevo.com, port 587 STARTTLS; SMTP_USER + SMTP key from Brevo dashboard)
     SMTP_HOST: str = Field(default="smtp-relay.brevo.com", env="SMTP_HOST")

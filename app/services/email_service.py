@@ -45,7 +45,25 @@ class EmailService:
             f"  User: {self.smtp_user}\n"
             f"  Configured: {bool(self.smtp_user and self.smtp_pass)}"
         )
-    
+
+    def _effective_from_address(self) -> str:
+        """
+        RFC5322 From header. Brevo/SendGrid require a verified sender — set EMAIL_FROM explicitly.
+        If unset, falls back to SMTP_USER (works for some providers; Brevo often needs a real verified From).
+        """
+        addr = (self.email_from or "").strip()
+        if addr:
+            return addr
+        fallback = (self.smtp_user or "").strip()
+        if fallback:
+            logger.warning(
+                "EMAIL_FROM is empty; using SMTP_USER as From (%s). "
+                "Set EMAIL_FROM to a verified sender to avoid provider rejections.",
+                fallback[:48] + ("..." if len(fallback) > 48 else ""),
+            )
+            return fallback
+        return ""
+
     def _get_tls_settings(self, port: int) -> dict:
         """Get TLS settings for each port (tested on Render)"""
         if port == 2525:
@@ -125,10 +143,16 @@ class EmailService:
                 logger.error("❌ SMTP credentials missing")
                 self.last_error = "SMTP credentials missing (SMTP_USER/SMTP_PASS)"
                 return False
+
+            from_addr = self._effective_from_address()
+            if not from_addr:
+                logger.error("❌ EMAIL_FROM and SMTP_USER are empty — cannot set From header")
+                self.last_error = "Set EMAIL_FROM (verified sender) or SMTP_USER"
+                return False
             
             message = MIMEMultipart("alternative")
             message["Subject"] = subject
-            message["From"] = self.email_from
+            message["From"] = from_addr
             message["To"] = to_email
             
             if text_content:
@@ -214,10 +238,15 @@ class EmailService:
             if not self.smtp_user or not self.smtp_pass:
                 logger.error("❌ SMTP credentials missing")
                 return False
+
+            from_addr = self._effective_from_address()
+            if not from_addr:
+                logger.error("❌ EMAIL_FROM and SMTP_USER are empty — cannot set From header")
+                return False
             
             message = MIMEMultipart()
             message["Subject"] = subject
-            message["From"] = self.email_from
+            message["From"] = from_addr
             message["To"] = to_email
             
             if text_fallback:

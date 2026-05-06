@@ -591,7 +591,15 @@ class AuthService:
         
         # Generate and send OTP
         otp_code = await self.otp_service.generate_otp(user.email, "email_verification")
-        await self.email_service.send_verification_email(user.email, otp_code, user.first_name)
+        email_sent = await self.email_service.send_verification_email(user.email, otp_code, user.first_name)
+        if not email_sent:
+            logger.error(
+                "❌ Verification email FAILED for %s — SMTP error: %s",
+                user.email,
+                getattr(self.email_service, "last_error", "unknown"),
+            )
+        else:
+            logger.info("✅ Verification email sent to %s", user.email)
         
         await self.db.commit()
         
@@ -1055,7 +1063,13 @@ class AuthService:
         
         # Generate and send OTP
         otp_code = await self.otp_service.generate_otp(email, "password_reset")
-        await self.email_service.send_password_reset_email(email, otp_code, user.first_name)
+        email_sent = await self.email_service.send_password_reset_email(email, otp_code, user.first_name)
+        if not email_sent:
+            logger.error(
+                "❌ Password reset email FAILED for %s — SMTP error: %s",
+                email,
+                getattr(self.email_service, "last_error", "unknown"),
+            )
         
         return {"message": "If the email exists, a password reset code has been sent."}
     

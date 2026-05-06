@@ -11,13 +11,14 @@ from sqlalchemy import select, and_, or_, func
 from sqlalchemy.orm import selectinload
 from datetime import datetime
 
-from app.core.database import get_db_session
+from app.core.database import get_platform_db_session
 from app.models.hospital import Department
 from app.models.patient import PatientProfile, Appointment
 from app.models.user import User
 from app.core.enums import AppointmentStatus, UserRole, UserStatus
 from app.core.utils import generate_appointment_ref
 from app.core.security import get_current_user
+from app.dependencies.auth import get_current_patient
 from app.schemas.patient_care import (
     AppointmentBookingCreate,
     AppointmentCancellationCreate,
@@ -42,43 +43,6 @@ def _normalize_patient_booking_time(raw: str) -> tuple[str, str]:
             detail="Invalid appointment_time; use HH:MM or HH:MM:SS",
         )
     return f"{h:02d}:{m:02d}", f"{h:02d}:{m:02d}:{s:02d}"
-
-
-async def get_current_patient(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
-) -> PatientProfile:
-    """
-    Get current authenticated patient.
-    Ensures only patients can access appointment booking endpoints.
-    """
-    # Check if user has PATIENT role
-    user_roles = [role.name for role in current_user.roles] if current_user.roles else []
-    if UserRole.PATIENT not in user_roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "INSUFFICIENT_PERMISSIONS",
-                "message": "Only patients can access appointment booking. Please login with patient credentials."
-            }
-        )
-    
-    # Get patient profile
-    result = await db.execute(
-        select(PatientProfile).where(PatientProfile.user_id == current_user.id)
-    )
-    patient = result.scalar_one_or_none()
-    
-    if not patient:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "PATIENT_PROFILE_NOT_FOUND",
-                "message": "Patient profile not found. Please contact support."
-            }
-        )
-    
-    return patient
 
 
 # ============================================================================
@@ -116,7 +80,7 @@ async def _get_patient_hospital(
 @router.get("/departments")
 async def get_departments(
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get list of departments in the patient's hospital.
@@ -151,7 +115,7 @@ async def get_departments(
 async def get_department_doctors(
     department_name: str,
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get doctors by department name in the patient's hospital.
@@ -222,7 +186,7 @@ async def get_doctor_available_slots(
     doctor_name: str,
     date: str = Query(..., description="Date in YYYY-MM-DD format"),
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get available time slots by doctor name in the patient's hospital.
@@ -289,7 +253,7 @@ async def book_appointment(
     booking_request: AppointmentBookingCreate,
     current_patient: PatientProfile = Depends(get_current_patient),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Book an appointment for authenticated patient.
@@ -474,7 +438,7 @@ async def book_appointment(
 async def get_appointment_details(
     appointment_ref: str,
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get appointment details by appointment reference.
@@ -527,7 +491,7 @@ async def update_my_appointment(
     appointment_ref: str,
     body: PatientAppointmentUpdate,
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Reschedule or update appointment details (patient portal).
@@ -729,7 +693,7 @@ async def get_my_appointments(
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(10, ge=1, le=50, description="Items per page"),
     status_filter: Optional[str] = Query(None, description="Filter by appointment status"),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get all appointments for the authenticated patient.
@@ -795,7 +759,7 @@ async def cancel_appointment(
     appointment_ref: str,
     cancellation_request: AppointmentCancellationCreate,
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Cancel an appointment by appointment reference.

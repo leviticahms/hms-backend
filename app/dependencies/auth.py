@@ -267,7 +267,7 @@ def require_patient() -> Callable:
 
 async def get_current_patient(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session),
 ) -> PatientProfile:
     """
     Get current authenticated patient from JWT token.
@@ -283,18 +283,24 @@ async def get_current_patient(
     """
     from sqlalchemy.orm import selectinload
     
-    user_roles = [role.name for role in current_user.roles] if current_user.roles else []
+    user_roles = [getattr(role, "name", "") for role in (current_user.roles or [])]
     if UserRole.PATIENT.value not in user_roles:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only patients can access this endpoint. Please login with patient credentials."
         )
     
-    result = await db.execute(
+    stmt = (
         select(PatientProfile)
         .where(PatientProfile.user_id == current_user.id)
         .options(selectinload(PatientProfile.user))
     )
+    # When hospital_id is present on the token/user, enforce it for isolation.
+    # Receptionist registrations write to the platform DB, so patient portal must read from platform DB too.
+    if getattr(current_user, "hospital_id", None):
+        stmt = stmt.where(PatientProfile.hospital_id == current_user.hospital_id)
+
+    result = await db.execute(stmt)
     patient = result.scalar_one_or_none()
     
     if not patient:

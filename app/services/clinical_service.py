@@ -100,9 +100,11 @@ async def send_opd_portal_credentials_email_task(
             hospital_name=hospital_name,
         )
         if not sent:
+            err = getattr(es, "last_error", None) or "unknown SMTP error"
             logger.warning(
-                "Portal credentials email failed after retries (background) for %s",
+                "Portal credentials email failed after retries (background) for %s — %s",
                 email_norm,
+                err,
             )
     except Exception:
         logger.exception("Unexpected error sending portal credentials (background) to %s", email_norm)
