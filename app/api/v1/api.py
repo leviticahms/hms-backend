@@ -109,8 +109,20 @@ try:
     from app.api.v1.routers.patient.patient_document_storage import router as document_storage_router
     from app.api.v1.routers.patient.patient_discharge_summary import router as discharge_summary_router
     from app.api.v1.routers.patient.ipd_management import router as ipd_management_router
+    from app.api.v1.routers.patient.patient_dashboard import router as patient_dashboard_router
+    from app.api.v1.routers.patient.patient_billing import router as patient_billing_router
+    from app.api.v1.routers.patient.patient_prescriptions import router as patient_prescriptions_router
+    from app.api.v1.routers.patient.patient_profile import router as patient_profile_router
+    from app.api.v1.routers.patient.patient_lab_tests import router as patient_lab_tests_router
+    from app.api.v1.routers.patient.patient_messaging import router as patient_messaging_router
     
     api_router.include_router(patient_booking_router)
+    api_router.include_router(patient_dashboard_router)
+    api_router.include_router(patient_billing_router)
+    api_router.include_router(patient_prescriptions_router)
+    api_router.include_router(patient_profile_router)
+    api_router.include_router(patient_lab_tests_router)
+    api_router.include_router(patient_messaging_router)
     api_router.include_router(medical_history_router)
     api_router.include_router(document_storage_router)
     api_router.include_router(discharge_summary_router)

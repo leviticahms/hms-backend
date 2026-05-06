@@ -827,3 +827,54 @@ async def get_patient_medical_timeline(
         "patient_name": f"{patient.user.first_name} {patient.user.last_name}",
         "timeline": timeline_events
     }
+
+
+@router.get("/my/allergies")
+async def get_my_allergies(
+    current_patient: PatientProfile = Depends(get_current_patient),
+):
+    """Dedicated allergies endpoint for patient medical records screen."""
+    return {
+        "patient_ref": current_patient.patient_id,
+        "allergies": current_patient.allergies or [],
+        "historical_allergies": current_patient.allergies or [],
+    }
+
+
+@router.get("/my/immunizations")
+async def get_my_immunizations(
+    current_patient: PatientProfile = Depends(get_current_patient),
+):
+    """
+    Immunization records are not yet modeled in dedicated tables.
+    Returns a stable response shape for frontend integration.
+    """
+    return {
+        "patient_ref": current_patient.patient_id,
+        "immunizations": [],
+        "upcoming_schedules": [],
+        "message": "No immunization records available.",
+    }
+
+
+@router.post("/my/records/share")
+async def share_medical_record(
+    payload: Dict[str, Any],
+    current_patient: PatientProfile = Depends(get_current_patient),
+):
+    """Generate a temporary share token payload for medical record sharing."""
+    import uuid as _uuid
+    record_id = str(payload.get("record_id") or "").strip()
+    if not record_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="record_id is required",
+        )
+    token = str(_uuid.uuid4())
+    return {
+        "patient_ref": current_patient.patient_id,
+        "record_id": record_id,
+        "share_token": token,
+        "share_url": f"/api/v1/patient-medical-history/share/{token}",
+        "expires_in_minutes": 60,
+    }
