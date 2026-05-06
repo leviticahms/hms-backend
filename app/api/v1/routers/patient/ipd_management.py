@@ -23,7 +23,7 @@ from app.models.patient import PatientProfile
 from app.services.clinical_service import ClinicalService
 from app.schemas.clinical import (
     PatientAdmissionCreate, BedAssignmentCreate, TreatmentPlanCreate,
-    MedicationAdministrationCreate, NursingAssessmentCreate, DoctorRoundsCreate,
+    MedicationAdministrationCreate, DoctorRoundsCreate,
     DebugPatientEditUpdate,
 )
 from app.core.response_utils import success_response
@@ -122,28 +122,6 @@ async def get_ipd_admission_details(
     """
     clinical_service = ClinicalService(db)
     result = await clinical_service.get_ipd_admission_details(admission_number, current_user)
-    return success_response(message="Operation completed successfully", data=result)
-
-
-# ============================================================================
-# NURSING ASSESSMENTS (IPD)
-# ============================================================================
-
-@router.post("/nursing-assessments")
-async def create_nursing_assessment(
-    assessment_data: NursingAssessmentCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
-):
-    """
-    Create comprehensive nursing assessment for IPD patient.
-    
-    Access Control:
-    - Only Nurses can create nursing assessments
-    - Department-based access control
-    """
-    clinical_service = ClinicalService(db)
-    result = await clinical_service.create_nursing_assessment(assessment_data.dict(), current_user)
     return success_response(message="Operation completed successfully", data=result)
 
 

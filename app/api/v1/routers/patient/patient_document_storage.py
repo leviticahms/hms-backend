@@ -643,6 +643,17 @@ async def upload_patient_document(
     elif user_context["role"] == UserRole.HOSPITAL_ADMIN:
         # Hospital admins can upload documents for any patient in their hospital
         pass
+    elif user_context["role"] == UserRole.RECEPTIONIST:
+        hid = user_context.get("hospital_id")
+        if (
+            hid
+            and patient.hospital_id
+            and str(patient.hospital_id) != str(hid)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - patient is not in your hospital",
+            )
     elif user_context["role"] == UserRole.DOCTOR:
         # Check if doctor has treated this patient
         doctor_result = await db.execute(
@@ -785,6 +796,17 @@ async def get_patient_documents(
         # Hospital admins can view all patient documents in their hospital
         # Patient is already filtered by hospital_id in get_patient_by_ref
         pass
+    elif user_context["role"] == UserRole.RECEPTIONIST:
+        hid = user_context.get("hospital_id")
+        if (
+            hid
+            and patient.hospital_id
+            and str(patient.hospital_id) != str(hid)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - patient is not in your hospital",
+            )
     elif user_context["role"] == UserRole.DOCTOR:
         # Check if doctor has treated this patient
         has_access = await check_doctor_patient_access(user_context["user_id"], patient.id, db)
@@ -935,6 +957,17 @@ async def get_document_details(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied - no treatment history"
                 )
+    elif user_context["role"] == UserRole.RECEPTIONIST:
+        hid = user_context.get("hospital_id")
+        if (
+            hid
+            and patient.hospital_id
+            and str(patient.hospital_id) != str(hid)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - patient is not in your hospital",
+            )
     
     return {
         "document_id": str(document.id),
@@ -1024,6 +1057,17 @@ async def download_document(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied - no treatment history"
                 )
+    elif user_context["role"] == UserRole.RECEPTIONIST:
+        hid = user_context.get("hospital_id")
+        if (
+            hid
+            and patient.hospital_id
+            and str(patient.hospital_id) != str(hid)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - patient is not in your hospital",
+            )
     
     # Check if file exists
     if not os.path.exists(document.file_path):
@@ -1226,6 +1270,17 @@ async def get_document_statistics(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied - no treatment history"
                 )
+    elif user_context["role"] == UserRole.RECEPTIONIST:
+        hid = user_context.get("hospital_id")
+        if (
+            hid
+            and patient.hospital_id
+            and str(patient.hospital_id) != str(hid)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - patient is not in your hospital",
+            )
     
     # Get document statistics
     stats_result = await db.execute(

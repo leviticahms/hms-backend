@@ -18,7 +18,11 @@ from app.models.user import User
 from app.core.enums import AppointmentStatus, UserRole, UserStatus
 from app.core.utils import generate_appointment_ref
 from app.core.security import get_current_user
-from app.schemas.patient_care import AppointmentBookingCreate, AppointmentCancellationCreate
+from app.schemas.patient_care import (
+    AppointmentBookingCreate,
+    AppointmentCancellationCreate,
+    PatientAppointmentUpdate,
+)
 from app.services.appointment_service import AppointmentService
 
 router = APIRouter(prefix="/patient-appointment-booking", tags=["Patient Portal - Appointment Booking"])
@@ -515,6 +519,207 @@ async def get_appointment_details(
         "consultation_fee": float(appointment.consultation_fee),
         "created_at": appointment.created_at.isoformat(),
         "notes": appointment.notes
+    }
+
+
+@router.patch("/appointment/{appointment_ref}")
+async def update_my_appointment(
+    appointment_ref: str,
+    body: PatientAppointmentUpdate,
+    current_patient: PatientProfile = Depends(get_current_patient),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    Reschedule or update appointment details (patient portal).
+    Uses the same doctor schedule and slot rules as POST /book-appointment.
+    """
+    from app.models.hospital import StaffDepartmentAssignment
+    from app.models.user import Role
+    from app.models.doctor import DoctorProfile
+
+    payload = body.model_dump(exclude_unset=True)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields to update",
+        )
+
+    result = await db.execute(
+        select(Appointment).where(
+            and_(
+                Appointment.appointment_ref == appointment_ref,
+                Appointment.patient_id == current_patient.id,
+            )
+        )
+    )
+    appointment = result.scalar_one_or_none()
+    if not appointment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Appointment not found or you don't have permission to update it",
+        )
+    if appointment.status in [AppointmentStatus.CANCELLED, AppointmentStatus.COMPLETED]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot update appointment with status: {appointment.status}",
+        )
+
+    hospital = await _get_patient_hospital(current_patient, db)
+    schedule_affecting = any(
+        k in payload
+        for k in ("department_name", "doctor_name", "appointment_date", "appointment_time")
+    )
+
+    if payload.get("department_name"):
+        dn = payload["department_name"].strip()
+        dept_result = await db.execute(
+            select(Department).where(
+                and_(
+                    Department.hospital_id == hospital.id,
+                    Department.name.ilike(f"%{dn}%"),
+                    Department.is_active == True,
+                )
+            )
+        )
+        department = dept_result.scalar_one_or_none()
+        if not department:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Department '{dn}' not found in your hospital",
+            )
+        appointment.department_id = department.id
+
+    if payload.get("doctor_name"):
+        doc_q = (
+            select(User)
+            .join(StaffDepartmentAssignment, User.id == StaffDepartmentAssignment.staff_id)
+            .join(User.roles)
+            .where(
+                and_(
+                    User.hospital_id == hospital.id,
+                    StaffDepartmentAssignment.department_id == appointment.department_id,
+                    StaffDepartmentAssignment.is_active == True,
+                    or_(
+                        func.concat("Dr. ", User.first_name, " ", User.last_name).ilike(
+                            f"%{payload['doctor_name']}%"
+                        ),
+                        func.concat(User.first_name, " ", User.last_name).ilike(
+                            f"%{payload['doctor_name']}%"
+                        ),
+                    ),
+                    Role.name == UserRole.DOCTOR,
+                    User.status == UserStatus.ACTIVE,
+                )
+            )
+        )
+        doctor_row = await db.execute(doc_q)
+        doctor = doctor_row.scalar_one_or_none()
+        if not doctor:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Doctor not found in the selected department",
+            )
+        appointment.doctor_id = doctor.id
+        dp_res = await db.execute(
+            select(DoctorProfile).where(
+                and_(
+                    DoctorProfile.user_id == doctor.id,
+                    DoctorProfile.hospital_id == hospital.id,
+                )
+            )
+        )
+        dp = dp_res.scalar_one_or_none()
+        if dp and dp.consultation_fee is not None:
+            appointment.consultation_fee = dp.consultation_fee
+
+    if payload.get("appointment_date"):
+        appointment.appointment_date = str(payload["appointment_date"]).strip()[:10]
+
+    if payload.get("appointment_time"):
+        try:
+            time_hhmm, time_hhmmss = _normalize_patient_booking_time(payload["appointment_time"])
+        except HTTPException:
+            raise
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid appointment_time; use HH:MM or HH:MM:SS",
+            )
+        appointment.appointment_time = time_hhmmss
+
+    if "chief_complaint" in payload:
+        appointment.chief_complaint = payload.get("chief_complaint")
+
+    if schedule_affecting:
+        try:
+            ad = appointment.appointment_date
+            ats = appointment.appointment_time
+            appointment_datetime = datetime.fromisoformat(f"{ad}T{ats}")
+            if appointment_datetime <= datetime.now():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot reschedule to a past date or time",
+                )
+        except HTTPException:
+            raise
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid appointment date/time",
+            )
+
+        in_dept = await db.execute(
+            select(StaffDepartmentAssignment.id).where(
+                and_(
+                    StaffDepartmentAssignment.staff_id == appointment.doctor_id,
+                    StaffDepartmentAssignment.department_id == appointment.department_id,
+                    StaffDepartmentAssignment.is_active == True,
+                )
+            )
+        )
+        if not in_dept.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selected doctor is not assigned to this department",
+            )
+
+        svc = AppointmentService(db)
+        day_slots = await svc.get_available_time_slots_for_doctor_user(
+            appointment.doctor_id,
+            appointment.appointment_date,
+            exclude_appointment_id=appointment.id,
+        )
+        if not day_slots:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This doctor has no published availability on that day",
+            )
+        pt_parts = appointment.appointment_time.split(":")
+        th = f"{int(pt_parts[0]):02d}:{int(pt_parts[1]):02d}"
+        match = next((s for s in day_slots if s["time"] == th), None)
+        if not match:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selected time is outside this doctor's schedule",
+            )
+        if not match["is_available"]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Time slot is not available",
+            )
+        appointment.duration_minutes = int(match["duration_minutes"])
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": "Appointment updated successfully",
+        "appointment_ref": appointment.appointment_ref,
+        "appointment_date": appointment.appointment_date,
+        "appointment_time": appointment.appointment_time[:5]
+        if appointment.appointment_time and len(appointment.appointment_time) >= 5
+        else appointment.appointment_time,
+        "status": appointment.status,
     }
 
 

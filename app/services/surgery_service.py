@@ -8,11 +8,10 @@ import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 
-import aiofiles
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
 from sqlalchemy.orm import selectinload
-from fastapi import HTTPException, status, UploadFile
+from fastapi import HTTPException, status
 
 from app.models.surgery import (
     SurgeryCase,
@@ -23,8 +22,7 @@ from app.models.surgery import (
 )
 from app.models.patient import PatientProfile, Admission
 from app.models.user import User
-from app.models.hospital import Department, StaffDepartmentAssignment
-from app.models.nurse import NurseProfile
+from app.models.hospital import Department
 from app.core.enums import SurgeryType, SurgeryCaseStatus, SurgeryTeamRole, UserRole, AdmissionType
 
 
@@ -288,123 +286,6 @@ class SurgeryService:
             "id": str(doc.id),
             "surgery_id": str(surgery_id),
             "message": "Surgical documentation saved; patient can view.",
-        }
-
-    async def upload_surgery_video(
-        self,
-        surgery_id: uuid.UUID,
-        patient_ref: str,
-        file: UploadFile,
-        nurse_user_id: uuid.UUID,
-    ) -> Dict[str, Any]:
-        """Head Nurse (OT department) only. Store file path only; visibility PATIENT_ONLY."""
-        p = await self.db.execute(
-            select(PatientProfile)
-            .where(
-                and_(
-                    PatientProfile.patient_id == patient_ref,
-                    PatientProfile.hospital_id == self.hospital_id,
-                )
-            )
-            .limit(1)
-        )
-        patient = p.scalar_one_or_none()
-        if not patient:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found or different hospital")
-        patient_id = patient.id
-        # Nurse must belong to OT department (name or code contains "OT" / "Operation")
-        # Try NurseProfile first, then StaffDepartmentAssignment as fallback (nurses may be assigned via staff flow)
-        nurse_prof = await self.db.execute(
-            select(NurseProfile)
-            .where(
-                and_(
-                    NurseProfile.user_id == nurse_user_id,
-                    NurseProfile.hospital_id == self.hospital_id,
-                )
-            )
-            .options(selectinload(NurseProfile.department))
-        )
-        nurse = nurse_prof.scalar_one_or_none()
-        if not nurse or not nurse.department:
-            # Fallback: StaffDepartmentAssignment (nurse may have multiple departments; pick OT)
-            assignment_result = await self.db.execute(
-                select(StaffDepartmentAssignment)
-                .where(
-                    and_(
-                        StaffDepartmentAssignment.staff_id == nurse_user_id,
-                        StaffDepartmentAssignment.hospital_id == self.hospital_id,
-                        StaffDepartmentAssignment.is_active == True,
-                    )
-                )
-                .options(selectinload(StaffDepartmentAssignment.department))
-            )
-            assignments = assignment_result.scalars().all()
-            assignment = None
-            for a in assignments:
-                if a.department:
-                    dn = (a.department.name or "").upper()
-                    dc = (a.department.code or "").upper()
-                    if "OT" in dn or "OT" in dc or "OPERATION" in dn:
-                        assignment = a
-                        break
-            if not assignment:
-                assignment = assignments[0] if assignments else None
-            if not assignment or not assignment.department:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Nurse profile or department not found. Ensure the nurse has a NurseProfile or is assigned to a department via Hospital Admin.",
-                )
-            nurse = type("NurseContext", (), {"department": assignment.department})()
-
-        dept_name = (nurse.department.name or "").upper()
-        dept_code = (nurse.department.code or "").upper()
-        if "OT" not in dept_name and "OT" not in dept_code and "OPERATION" not in dept_name:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only Head Nurse (OT department) can upload surgery video. Assign nurse to OT/Operation Theatre department.",
-            )
-        case = await self.db.execute(
-            select(SurgeryCase).where(
-                and_(
-                    SurgeryCase.id == surgery_id,
-                    SurgeryCase.hospital_id == self.hospital_id,
-                    SurgeryCase.patient_id == patient_id,
-                )
-            )
-        )
-        surgery = case.scalar_one_or_none()
-        if not surgery:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Surgery not found")
-        allowed = ("video/mp4", "video/webm", "video/quicktime", "application/octet-stream")
-        if file.content_type and file.content_type not in allowed:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only video files allowed")
-        upload_dir = _get_surgery_upload_dir(self.hospital_id)
-        ext = os.path.splitext(file.filename or "")[1] or ".mp4"
-        unique_name = f"{uuid.uuid4()}{ext}"
-        file_path = os.path.join(upload_dir, unique_name)
-        content = await file.read()
-        async with aiofiles.open(file_path, "wb") as f:
-            await f.write(content)
-        file_size = len(content)
-        video = SurgeryVideo(
-            hospital_id=self.hospital_id,
-            surgery_id=surgery_id,
-            patient_id=patient_id,
-            uploaded_by=nurse_user_id,
-            file_path=file_path,
-            file_name=file.filename or unique_name,
-            file_size=file_size,
-            mime_type=file.content_type or "video/mp4",
-            visibility="PATIENT_ONLY",
-        )
-        self.db.add(video)
-        await self.db.commit()
-        await self.db.refresh(video)
-        return {
-            "id": str(video.id),
-            "surgery_id": str(surgery_id),
-            "file_name": video.file_name,
-            "message": "Video uploaded; only the patient can view via stream.",
         }
 
     async def get_patient_surgeries(self, patient_user_id: uuid.UUID) -> List[Dict[str, Any]]:

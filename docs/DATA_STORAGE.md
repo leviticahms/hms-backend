@@ -61,7 +61,6 @@ Scope reviewed in code: Auth + 2FA + Super Admin plan/subscription core + Hospit
   - status: `CONFIRMED`
   - tables: `users`, `user_roles`, `roles` (create if missing), and role profiles:
     - doctor: `doctor_profiles`, `staff_profiles`, `staff_department_assignments`
-    - nurse: `nurse_profiles`, `staff_profiles`, `staff_department_assignments`
     - receptionist: `receptionist_profiles`, `staff_profiles`, `staff_department_assignments`
     - lab-tech/pharmacist: `staff_profiles`, `staff_department_assignments`
 - `POST /api/v1/billing/tax-profiles`
@@ -108,7 +107,6 @@ Scope reviewed in code: Auth + 2FA + Super Admin plan/subscription core + Hospit
 - `PUT /api/v1/hospital-admin/departments/{department_id}` -> `departments`
 - `PATCH /api/v1/hospital-admin/departments/{department_id}/status` -> `departments`
 - `PATCH /api/v1/hospital-admin/staff/doctors/{staff_id}` -> `users`, `doctor_profiles`
-- `PATCH /api/v1/hospital-admin/staff/nurses/{staff_id}` -> `users`, `nurse_profiles`
 - `PATCH /api/v1/hospital-admin/staff/receptionists/{staff_id}` -> `users`, `receptionist_profiles`
 - `PATCH /api/v1/hospital-admin/staff/lab-techs/{staff_id}` -> `users` (metadata update)
 - `PATCH /api/v1/hospital-admin/staff/pharmacists/{staff_id}` -> `users` (metadata update)
@@ -127,6 +125,341 @@ Scope reviewed in code: Auth + 2FA + Super Admin plan/subscription core + Hospit
 - `DELETE /api/v1/pharmacy/suppliers/{supplier_id}` -> `pharmacy_suppliers`
 - `DELETE /api/v1/pharmacy/medicines/{medicine_id}` -> `pharmacy_medicines`
 - `DELETE /api/v1/auth/2fa/disable` -> `users` (clears TOTP fields)
+
+## 0.1) Portion 2 - EXACT Reviewed Mapping (OPD + Patient Appointment Booking)
+
+### POST (Exact)
+
+- `POST /api/v1/opd/patient`
+  - tables: `opd_visits`, `opd_token_logs` (and reads `patient_profiles`, `users`)
+- `POST /api/v1/opd/tokens`
+  - tables: `opd_visits`, `opd_token_logs`
+- `POST /api/v1/doctors`
+  - tables: `users`, `doctor_profiles` (reads `departments`, `roles`)
+- `POST /api/v1/opd/doctor`
+  - tables: `users` (`user_metadata` update for OPD config)
+- `POST /api/v1/patient-appointment-booking/book-appointment`
+  - tables: `appointments` (reads `patient_profiles`, `users`, `departments`, staff assignment links)
+
+### GET (Exact)
+
+- `GET /api/v1/opd/tokens` -> `opd_visits`
+- `GET /api/v1/opd/tokens/{id}` -> `opd_visits`
+- `GET /api/v1/opd/patients` -> `opd_visits`
+- `GET /api/v1/opd/doctors` -> `users`, `doctor_profiles`, `opd_visits`
+- `GET /api/v1/doctors` -> `users`, `doctor_profiles`, `opd_visits`
+- `GET /api/v1/patient-appointment-booking/departments` -> `departments`, `hospitals`
+- `GET /api/v1/patient-appointment-booking/departments/{department_name}/doctors` -> `staff_department_assignments`, `users`, `roles`
+- `GET /api/v1/patient-appointment-booking/doctors/{doctor_name}/available-slots` -> `users`, `staff_department_assignments`, `roles`, `appointments`
+- `GET /api/v1/patient-appointment-booking/appointment/{appointment_ref}` -> `appointments`
+- `GET /api/v1/patient-appointment-booking/my-appointments` -> `appointments`
+
+### PUT/PATCH (Exact)
+
+- `PUT /api/v1/opd/patient/{visit_id}/status` -> `opd_visits`
+- `PUT /api/v1/doctors/{id}` -> `users` (doctor basic fields and metadata)
+- `PATCH /api/v1/doctors/{id}/status` -> `users`
+- `PUT /api/v1/opd/doctor/{doctor_user_id}/toggle-status` -> `users`
+- `PATCH /api/v1/patient-appointment-booking/appointment/{appointment_ref}/cancel` -> `appointments`
+
+### DELETE (Exact)
+
+- `DELETE /api/v1/opd/patient/{visit_id}` -> `opd_visits` (status set to cancelled) and `opd_token_logs` (status set to cancelled)
+- `DELETE /api/v1/opd/tokens/{id}` -> `opd_visits` + `opd_token_logs` (same cancel flow)
+
+## 0.1) Portion 3 - EXACT Reviewed Mapping (Doctor + Lab + Telemed)
+
+### POST (Exact)
+
+- `POST /api/v1/doctor-management/schedule/create`
+  - tables: `doctor_schedules` (and reads `users`, `staff_department_assignments`)
+- `POST /api/v1/doctor-management/appointments/{appointment_ref}/complete`
+  - tables: `appointments`
+- `POST /api/v1/doctor-management/appointments/{appointment_ref}/cancel`
+  - tables: `appointments`
+- `POST /api/v1/doctor-management/consultation/medical-record`
+  - tables: `medical_records` (and updates/reads `appointments`)
+- `POST /api/v1/lab/test-registration`
+  - tables: `lab_test_registrations`
+- `POST /api/v1/lab/sample-tracking/action`
+  - tables: `lab_sample_tracking`
+- `POST /api/v1/lab/report-generation/generate`
+  - tables: `lab_report_records` (reads `lab_report_ready_tests`)
+- `POST /api/v1/lab/report-generation/{report_id}/print`
+  - tables: `none` (service-only print queue response; no DB read/write in current implementation)
+- `POST /api/v1/lab/result-access/grant`
+  - tables: `lab_result_access_grants`
+- `POST /api/v1/lab/test-catalogue/category`
+  - tables: `lab_test_categories`
+- `POST /api/v1/lab/test-catalogue/test`
+  - tables: `lab_catalogue_tests`
+- `POST /api/v1/lab/quality-control/run`
+  - tables: `lab_qc_runs`
+- `POST /api/v1/lab/critical-results/{alert_id}/notify`
+  - tables: `lab_critical_alerts`
+- `POST /api/v1/lab/profile/edit`
+  - tables: `lab_profile_configs`
+- `POST /api/v1/lab/equipment-qc/equipment`
+  - tables: `lab_equipment`
+- `POST /api/v1/lab/equipment-qc/equipment/{equipment_id}/logs`
+  - tables: `equipment_maintenance_logs`
+- `POST /api/v1/telemed/tele-appointments`
+  - tables: `tele_appointments` (reads `patient_profiles`, `doctor_profiles`, `users`, `appointments`, `doctor_schedules`)
+- `POST /api/v1/telemed/sessions`
+  - tables: `telemed_sessions` (reads `tele_appointments`, `telemed_provider_config`)
+- `POST /api/v1/telemed/sessions/{session_id}/start`
+  - tables: `telemed_sessions`, `tele_appointments`
+- `POST /api/v1/telemed/sessions/{session_id}/end`
+  - tables: `telemed_sessions`, `tele_appointments`, `telemed_notifications`
+- `POST /api/v1/telemed/sessions/{session_id}/join-token`
+  - tables: `telemed_participants` (reads `telemed_sessions`, `tele_appointments`)
+- `POST /api/v1/telemed/sessions/{session_id}/refresh-token`
+  - tables: `telemed_participants` (same flow as join-token)
+- `POST /api/v1/telemed/sessions/{session_id}/messages`
+  - tables: `telemed_messages`, `telemed_notifications`
+- `POST /api/v1/telemed/sessions/{session_id}/files`
+  - tables: `telemed_files`
+- `POST /api/v1/telemed/sessions/{session_id}/notes`
+  - tables: `telemed_consultation_notes`
+- `POST /api/v1/telemed/sessions/{session_id}/prescriptions`
+  - tables: `tele_prescriptions`, `prescription_medicines`
+- `POST /api/v1/telemed/prescriptions/session/{session_id}`
+  - tables: `tele_prescriptions`, `prescription_medicines`
+- `POST /api/v1/telemed/prescriptions/{prescription_id}/sign`
+  - tables: `tele_prescriptions`, `telemed_notifications`
+- `POST /api/v1/telemed/patients/{patient_id}/vitals`
+  - tables: `telemed_vitals` (reads `patient_profiles`)
+
+### GET (Exact)
+
+- `GET /api/v1/doctor-management/schedule/weekly` -> `doctor_schedules`, `appointments`, `patient_profiles`, `users`
+- `GET /api/v1/doctor-management/schedule/slots` -> `doctor_schedules` (and reads `users`, `staff_department_assignments`, `departments`)
+- `GET /api/v1/doctor-management/appointments` -> `appointments`, `patient_profiles`, `users`
+- `GET /api/v1/doctor-management/appointments/{appointment_ref}` -> `appointments`, `patient_profiles`, `users`
+- `GET /api/v1/doctor-management/consultation/{patient_ref}` -> `patient_profiles`, `appointments`, `medical_records`
+- `GET /api/v1/doctor-management/patients/search` -> `patient_profiles`, `users`, `appointments`
+- `GET /api/v1/doctor-management/statistics/summary` -> `appointments`, `prescriptions`, `medical_records`
+- `GET /api/v1/lab/test-registration` -> `lab_test_registrations`
+- `GET /api/v1/lab/sample-tracking` -> `lab_sample_tracking`
+- `GET /api/v1/lab/sample-tracking/lookup` -> `lab_sample_tracking`
+- `GET /api/v1/lab/report-generation` -> `lab_report_records`
+- `GET /api/v1/lab/report-generation/ready-tests` -> `lab_report_ready_tests`
+- `GET /api/v1/lab/report-generation/{report_id}/preview` -> `lab_report_records`
+- `GET /api/v1/lab/result-access` -> `lab_result_access_grants`, `lab_result_access_logs`
+- `GET /api/v1/lab/test-catalogue` -> `lab_catalogue_tests`
+- `GET /api/v1/lab/quality-control` -> `lab_qc_runs`, `lab_qc_materials`, `lab_qc_rules`
+- `GET /api/v1/lab/critical-results` -> `lab_critical_alerts`
+- `GET /api/v1/lab/tech-dashboard` -> `lab_equipment`
+- `GET /api/v1/lab/profile` -> `lab_profile_configs`
+- `GET /api/v1/lab/equipment-qc/equipment` -> `lab_equipment`
+- `GET /api/v1/lab/equipment-qc/equipment/{equipment_id}` -> `lab_equipment`
+- `GET /api/v1/lab/equipment-qc/equipment/{equipment_id}/logs` -> `equipment_maintenance_logs`, `lab_equipment`
+- `GET /api/v1/lab/equipment-qc/equipment/logs` -> `equipment_maintenance_logs`, `lab_equipment`
+- `GET /api/v1/lab/equipment-qc/equipment/logs/{log_id}` -> `equipment_maintenance_logs`, `lab_equipment`
+- `GET /api/v1/telemed/tele-appointments` -> `tele_appointments`, `patient_profiles`, `users`
+- `GET /api/v1/telemed/tele-appointments/{tele_appointment_id}` -> `tele_appointments`, `patient_profiles`, `users`
+- `GET /api/v1/telemed/sessions` -> `telemed_sessions`, `tele_appointments`, `patient_profiles`
+- `GET /api/v1/telemed/sessions/{session_id}` -> `telemed_sessions`, `tele_appointments`, `patient_profiles`
+- `GET /api/v1/telemed/sessions/{session_id}/messages` -> `telemed_messages`
+- `GET /api/v1/telemed/sessions/{session_id}/files` -> `telemed_files`
+- `GET /api/v1/telemed/sessions/{session_id}/notes` -> `telemed_consultation_notes`
+- `GET /api/v1/telemed/notifications/me` -> `telemed_notifications`
+- `GET /api/v1/telemed/config` -> `telemed_provider_config`
+- `GET /api/v1/telemed/prescriptions/me` -> `tele_prescriptions`, `prescription_medicines`, `prescription_lab_orders`, `patient_profiles`
+- `GET /api/v1/telemed/prescriptions/{prescription_id}/pdf` -> `tele_prescriptions`, `prescription_medicines`, `patient_profiles`, `users`, `hospitals`
+- `GET /api/v1/telemed/patients/me/prescriptions` -> `tele_prescriptions`, `patient_profiles`
+- `GET /api/v1/telemed/patients/me/vitals` -> `telemed_vitals`, `patient_profiles`
+- `GET /api/v1/telemed/patients/{patient_id}/vitals` -> `telemed_vitals`, `patient_profiles`
+
+### PUT/PATCH (Exact)
+
+- `PUT /api/v1/doctor-management/schedule/{schedule_id}` -> `doctor_schedules`
+- `PUT /api/v1/doctor-management/appointments/{appointment_ref}` -> `appointments`
+- `PATCH /api/v1/lab/equipment-qc/equipment/{equipment_id}/status` -> `lab_equipment`
+- `PATCH /api/v1/telemed/config` -> `telemed_provider_config`
+- `PATCH /api/v1/telemed/notifications/me/{notification_id}/read` -> `telemed_notifications`
+
+### DELETE (Exact)
+
+- `DELETE /api/v1/doctor-management/schedule/{schedule_id}` -> `doctor_schedules`
+
+## 0.1) Portion 4 - EXACT Reviewed Mapping (Payments + Notifications + Finance/Audit)
+
+### POST (Exact)
+
+- `POST /api/v1/payments/initiate`
+  - tables: `bills` (read-only validation; gateway order created outside DB)
+- `POST /api/v1/payments/verify`
+  - tables: `gateway_payments` (read-only verify response)
+- `POST /api/v1/payments/collect`
+  - tables: `gateway_payments`, `bills`, `payment_ledger`, `payment_receipts`, `finance_audit_logs`
+- `POST /api/v1/payments/advance`
+  - tables: `admissions`, `bills`, `gateway_payments`, `payment_ledger`, `payment_receipts`, `finance_audit_logs`
+- `POST /api/v1/payments/{payment_id}/refund`
+  - tables: `payment_refunds`, `gateway_payments`, `bills`, `payment_ledger`, `finance_audit_logs`
+- `POST /api/v1/payments/webhooks/{provider}`
+  - tables: `gateway_payments`, `bills`, `payment_ledger`, `payment_receipts`, `finance_audit_logs`
+- `POST /api/v1/payments/{payment_id}/receipt/email`
+  - tables: `gateway_payments`, `payment_receipts`, `bills`, `hospitals` (reads; sends email)
+- `POST /api/v1/payments/{payment_id}/receipt/duplicate`
+  - tables: `gateway_payments`, `payment_receipts`, `finance_audit_logs`
+- `POST /api/v1/notifications/ticket-email`
+  - tables: `users`, `roles` (recipient discovery read-only; sends via SMTP)
+- `POST /api/v1/notifications/providers/{provider_id}/test`
+  - tables: `notification_providers`, `notification_jobs`
+- `POST /api/v1/notifications/otp/send`
+  - tables: `notification_jobs` (rate-limit checks and OTP job enqueue)
+- `POST /api/v1/notifications/otp/verify`
+  - tables: `none` (OTP verification service flow; no DB write in this endpoint)
+- `POST /api/v1/notifications/sms/bulk`
+  - tables: `notification_jobs`
+- `POST /api/v1/notifications/send`
+  - tables: `notification_templates` (optional read), `notification_jobs`
+- `POST /api/v1/notifications/schedule`
+  - tables: `notification_templates` (optional read), `notification_jobs`
+- `POST /api/v1/notifications/jobs/{job_id}/cancel`
+  - tables: `notification_jobs`
+- `POST /api/v1/notifications/jobs/{job_id}/retry`
+  - tables: `notification_jobs`
+- `POST /api/v1/finance/reconciliation/run`
+  - tables: `reconciliations`
+
+### GET (Exact)
+
+- `GET /api/v1/payments/providers` -> `none` (env/config-driven response)
+- `GET /api/v1/payments/providers/{provider}/status` -> `none` (env/config-driven response)
+- `GET /api/v1/payments` -> `gateway_payments`, `payment_receipts`
+- `GET /api/v1/payments/{payment_id}` -> `gateway_payments`, `payment_receipts`
+- `GET /api/v1/payments/{payment_id}/receipt/pdf` -> `gateway_payments`, `payment_receipts`, `bills`, `hospitals`
+- `GET /api/v1/payments/ledger` -> `payment_ledger`
+- `GET /api/v1/payments/outstanding` -> `bills`
+- `GET /api/v1/payments/reports/reconciliation` -> `gateway_payments`
+- `GET /api/v1/payments/reports/daily-summary` -> `gateway_payments`, `bills`
+- `GET /api/v1/payments/{payment_id}/refunds` -> `payment_refunds`
+- `GET /api/v1/payments/webhooks/{provider}/events` -> `none` (stub response, no event store table)
+- `GET /api/v1/notifications/providers` -> `notification_providers`
+- `GET /api/v1/notifications/preferences/me` -> `notification_preferences`
+- `GET /api/v1/notifications/preferences/{owner_type}/{owner_id}` -> `notification_preferences`
+- `GET /api/v1/notifications/history` -> `notification_jobs`
+- `GET /api/v1/notifications/jobs/{job_id}` -> `notification_jobs`, `notification_delivery_logs`
+- `GET /api/v1/notifications/queue` -> `notification_jobs`
+- `GET /api/v1/finance/reports/revenue` -> `payments`
+- `GET /api/v1/finance/reports/outstanding` -> `bills`
+- `GET /api/v1/finance/reports/department-revenue` -> `bills`
+- `GET /api/v1/finance/reports/doctor-revenue` -> `bills`, `appointments`
+- `GET /api/v1/finance/reports/tax-gst` -> `bills`
+- `GET /api/v1/finance/reconciliation/daily` -> `payments`, `reconciliations`
+- `GET /api/v1/finance/reconciliation/discrepancies` -> `reconciliations`
+- `GET /api/v1/finance/reconciliation/{recon_id}` -> `reconciliations`
+- `GET /api/v1/finance/audit` -> `finance_audit_logs`
+- `GET /api/v1/finance/audit/{audit_id}` -> `finance_audit_logs`
+
+### PUT/PATCH (Exact)
+
+- `PATCH /api/v1/payments/providers/{provider}/config` -> `none` (read-only config status response; no DB update)
+- `PATCH /api/v1/notifications/providers/{provider_id}/status` -> `notification_providers`
+- `PUT /api/v1/notifications/providers/{provider_id}/config` -> `notification_providers`
+- `PUT /api/v1/notifications/preferences/me` -> `notification_preferences`
+
+### DELETE (Exact)
+
+- No delete endpoint in this portion.
+
+## 0.1) Portion 5 - EXACT Reviewed Mapping (Nurse + Receptionist + IPD + Surgery + Support + Patient History/Docs/Discharge)
+
+### POST (Exact)
+
+- `POST /api/v1/receptionist/patients/register`
+  - tables: `users`, `patient_profiles`, `roles`, `user_roles`
+- `POST /api/v1/receptionist/appointments/schedule`
+  - tables: `appointments` (reads `patient_profiles`, `doctor_profiles`, `doctor_schedules`, `departments`)
+- `POST /api/v1/receptionist/appointments/{appointment_ref}/check-in`
+  - tables: `appointments`
+- `POST /api/v1/ipd-management/admissions`
+  - tables: `admissions` (reads `patient_profiles`, `users`, `departments`)
+- `POST /api/v1/ipd-management/doctor-rounds`
+  - tables: `medical_records`, `admissions`
+- `POST /api/v1/surgery/doctor/cases`
+  - tables: `surgery_cases` (reads `patient_profiles`, `admissions`)
+- `POST /api/v1/surgery/doctor/cases/{surgery_id}/team`
+  - tables: `surgery_team_members` (reads `surgery_cases`, `users`)
+- `POST /api/v1/surgery/doctor/documentation`
+  - tables: `surgery_documentation` (reads `surgery_cases`, `patient_profiles`)
+- `POST /api/v1/support/staff/tickets`
+  - tables: `support_tickets` (reads `users`, `roles`)
+- `POST /api/v1/support/hospital-admin/tickets`
+  - tables: `support_tickets`
+- `POST /api/v1/patient-document-storage/my/documents/upload`
+  - tables: `patient_documents`
+- `POST /api/v1/patient-document-storage/patients/{patient_ref}/documents/upload`
+  - tables: `patient_documents` (reads `doctor_profiles`, `medical_records`)
+- `POST /api/v1/patient-discharge-summary/discharge-summaries`
+  - tables: `discharge_summaries` (reads `admissions`, `medical_records`)
+- `POST /api/v1/patient-discharge-summary/discharge-summaries/{summary_id}/finalize`
+  - tables: `discharge_summaries` (reads `bills`)
+
+### GET (Exact)
+
+- `GET /api/v1/receptionist/dashboard` -> `appointments`, `patient_profiles`
+- `GET /api/v1/receptionist/appointments/today` -> `appointments`, `patient_profiles`, `users`
+- `GET /api/v1/receptionist/patients` -> `patient_profiles`, `users`
+- `GET /api/v1/receptionist/patients/search` -> `patient_profiles`, `users`
+- `GET /api/v1/receptionist/patients/{patient_ref}/profile` -> `patient_profiles`, `users`, `appointments`
+- `GET /api/v1/receptionist/appointments/statistics` -> `appointments`
+- `GET /api/v1/receptionist/quick-actions` -> `appointments`, `patient_profiles`
+- `GET /api/v1/receptionist/profile` -> `users`, `receptionist_profiles`, `departments`
+- `GET /api/v1/ipd-management/available-patients` -> `patient_profiles`, `admissions`, `users`
+- `GET /api/v1/ipd-management/patients` -> `admissions`, `patient_profiles`, `users`, `departments`
+- `GET /api/v1/ipd-management/admissions/{admission_number}` -> `admissions`, `patient_profiles`, `medical_records`, `users`, `departments`
+- `GET /api/v1/ipd-management/dashboard` -> `admissions`, `patient_profiles`, `medical_records`
+- `GET /api/v1/ipd-management/debug/all-patients` -> `patient_profiles`, `users`
+- `GET /api/v1/surgery/patient/cases` -> `surgery_cases`, `patient_profiles`
+- `GET /api/v1/surgery/patient/cases/{surgery_id}/documentation` -> `surgery_documentation`, `surgery_cases`, `patient_profiles`
+- `GET /api/v1/surgery/patient/cases/{surgery_id}/videos` -> `surgery_videos`, `surgery_cases`, `patient_profiles`
+- `GET /api/v1/surgery/patient/videos/{video_id}/stream-token` -> `surgery_videos`, `surgery_cases`, `patient_profiles`
+- `GET /api/v1/surgery/patient/videos/{video_id}/stream` -> `surgery_videos`, `surgery_video_view_audits`
+- `GET /api/v1/support/staff/tickets` -> `support_tickets`
+- `GET /api/v1/support/hospital-admin/tickets` -> `support_tickets`
+- `GET /api/v1/support/hospital-admin/tickets/completed` -> `support_tickets`
+- `GET /api/v1/patient-medical-history/my/summary` -> `patient_profiles`, `medical_records`
+- `GET /api/v1/patient-medical-history/my/medical-records` -> `medical_records`, `departments`
+- `GET /api/v1/patient-medical-history/my/medical-records/{record_id}` -> `medical_records`, `departments`
+- `GET /api/v1/patient-medical-history/my/timeline` -> `appointments`, `medical_records`, `departments`
+- `GET /api/v1/patient-medical-history/patients/{patient_ref}/summary` -> `patient_profiles`, `medical_records`, `doctor_profiles`
+- `GET /api/v1/patient-medical-history/patients/{patient_ref}/medical-records` -> `medical_records`, `departments`, `doctor_profiles`
+- `GET /api/v1/patient-medical-history/patients/{patient_ref}/medical-records/{record_id}` -> `medical_records`, `departments`, `doctor_profiles`
+- `GET /api/v1/patient-medical-history/patients/{patient_ref}/timeline` -> `appointments`, `medical_records`, `departments`, `doctor_profiles`
+- `GET /api/v1/patient-document-storage/my/documents/statistics` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/my/documents` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/my/documents/{document_id}` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/my/documents/{document_id}/download` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/patients/{patient_ref}/documents` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}/download` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/patients/{patient_ref}/documents/statistics` -> `patient_documents`
+- `GET /api/v1/patient-discharge-summary/my/discharge-summaries` -> `discharge_summaries`, `admissions`
+- `GET /api/v1/patient-discharge-summary/admissions/ready-for-discharge` -> `admissions`, `medical_records`, `doctor_profiles`
+- `GET /api/v1/patient-discharge-summary/admissions/{admission_number}/discharge-template` -> `admissions`, `medical_records`, `doctor_profiles`
+- `GET /api/v1/patient-discharge-summary/discharge-summaries/{summary_id}` -> `discharge_summaries`, `doctor_profiles`
+- `GET /api/v1/patient-discharge-summary/patients/{patient_ref}/discharge-summaries` -> `discharge_summaries`, `patient_profiles`, `doctor_profiles`
+- `GET /api/v1/patient-discharge-summary/discharge-summaries/statistics` -> `discharge_summaries`, `doctor_profiles`
+
+### PUT/PATCH (Exact)
+
+- `PATCH /api/v1/receptionist/patients/{patient_ref}` -> `patient_profiles`, `users`
+- `PATCH /api/v1/receptionist/appointments/{appointment_ref}` -> `appointments`
+- `PATCH /api/v1/receptionist/profile` -> `users`, `receptionist_profiles`
+- `PATCH /api/v1/ipd-management/debug/all-patients/{patient_ref}` -> `patient_profiles`, `users`
+- `PATCH /api/v1/surgery/doctor/cases/{surgery_id}/status` -> `surgery_cases`
+- `PATCH /api/v1/support/hospital-admin/tickets/{ticket_id}/status` -> `support_tickets`
+- `PATCH /api/v1/patient-document-storage/my/documents/{document_id}` -> `patient_documents`
+- `PATCH /api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}` -> `patient_documents`
+- `PATCH /api/v1/patient-discharge-summary/discharge-summaries/{summary_id}` -> `discharge_summaries`
+
+### DELETE (Exact)
+
+- `DELETE /api/v1/patient-document-storage/my/documents/{document_id}` -> `patient_documents`
+- `DELETE /api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}` -> `patient_documents`
 
 ## 1) All POST endpoints
 
@@ -366,10 +699,6 @@ Scope reviewed in code: Auth + 2FA + Super Admin plan/subscription core + Hospit
   - endpoint: `app.api.v1.routers.patient.ipd_management.create_doctor_rounds`
   - status: `INFERRED`
   - tables: `review_needed`
-- `POST /api/v1/ipd-management/nursing-assessments`
-  - endpoint: `app.api.v1.routers.patient.ipd_management.create_nursing_assessment`
-  - status: `INFERRED`
-  - tables: `review_needed`
 - `POST /api/v1/lab/critical-results/{alert_id}/notify`
   - endpoint: `app.api.v1.routers.lab.lab_critical_results.start_notification_protocol`
   - status: `INFERRED`
@@ -486,34 +815,6 @@ Scope reviewed in code: Auth + 2FA + Super Admin plan/subscription core + Hospit
   - endpoint: `app.api.v1.routers.notifications.notifications.ticket_email`
   - status: `INFERRED`
   - tables: `notification_jobs, notification_preferences, notification_providers`
-- `POST /api/v1/nurse-management/care-plans`
-  - endpoint: `app.api.v1.routers.management.nurse_management.create_care_plan`
-  - status: `INFERRED`
-  - tables: `review_needed`
-- `POST /api/v1/nurse-management/orders/{order_id}/execute`
-  - endpoint: `app.api.v1.routers.management.nurse_management.execute_doctor_order`
-  - status: `INFERRED`
-  - tables: `review_needed`
-- `POST /api/v1/nurse-management/patients/{patient_ref}/medication-administration`
-  - endpoint: `app.api.v1.routers.management.nurse_management.record_medication_administration`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `POST /api/v1/nurse-management/patients/{patient_ref}/nursing-notes`
-  - endpoint: `app.api.v1.routers.management.nurse_management.add_nursing_note`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `POST /api/v1/nurse-management/patients/{patient_ref}/reports/upload`
-  - endpoint: `app.api.v1.routers.management.nurse_management.upload_nursing_report`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `POST /api/v1/nurse-management/patients/{patient_ref}/vitals`
-  - endpoint: `app.api.v1.routers.management.nurse_management.update_patient_vitals`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `POST /api/v1/nurse-management/shift-handover`
-  - endpoint: `app.api.v1.routers.management.nurse_management.create_shift_handover`
-  - status: `INFERRED`
-  - tables: `review_needed`
 - `POST /api/v1/opd/consultation`
   - endpoint: `app.api.v1.routers.management.opd_management.create_opd_consultation`
   - status: `INFERRED`
@@ -772,10 +1073,6 @@ Scope reviewed in code: Auth + 2FA + Super Admin plan/subscription core + Hospit
   - tables: `review_needed`
 - `POST /api/v1/surgery/doctor/documentation`
   - endpoint: `app.api.v1.routers.surgery.routes.upload_surgery_documentation`
-  - status: `INFERRED`
-  - tables: `review_needed`
-- `POST /api/v1/surgery/nurse/cases/{surgery_id}/video`
-  - endpoint: `app.api.v1.routers.surgery.routes.upload_surgery_video`
   - status: `INFERRED`
   - tables: `review_needed`
 - `POST /api/v1/telemed/patients/{patient_id}/vitals`
@@ -1401,70 +1698,6 @@ Scope reviewed in code: Auth + 2FA + Super Admin plan/subscription core + Hospit
   - endpoint: `app.api.v1.routers.notifications.notifications.list_queue`
   - status: `INFERRED`
   - tables: `notification_jobs, notification_preferences, notification_providers`
-- `GET /api/v1/nurse-management/dashboard`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_nurse_dashboard`
-  - status: `INFERRED`
-  - tables: `review_needed`
-- `GET /api/v1/nurse-management/orders/my-executed`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_my_executed_orders`
-  - status: `INFERRED`
-  - tables: `review_needed`
-- `GET /api/v1/nurse-management/orders/pending`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_pending_doctor_orders`
-  - status: `INFERRED`
-  - tables: `review_needed`
-- `GET /api/v1/nurse-management/patients`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_patients_list`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `GET /api/v1/nurse-management/patients/{patient_ref}`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_patient_profile`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `GET /api/v1/nurse-management/patients/{patient_ref}/care-plans`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_patient_care_plans`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `GET /api/v1/nurse-management/patients/{patient_ref}/medication-administration/history`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_medication_administration_history`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `GET /api/v1/nurse-management/patients/{patient_ref}/nursing-notes`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_nursing_notes`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `GET /api/v1/nurse-management/patients/{patient_ref}/vitals/alerts`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_vitals_alerts`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `GET /api/v1/nurse-management/patients/{patient_ref}/vitals/history`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_patient_vitals_history`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `GET /api/v1/nurse-management/patients/{patient_ref}/vitals/summary`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_vitals_summary`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `GET /api/v1/nurse-management/patients/{patient_ref}/vitals/trend`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_vitals_trend`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles`
-- `GET /api/v1/nurse-management/shift-handover/history`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_shift_handover_history`
-  - status: `INFERRED`
-  - tables: `review_needed`
-- `GET /api/v1/nurse-management/shift-handover/latest`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_latest_shift_handover`
-  - status: `INFERRED`
-  - tables: `review_needed`
-- `GET /api/v1/nurse-management/wards/overview`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_wards_overview`
-  - status: `INFERRED`
-  - tables: `wards`
-- `GET /api/v1/nurse-management/wards/{ward_name}/patients`
-  - endpoint: `app.api.v1.routers.management.nurse_management.get_ward_patients`
-  - status: `INFERRED`
-  - tables: `users, patient_profiles, wards`
 - `GET /api/v1/opd/consultation/{patient_id}`
   - endpoint: `app.api.v1.routers.management.opd_management.get_consultations_for_patient`
   - status: `INFERRED`
@@ -2016,10 +2249,6 @@ Scope reviewed in code: Auth + 2FA + Super Admin plan/subscription core + Hospit
   - endpoint: `app.api.v1.routers.notifications.notifications.update_provider_config`
   - status: `INFERRED`
   - tables: `notification_jobs, notification_preferences, notification_providers`
-- `PUT /api/v1/nurse-management/care-plans/{care_plan_id}`
-  - endpoint: `app.api.v1.routers.management.nurse_management.update_care_plan`
-  - status: `INFERRED`
-  - tables: `review_needed`
 - `PUT /api/v1/opd/doctor/{doctor_user_id}/toggle-status`
   - endpoint: `app.api.v1.routers.management.opd_management.toggle_opd_doctor`
   - status: `INFERRED`
@@ -2123,10 +2352,6 @@ Scope reviewed in code: Auth + 2FA + Super Admin plan/subscription core + Hospit
   - endpoint: `app.api.v1.routers.admin.hospital_admin.update_lab_tech_staff_profile`
   - status: `CONFIRMED`
   - tables: `users, staff_profiles, staff_department_assignments`
-- `PATCH /api/v1/hospital-admin/staff/nurses/{staff_id}`
-  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_nurse_staff_profile`
-  - status: `CONFIRMED`
-  - tables: `users, nurse_profiles, staff_profiles, staff_department_assignments`
 - `PATCH /api/v1/hospital-admin/staff/pharmacists/{staff_id}`
   - endpoint: `app.api.v1.routers.admin.hospital_admin.update_pharmacist_staff_profile`
   - status: `CONFIRMED`

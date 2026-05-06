@@ -16,18 +16,22 @@ BUSINESS RULES:
 - Receptionists CANNOT: Access medical records, Prescribe medicines, Modify lab results
 """
 import logging
-from typing import Optional
+import os
+import uuid
+from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import and_, func, select
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
+from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import require_receptionist
 from app.core.database import get_platform_db_session
+from app.core.enums import DocumentType
 from app.core.security import get_current_user
 from app.core.utils import absolute_public_asset_url
 from app.models.hospital import Department
+from app.models.patient import PatientDocument, PatientProfile
 from app.models.user import User
 from app.schemas.receptionist import ReceptionistProfileSelfUpdate
 from app.services.clinical_service import ClinicalService, send_opd_portal_credentials_email_task
@@ -38,12 +42,97 @@ from app.schemas.clinical import (
     AppointmentSchedulingCreate,
     AppointmentUpdate,
     PatientCheckInCreate,
-    ReceptionistPatientDetailOut,
 )
 from app.core.response_utils import success_response
 
 router = APIRouter(prefix="/receptionist", tags=["Receptionist - OPD Management"])
 logger = logging.getLogger(__name__)
+
+
+def _normalize_patient_document_type(raw: str) -> str:
+    """Accept DocumentType enum values (e.g. MEDICAL_REPORT, LAB_RESULT)."""
+    s = (raw or "").strip()
+    if not s:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="document_type is required",
+        )
+    normalized = s.upper().replace(" ", "_").replace("-", "_")
+    try:
+        return DocumentType(normalized).value
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_DOCUMENT_TYPE",
+                "message": f"document_type must be one of: {[e.value for e in DocumentType]}",
+            },
+        )
+
+
+def _storage_path_to_public_url(file_path: Optional[str]) -> str:
+    if not file_path:
+        return ""
+    normalized = str(file_path).replace("\\", "/")
+    if "/uploads/" in normalized:
+        rel = normalized[normalized.index("/uploads/") :]
+    elif normalized.startswith("uploads/"):
+        rel = "/" + normalized
+    else:
+        rel = "/" + normalized.lstrip("/")
+    return absolute_public_asset_url(rel) or rel
+
+
+def _human_document_code(document_id: uuid.UUID) -> str:
+    return f"DOC-{document_id.hex[:6].upper()}"
+
+
+def _file_type_label(mime_type: Optional[str], file_name: Optional[str]) -> str:
+    if mime_type:
+        return mime_type
+    fn = file_name or ""
+    if "." in fn:
+        return fn.rsplit(".", 1)[-1].lower()
+    return ""
+
+
+async def _resolve_patient_for_documents(
+    patient_id: str, receptionist: User, db: AsyncSession
+) -> PatientProfile:
+    """Resolve PAT-... ref or patient_profiles.id UUID; must belong to receptionist's hospital."""
+    from app.api.v1.routers.patient.patient_document_storage import get_patient_by_ref
+
+    if not receptionist.hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Receptionist must be assigned to a hospital",
+        )
+    hid = str(receptionist.hospital_id)
+    pid = (patient_id or "").strip()
+    if not pid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="patient_id is required",
+        )
+    try:
+        uid = uuid.UUID(pid)
+        res = await db.execute(
+            select(PatientProfile).where(
+                and_(PatientProfile.id == uid, PatientProfile.hospital_id == receptionist.hospital_id)
+            )
+        )
+        row = res.scalar_one_or_none()
+        if row:
+            return row
+    except ValueError:
+        pass
+    patient = await get_patient_by_ref(pid, hid, db)
+    if patient.hospital_id and str(patient.hospital_id) != hid:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Patient is not registered in your hospital",
+        )
+    return patient
 
 
 async def _receptionist_user_for_write(db: AsyncSession, current_user: User) -> User:
@@ -240,7 +329,7 @@ async def patch_opd_patient(
 @router.post("/appointments/schedule")
 async def schedule_appointment(
     appointment_data: AppointmentSchedulingCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
@@ -275,7 +364,7 @@ async def get_todays_appointments(
     department_name: Optional[str] = Query(None, description="Filter by department"),
     doctor_name: Optional[str] = Query(None, description="Filter by doctor"),
     status: Optional[str] = Query(None, description="Filter by status: SCHEDULED, CHECKED_IN, IN_PROGRESS, COMPLETED, CANCELLED"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
@@ -309,11 +398,23 @@ async def get_todays_appointments(
     return success_response(message="Appointments retrieved successfully", data=result)
 
 
+@router.get("/appointments/{appointment_ref}")
+async def get_appointment_by_ref(
+    appointment_ref: str,
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """Get a single appointment by reference (same hospital as receptionist)."""
+    clinical_service = ClinicalService(db)
+    data = await clinical_service.get_opd_appointment_by_ref(appointment_ref, current_user)
+    return success_response(message="Appointment retrieved successfully", data=data)
+
+
 @router.patch("/appointments/{appointment_ref}")
 async def modify_appointment(
     appointment_ref: str,
     modification_data: AppointmentUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
@@ -335,9 +436,9 @@ async def modify_appointment(
     """
     clinical_service = ClinicalService(db)
     result = await clinical_service.modify_opd_appointment(
-        appointment_ref, 
-        modification_data.dict(exclude_unset=True), 
-        current_user
+        appointment_ref,
+        modification_data.model_dump(exclude_unset=True),
+        current_user,
     )
     return success_response(message="Appointment modified successfully", data=result)
 
@@ -350,7 +451,7 @@ async def modify_appointment(
 async def check_in_patient(
     appointment_ref: str,
     checkin_data: PatientCheckInCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
@@ -478,8 +579,187 @@ async def get_patient_profile_for_schedule(
     """
     clinical_service = ClinicalService(db)
     data = await clinical_service.get_receptionist_patient_by_ref(patient_ref, current_user)
-    validated = ReceptionistPatientDetailOut.model_validate(data)
-    return success_response(message="Patient profile loaded successfully", data=validated.model_dump())
+    return success_response(message="Patient profile loaded successfully", data=data)
+
+
+# ============================================================================
+# PATIENT DOCUMENTS (front desk — multipart upload + card list)
+# ============================================================================
+
+
+@router.post("/patient-documents/upload")
+async def receptionist_upload_patient_documents(
+    patient_id: str = Form(
+        ...,
+        description="Patient reference (e.g. PAT-...) or patient_profiles.id UUID",
+    ),
+    document_type: str = Form(...),
+    category: str = Form(..., description="Stored as document title / UI category"),
+    uploaded_by: str = Form(
+        ...,
+        description="Display name of uploader (should match signed-in receptionist)",
+    ),
+    files: List[UploadFile] = File(..., description="One or more files"),
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """
+    Upload one or more documents for a patient (multipart/form-data).
+
+    **Form fields:** ``patient_id``, ``document_type``, ``category``, ``uploaded_by``, ``files`` (repeatable).
+    """
+    from app.api.v1.routers.patient.patient_document_storage import (
+        get_upload_directory,
+        save_uploaded_file,
+        validate_file_size,
+        validate_file_type,
+    )
+
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "NO_FILES", "message": "At least one file is required"},
+        )
+    if not (uploaded_by or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MISSING_UPLOADER", "message": "uploaded_by is required"},
+        )
+    if not (category or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MISSING_CATEGORY", "message": "category is required"},
+        )
+
+    patient = await _resolve_patient_for_documents(patient_id, current_user, db)
+    dtype = _normalize_patient_document_type(document_type)
+    cat = category.strip()
+
+    hospital_id_for_doc = str(current_user.hospital_id)
+    if patient.hospital_id:
+        hospital_id_for_doc = str(patient.hospital_id)
+    pref = patient.patient_id
+    upload_dir = get_upload_directory(hospital_id_for_doc, pref)
+
+    saved_paths: List[str] = []
+    out_rows: List[dict] = []
+    try:
+        for file in files:
+            if not validate_file_type(file):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid file type. Allowed: PDF, images, Word, Excel, text",
+                )
+            if not validate_file_size(file):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="File size exceeds 10MB limit",
+                )
+            ext = os.path.splitext(file.filename or "")[1] or ""
+            unique_filename = f"{uuid.uuid4()}{ext}"
+            file_path = os.path.join(upload_dir, unique_filename)
+            file_size = await save_uploaded_file(file, file_path)
+            saved_paths.append(file_path)
+
+            doc = PatientDocument(
+                id=uuid.uuid4(),
+                hospital_id=uuid.UUID(hospital_id_for_doc),
+                patient_id=patient.id,
+                uploaded_by=current_user.id,
+                document_type=dtype,
+                title=cat,
+                description=None,
+                file_name=file.filename or unique_filename,
+                file_path=file_path,
+                file_size=file_size,
+                mime_type=file.content_type,
+                document_date=None,
+                is_sensitive=False,
+            )
+            db.add(doc)
+            await db.flush()
+            await db.refresh(doc)
+            out_rows.append(
+                {
+                    "id": _human_document_code(doc.id),
+                    "document_uuid": str(doc.id),
+                    "file_url": _storage_path_to_public_url(doc.file_path),
+                    "file_type": _file_type_label(doc.mime_type, doc.file_name),
+                    "document_type": doc.document_type,
+                    "category": cat,
+                    "uploaded_at": doc.created_at.date().isoformat()
+                    if doc.created_at
+                    else "",
+                }
+            )
+        await db.commit()
+    except HTTPException:
+        for p in saved_paths:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        await db.rollback()
+        raise
+    except Exception:
+        for p in saved_paths:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        await db.rollback()
+        logger.exception("Receptionist document upload failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to upload documents",
+        )
+
+    return success_response(
+        message="Documents uploaded successfully",
+        data=out_rows,
+    )
+
+
+@router.get("/patients/{patient_ref}/documents")
+async def receptionist_list_patient_documents(
+    patient_ref: str,
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """
+    Document list for the patient card (no pagination; capped at 500 newest first).
+    """
+    patient = await _resolve_patient_for_documents(patient_ref.strip(), current_user, db)
+    q = await db.execute(
+        select(PatientDocument)
+        .where(PatientDocument.patient_id == patient.id)
+        .options(selectinload(PatientDocument.uploader))
+        .order_by(desc(PatientDocument.created_at))
+        .limit(500)
+    )
+    docs = q.scalars().all()
+    data = []
+    for doc in docs:
+        ub = ""
+        if doc.uploader:
+            ub = f"{doc.uploader.first_name or ''} {doc.uploader.last_name or ''}".strip()
+        data.append(
+            {
+                "id": _human_document_code(doc.id),
+                "document_uuid": str(doc.id),
+                "file_name": doc.file_name,
+                "file_url": _storage_path_to_public_url(doc.file_path),
+                "file_type": _file_type_label(doc.mime_type, doc.file_name),
+                "document_type": doc.document_type,
+                "category": doc.title,
+                "file_size": str(doc.file_size) if doc.file_size is not None else "",
+                "uploaded_at": doc.created_at.isoformat() if doc.created_at else "",
+                "uploaded_by": ub,
+            }
+        )
+    return success_response(message="Documents retrieved successfully", data=data)
 
 
 # ============================================================================
@@ -489,7 +769,7 @@ async def get_patient_profile_for_schedule(
 @router.get("/appointments/statistics")
 async def get_appointment_statistics(
     date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (default: today)"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_platform_db_session)
 ):
     """

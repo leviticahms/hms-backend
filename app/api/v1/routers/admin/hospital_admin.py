@@ -25,7 +25,7 @@ from app.core.enums import UserRole
 from app.schemas.admin import (
     DepartmentCreate, DepartmentUpdate, DepartmentStatusUpdate,
     StaffCreate, StaffStatusUpdate, StaffUpdateResponse,
-    DoctorStaffUpdate, NurseStaffUpdate, ReceptionistStaffUpdate, LabTechStaffUpdate, PharmacistStaffUpdate,
+    DoctorStaffUpdate, ReceptionistStaffUpdate, LabTechStaffUpdate, PharmacistStaffUpdate,
     AppointmentStatusUpdate,
     PatientStatusUpdate, WardCreate, WardUpdate, WardStatusUpdate,
     BedCreate, BedStatusUpdate, AdmissionCreate, BedAssignmentCreate,
@@ -227,11 +227,11 @@ async def create_staff_user(
     service: HospitalAdminService = Depends(get_hospital_admin_service)
 ):
     """
-    Create a new staff user (Doctor, Lab Tech, Pharmacist).
+    Create a new staff user (Doctor, Nurse, Receptionist, Lab Tech, Pharmacist).
     
     Creates a staff user with:
     - Unique email and phone validation
-    - Role assignment (DOCTOR, LAB_TECH, PHARMACIST)
+    - Role assignment (DOCTOR, NURSE, RECEPTIONIST, LAB_TECH, PHARMACIST)
     - Temporary password generation
     - Hospital-scoped access
     """
@@ -244,7 +244,7 @@ async def create_staff_user(
 async def list_staff_users(
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(50, ge=1, le=100, description="Items per page"),
-    role: Optional[str] = Query(None, description="Filter by role: DOCTOR, LAB_TECH, PHARMACIST"),
+    role: Optional[str] = Query(None, description="Filter by role: DOCTOR, NURSE, RECEPTIONIST, LAB_TECH, PHARMACIST"),
     active_only: bool = Query(False, description="Show only active staff"),
     current_user: User = Depends(require_hospital_admin()),
     service: HospitalAdminService = Depends(get_hospital_admin_service)
@@ -310,25 +310,6 @@ async def update_doctor_staff_profile(
             detail={"code": "INVALID_STAFF_ID", "message": "Invalid staff ID format"},
         )
     result = await service.update_doctor_staff(staff_uuid, update_data.model_dump(exclude_none=True))
-    return StaffUpdateResponse(**result)
-
-
-@router.patch("/staff/nurses/{staff_id}", response_model=StaffUpdateResponse, tags=["Hospital Admin - Staff Management"])
-async def update_nurse_staff_profile(
-    staff_id: str,
-    update_data: NurseStaffUpdate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service),
-):
-    """Update nurse staff profile from hospital admin portal."""
-    try:
-        staff_uuid = uuid.UUID(staff_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "INVALID_STAFF_ID", "message": "Invalid staff ID format"},
-        )
-    result = await service.update_nurse_staff(staff_uuid, update_data.model_dump(exclude_none=True))
     return StaffUpdateResponse(**result)
 
 

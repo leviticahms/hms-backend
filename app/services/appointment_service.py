@@ -18,6 +18,7 @@ from app.models.user import User
 from app.core.enums import AppointmentStatus, UserRole
 from app.core.utils import generate_appointment_ref, generate_patient_ref
 from app.utils.hospital_id_resolve import resolve_effective_hospital_id
+from app.utils.receptionist_serializers import build_receptionist_patient_full_payload
 
 
 def _normalize_appointment_time_parts(appointment_time: str) -> tuple[str, str]:
@@ -97,6 +98,7 @@ class AppointmentService:
         self,
         doctor_user_id: uuid.UUID,
         date: str,
+        exclude_appointment_id: Optional[uuid.UUID] = None,
     ) -> List[Dict[str, Any]]:
         """
         Build bookable time slots for a doctor (User.id) on a date from DoctorSchedule only.
@@ -144,16 +146,15 @@ class AppointmentService:
                 continue
 
             time_hms = current_time.strftime("%H:%M:%S")
-            booked_q = await self.db.execute(
-                select(func.count(Appointment.id)).where(
-                    and_(
-                        Appointment.doctor_id == doctor_user_id,
-                        Appointment.appointment_date == date,
-                        Appointment.appointment_time == time_hms,
-                        Appointment.status.in_([AppointmentStatus.REQUESTED, AppointmentStatus.CONFIRMED]),
-                    )
-                )
+            booked_filt = and_(
+                Appointment.doctor_id == doctor_user_id,
+                Appointment.appointment_date == date,
+                Appointment.appointment_time == time_hms,
+                Appointment.status.in_([AppointmentStatus.REQUESTED, AppointmentStatus.CONFIRMED]),
             )
+            if exclude_appointment_id is not None:
+                booked_filt = and_(booked_filt, Appointment.id != exclude_appointment_id)
+            booked_q = await self.db.execute(select(func.count(Appointment.id)).where(booked_filt))
             booked = int(booked_q.scalar() or 0)
             is_available = booked < max_patients
 
@@ -523,23 +524,7 @@ class AppointmentService:
         )
         patients = result.scalars().all()
         return {
-            "patients": [
-                {
-                    "id": str(p.id),
-                    "patient_id": p.patient_id,
-                    "patient_ref": p.patient_id,
-                    "mrn": p.mrn,
-                    "name": f"{p.user.first_name} {p.user.last_name}",
-                    "first_name": p.user.first_name,
-                    "last_name": p.user.last_name,
-                    "email": p.user.email,
-                    "phone": p.user.phone,
-                    "gender": p.gender,
-                    "date_of_birth": p.date_of_birth,
-                    "created_at": p.created_at.isoformat() if p.created_at else None,
-                }
-                for p in patients
-            ],
+            "patients": [build_receptionist_patient_full_payload(p) for p in patients],
             "total": total,
             "page": page,
             "limit": limit,

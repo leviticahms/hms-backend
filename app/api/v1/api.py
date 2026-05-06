@@ -120,10 +120,9 @@ except ImportError as e:
     logger.error(f"✗ Failed to load patient routers: {e}")
 
 # ============================================================================
-# 6. STAFF MANAGEMENT (Nurse & Receptionist)
+# 6. STAFF MANAGEMENT (Receptionist + OPD)
 # ============================================================================
 try:
-    from app.api.v1.routers.management.nurse_management import router as nurse_management_router
     from app.api.v1.routers.management.receptionist_management import router as receptionist_management_router
     from app.api.v1.routers.management.staff_doctor_schedules import (
         router as staff_doctor_schedules_router,
@@ -132,7 +131,6 @@ try:
         router as opd_management_router,
         doctors_router as opd_doctors_router,
     )
-    api_router.include_router(nurse_management_router)
     api_router.include_router(receptionist_management_router)
     api_router.include_router(staff_doctor_schedules_router)
     api_router.include_router(opd_management_router)
@@ -311,7 +309,6 @@ async def health_check():
                 "hospital_admin",
                 "doctor",
                 "patient",
-                "nurse",
                 "receptionist",
                 "pharmacy",
                 "lab",

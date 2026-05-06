@@ -386,7 +386,7 @@ class HospitalAdminService:
         if active_only:
             count_query = count_query.where(Department.is_active == True)
         
-        count_query = count_query.with_only_columns(func.count(func.distinct(User.id)))
+        count_query = count_query.with_only_columns(func.count(func.distinct(Department.id)))
         total_result = await self.db.execute(count_query)
         total = total_result.scalar()
         
@@ -692,7 +692,7 @@ class HospitalAdminService:
         from app.models.user import user_roles
         from sqlalchemy import insert
 
-        role_name = (staff_data.get("role") or "").strip()
+        role_name = (staff_data.get("role") or "").strip().upper()
         if role_name not in [
             UserRole.DOCTOR,
             UserRole.NURSE,
@@ -1233,8 +1233,10 @@ class HospitalAdminService:
         ).where(User.hospital_id == self.hospital_id)
         
         # Filter by role if specified
-        if role_filter:
-            query = query.join(User.roles).where(Role.name == role_filter)
+        normalized_role_filter = (role_filter or "").strip().upper() if role_filter else None
+
+        if normalized_role_filter:
+            query = query.join(User.roles).where(Role.name == normalized_role_filter)
         else:
             query = query.join(User.roles).where(Role.name.in_(_STAFF_ROLE_VALUES_ORDERED))
         
@@ -1243,8 +1245,8 @@ class HospitalAdminService:
         
         # Get total count (same role filter as list query)
         count_query = select(func.count(User.id)).where(User.hospital_id == self.hospital_id)
-        if role_filter:
-            count_query = count_query.join(User.roles).where(Role.name == role_filter)
+        if normalized_role_filter:
+            count_query = count_query.join(User.roles).where(Role.name == normalized_role_filter)
         else:
             count_query = count_query.join(User.roles).where(Role.name.in_(_STAFF_ROLE_VALUES_ORDERED))
         if active_only:
