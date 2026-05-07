@@ -3,9 +3,9 @@ Service for Equipment Tracking screen.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from uuid import UUID
 
 from app.schemas.lab_equipment_tracking import (
     AddEquipmentTrackingRequest,
@@ -24,78 +24,56 @@ class LabEquipmentTrackingService:
     def __init__(self, lab_service: LabService):
         self.lab = lab_service
 
-    async def dashboard(self, *, demo: bool = False, search: Optional[str] = None) -> EquipmentTrackingDashboardResponse:
-        if demo:
-            rows = [
-                EquipmentTrackingRow(
-                    equipment_id=UUID("00000000-0000-0000-0000-000000000001"),
-                    equipment_code="EQP-001",
-                    name="Hematology Analyzer",
-                    equipment_type="Analyzer",
-                    brand="Sysmex",
-                    model="XN-1000",
-                    serial_no="SY-2023-001",
-                    location="Hematology Lab",
-                    status="OPERATIONAL",
-                ),
-                EquipmentTrackingRow(
-                    equipment_id=UUID("00000000-0000-0000-0000-000000000002"),
-                    equipment_code="EQP-002",
-                    name="Chemistry Analyzer",
-                    equipment_type="Analyzer",
-                    brand="Roche",
-                    model="Cobas 6000",
-                    serial_no="RC-2023-002",
-                    location="Chemistry Lab",
-                    status="MAINTENANCE",
-                ),
-            ]
-            logs = [
-                MaintenanceLogTrackingRow(
-                    equipment="Chemistry Analyzer",
-                    maintenance_type="Preventive Maintenance",
-                    date="2024-01-05",
-                    performed_by="John Technician",
-                    cost=15000,
-                    description="Routine maintenance and calibration",
-                ),
-                MaintenanceLogTrackingRow(
-                    equipment="Centrifuge",
-                    maintenance_type="Calibration",
-                    date="2024-01-08",
-                    performed_by="Sarah Engineer",
-                    cost=5000,
-                    description="Speed calibration and balancing",
-                ),
-            ]
-        else:
-            eq_data = await self.lab.get_equipment_list(page=1, limit=200, active_only=False)
-            logs_data = await self.lab.get_maintenance_logs(page=1, limit=20)
-            rows = [
-                EquipmentTrackingRow(
-                    equipment_id=e["equipment_id"],
-                    equipment_code=e["equipment_code"],
-                    name=e.get("equipment_name", ""),
-                    equipment_type=e.get("category", "GENERAL"),
-                    brand=e.get("manufacturer"),
-                    model=e.get("model"),
-                    serial_no=e.get("serial_number"),
-                    location=e.get("location"),
-                    status=self._map_status(e.get("status"), e.get("next_calibration_due_at")),
-                )
-                for e in eq_data.get("equipment", [])
-            ]
-            logs = [
-                MaintenanceLogTrackingRow(
-                    equipment=l.get("equipment_name", ""),
-                    maintenance_type=l.get("type", ""),
-                    date=str(l.get("performed_at", ""))[:10],
-                    performed_by=str(l.get("performed_by", "")),
-                    cost=float(l["cost"]) if l.get("cost") is not None else None,
-                    description=l.get("remarks") or "",
-                )
-                for l in logs_data.get("logs", [])
-            ]
+    @staticmethod
+    def _is_swagger_placeholder_equipment(e: dict) -> bool:
+        """Hide rows created from Swagger/UI defaults where every field was left as 'string'."""
+        name = (e.get("equipment_name") or "").strip().lower()
+        cat = (e.get("category") or "").strip().lower()
+        mfg = (e.get("manufacturer") or "").strip().lower()
+        model = (e.get("model") or "").strip().lower()
+        serial = (e.get("serial_number") or "").strip().lower()
+        loc = (e.get("location") or "").strip().lower()
+        if name == "string":
+            return True
+        return (
+            cat == "string"
+            and mfg == "string"
+            and model == "string"
+            and serial == "string"
+            and loc == "string"
+        )
+
+    async def dashboard(self, *, search: Optional[str] = None) -> EquipmentTrackingDashboardResponse:
+        eq_data = await self.lab.get_equipment_list(page=1, limit=200, active_only=False)
+        logs_data = await self.lab.get_maintenance_logs(page=1, limit=20)
+        raw_equipment = [
+            e for e in eq_data.get("equipment", []) if not self._is_swagger_placeholder_equipment(e)
+        ]
+        rows = [
+            EquipmentTrackingRow(
+                equipment_id=e["equipment_id"],
+                equipment_code=e["equipment_code"],
+                name=e.get("equipment_name", ""),
+                equipment_type=e.get("category", "GENERAL"),
+                brand=e.get("manufacturer"),
+                model=e.get("model"),
+                serial_no=e.get("serial_number"),
+                location=e.get("location"),
+                status=self._map_status(e.get("status"), e.get("next_calibration_due_at")),
+            )
+            for e in raw_equipment
+        ]
+        logs = [
+            MaintenanceLogTrackingRow(
+                equipment=l.get("equipment_name", ""),
+                maintenance_type=l.get("type", ""),
+                date=str(l.get("performed_at", ""))[:10],
+                performed_by=str(l.get("performed_by", "")),
+                cost=float(l["cost"]) if l.get("cost") is not None else None,
+                description=l.get("remarks") or "",
+            )
+            for l in logs_data.get("logs", [])
+        ]
 
         if search:
             q = search.strip().lower()
@@ -108,11 +86,7 @@ class LabEquipmentTrackingService:
             calibration_due=sum(1 for r in rows if r.status == "CALIBRATION_DUE"),
         )
         return EquipmentTrackingDashboardResponse(
-            meta=EquipmentTrackingMeta(
-                generated_at=datetime.now(timezone.utc),
-                live_data=not demo,
-                demo_data=demo,
-            ),
+            meta=EquipmentTrackingMeta(generated_at=datetime.now(timezone.utc)),
             stats=stats,
             equipment_list=rows,
             maintenance_logs=logs,
@@ -120,7 +94,7 @@ class LabEquipmentTrackingService:
         )
 
     async def add_equipment(self, payload: AddEquipmentTrackingRequest) -> AddEquipmentTrackingResponse:
-        code = f"EQP-{datetime.now(timezone.utc).strftime('%H%M%S')}"
+        code = f"EQP-{uuid.uuid4().hex[:10].upper()}"
         created = await self.lab.create_equipment(
             {
                 "equipment_code": code,
@@ -157,4 +131,3 @@ class LabEquipmentTrackingService:
             if due.date() <= (datetime.now(timezone.utc) + timedelta(days=7)).date():
                 return "CALIBRATION_DUE"
         return "OPERATIONAL"
-

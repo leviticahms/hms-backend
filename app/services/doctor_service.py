@@ -24,6 +24,19 @@ class DoctorService:
     def __init__(self, db: AsyncSession):
         self.db = db
     
+    @staticmethod
+    def _appointment_patient_display_name(apt: Appointment) -> str:
+        """Avoid 500s when patient/user rows are missing or not loaded."""
+        patient = getattr(apt, "patient", None)
+        if not patient:
+            return "Patient"
+        user = getattr(patient, "user", None)
+        if not user:
+            return "Patient"
+        parts = [user.first_name or "", user.last_name or ""]
+        name = " ".join(p for p in parts if p).strip()
+        return name or "Patient"
+    
     # ============================================================================
     # USER CONTEXT AND VALIDATION
     # ============================================================================
@@ -40,8 +53,9 @@ class DoctorService:
         }
     
     async def validate_doctor_access(self, user_context: dict) -> None:
-        """Ensure user is a doctor"""
-        if user_context["role"] != UserRole.DOCTOR:
+        """Ensure user is a doctor (any assigned role, not only the first)."""
+        roles = user_context.get("all_roles") or []
+        if UserRole.DOCTOR.value not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied - Doctor role required"
@@ -64,13 +78,23 @@ class DoctorService:
                 detail="Doctor user not found. Please contact administrator."
             )
             
-        # Get department assignment
+        # Prefer primary active assignment; multiple rows must not use scalar_one_or_none()
         assignment_result = await self.db.execute(
             select(StaffDepartmentAssignment)
-            .where(StaffDepartmentAssignment.staff_id == user_context["user_id"])
+            .where(
+                and_(
+                    StaffDepartmentAssignment.staff_id == user_context["user_id"],
+                    StaffDepartmentAssignment.is_active == True,
+                )
+            )
             .options(selectinload(StaffDepartmentAssignment.department))
+            .order_by(
+                StaffDepartmentAssignment.is_primary.desc(),
+                StaffDepartmentAssignment.effective_from.desc(),
+            )
+            .limit(1)
         )
-        assignment = assignment_result.scalar_one_or_none()
+        assignment = assignment_result.scalars().first()
         
         if not assignment:
             raise HTTPException(
@@ -182,8 +206,11 @@ class DoctorService:
             current_date = start_date + timedelta(days=i)
             day_name = current_date.strftime("%A").upper()
             
-            # Find schedule for this day
-            day_schedule = next((s for s in schedules if s.day_of_week == day_name), None)
+            # Find schedule for this day (normalize DB casing)
+            day_schedule = next(
+                (s for s in schedules if (s.day_of_week or "").strip().upper() == day_name),
+                None,
+            )
             
             # Get appointments for this day
             day_appointments = [a for a in appointments if a.appointment_date == current_date.isoformat()]
@@ -221,7 +248,7 @@ class DoctorService:
                     "appointments": [
                         {
                             "appointment_ref": apt.appointment_ref,
-                            "patient_name": f"{apt.patient.user.first_name} {apt.patient.user.last_name}",
+                            "patient_name": self._appointment_patient_display_name(apt),
                             "appointment_time": apt.appointment_time,
                             "status": apt.status,
                             "chief_complaint": apt.chief_complaint
@@ -243,7 +270,7 @@ class DoctorService:
                     "appointments": [
                         {
                             "appointment_ref": apt.appointment_ref,
-                            "patient_name": f"{apt.patient.user.first_name} {apt.patient.user.last_name}",
+                            "patient_name": self._appointment_patient_display_name(apt),
                             "appointment_time": apt.appointment_time,
                             "status": apt.status,
                             "chief_complaint": apt.chief_complaint

@@ -4,7 +4,7 @@ Lab Profile endpoints.
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.routers.lab.rbac import LAB_GET_ROLES
+from app.api.v1.routers.lab.rbac import LAB_GET_ROLES, LAB_MUTATION_ROLES
 from app.core.security import require_roles
 from app.database.session import get_db_session
 from app.models.user import User
@@ -35,7 +35,7 @@ async def get_lab_profile(
 async def edit_lab_profile(
     request: EditLabProfileRequest,
     current_user: User = Depends(
-        require_roles(["LAB_SUPERVISOR", "LAB_ADMIN", "HOSPITAL_ADMIN"])
+        require_roles(LAB_MUTATION_ROLES)
     ),
     db: AsyncSession = Depends(get_db_session),
 ) -> EditLabProfileResponse:
@@ -46,7 +46,7 @@ async def edit_lab_profile(
 async def configure_lab_settings(
     request: ConfigureLabSettingsRequest,
     current_user: User = Depends(
-        require_roles(["LAB_SUPERVISOR", "LAB_ADMIN", "HOSPITAL_ADMIN"])
+        require_roles(LAB_MUTATION_ROLES)
     ),
     db: AsyncSession = Depends(get_db_session),
 ) -> ConfigureLabSettingsResponse:
@@ -56,7 +56,7 @@ async def configure_lab_settings(
 @router.post("/change-password", response_model=ChangePasswordResponse)
 async def change_lab_profile_password(
     current_user: User = Depends(
-        require_roles(["LAB_TECH", "LAB_SUPERVISOR", "LAB_ADMIN", "HOSPITAL_ADMIN"])
+        require_roles(LAB_MUTATION_ROLES)
     ),
     db: AsyncSession = Depends(get_db_session),
 ) -> ChangePasswordResponse:
@@ -67,7 +67,7 @@ async def change_lab_profile_password(
 async def run_lab_profile_action(
     action: str,
     current_user: User = Depends(
-        require_roles(["LAB_TECH", "LAB_SUPERVISOR", "LAB_ADMIN", "HOSPITAL_ADMIN"])
+        require_roles(LAB_MUTATION_ROLES)
     ),
     db: AsyncSession = Depends(get_db_session),
 ) -> LabProfileActionResponse:

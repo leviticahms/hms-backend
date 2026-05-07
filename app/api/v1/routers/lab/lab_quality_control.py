@@ -4,7 +4,7 @@ Quality Control Workflows endpoints.
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.routers.lab.rbac import LAB_GET_ROLES
+from app.api.v1.routers.lab.rbac import LAB_GET_ROLES, LAB_MUTATION_ROLES
 from app.core.security import require_roles
 from app.database.session import get_db_session
 from app.models.user import User
@@ -32,9 +32,7 @@ async def get_quality_control_dashboard(
 @router.post("/run", response_model=RecordQcRunResponse)
 async def record_qc_run(
     request: RecordQcRunRequest,
-    current_user: User = Depends(
-        require_roles(["LAB_TECH", "LAB_SUPERVISOR", "LAB_ADMIN", "HOSPITAL_ADMIN"])
-    ),
+    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> RecordQcRunResponse:
     svc = LabQualityControlService(db, current_user.hospital_id)
@@ -45,7 +43,7 @@ async def record_qc_run(
 async def trigger_qc_workflow_action(
     action: str,
     current_user: User = Depends(
-        require_roles(["LAB_SUPERVISOR", "LAB_ADMIN", "HOSPITAL_ADMIN"])
+        require_roles(LAB_MUTATION_ROLES)
     ),
     db: AsyncSession = Depends(get_db_session),
 ) -> QcWorkflowActionResponse:
