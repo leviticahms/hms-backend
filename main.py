@@ -2,6 +2,7 @@
 Main FastAPI application entry point.
 Hospital Management SaaS Platform with zero-intervention database setup.
 """
+#hi
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
