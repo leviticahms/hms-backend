@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.routers.lab.rbac import LAB_GET_ROLES
-from app.database.session import get_db_session
+from app.database.session import get_platform_db_session
 from app.models.user import User
 from app.core.security import require_roles
 from app.services.lab_service import LabService
@@ -39,7 +39,7 @@ async def create_equipment(
     current_user: User = Depends(
         require_roles(["LAB_ADMIN", "LAB_SUPERVISOR", "HOSPITAL_ADMIN", "LAB_TECH"])
     ),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:
         lab = LabService(db, current_user.hospital_id)
@@ -64,7 +64,7 @@ async def get_equipment_list(
     status: Optional[EquipmentStatus] = Query(None),
     active_only: bool = Query(True),
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:
         lab = LabService(db, current_user.hospital_id)
@@ -92,7 +92,7 @@ async def get_equipment_list(
 async def get_equipment(
     equipment_id: uuid.UUID,
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:
         lab = LabService(db, current_user.hospital_id)
@@ -114,7 +114,7 @@ async def update_equipment(
     current_user: User = Depends(
         require_roles(["LAB_ADMIN", "LAB_SUPERVISOR", "HOSPITAL_ADMIN", "LAB_TECH"])
     ),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:
         lab = LabService(db, current_user.hospital_id)
@@ -140,7 +140,7 @@ async def update_equipment_status(
     current_user: User = Depends(
         require_roles(["LAB_ADMIN", "LAB_SUPERVISOR", "HOSPITAL_ADMIN", "LAB_TECH"])
     ),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:
         lab = LabService(db, current_user.hospital_id)
@@ -166,7 +166,7 @@ async def get_equipment_logs(
     limit: int = Query(50, ge=1, le=100),
     maintenance_type: Optional[MaintenanceType] = Query(None),
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:
         lab = LabService(db, current_user.hospital_id)
@@ -196,7 +196,7 @@ async def create_maintenance_log(
     current_user: User = Depends(
         require_roles(["LAB_ADMIN", "LAB_SUPERVISOR", "HOSPITAL_ADMIN", "LAB_TECH"])
     ),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:
         lab = LabService(db, current_user.hospital_id)
@@ -235,7 +235,7 @@ async def get_all_maintenance_logs(
     date_from: Optional[datetime] = Query(None),
     date_to: Optional[datetime] = Query(None),
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:
         lab = LabService(db, current_user.hospital_id)
@@ -263,7 +263,7 @@ async def get_all_maintenance_logs(
 async def get_maintenance_log(
     log_id: uuid.UUID,
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:
         lab = LabService(db, current_user.hospital_id)
