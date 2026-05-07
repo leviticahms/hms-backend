@@ -15,12 +15,15 @@ from __future__ import annotations
 
 from typing import Final, List
 
-# One lab staff role + hospital admin (required for elevated actions / reads).
-LAB_TECH_ROLE: Final[str] = "LAB_TECH"
+from app.core.enums import UserRole
+
+# One lab staff role + hospital admin (oversight). LAB_ADMIN / LAB_SUPERVISOR are
+# intentionally excluded from all /api/v1/lab/* route dependencies.
+LAB_TECH_ROLE: Final[str] = UserRole.LAB_TECH.value
 
 LAB_ACCESS_ROLES: Final[List[str]] = [
-    LAB_TECH_ROLE,
-    "HOSPITAL_ADMIN",
+    UserRole.LAB_TECH.value,
+    UserRole.HOSPITAL_ADMIN.value,
 ]
 
 LAB_GET_ROLES: Final[List[str]] = list(LAB_ACCESS_ROLES)
