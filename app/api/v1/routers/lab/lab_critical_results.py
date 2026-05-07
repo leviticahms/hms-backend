@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.routers.lab.rbac import LAB_GET_ROLES
+from app.api.v1.routers.lab.rbac import LAB_GET_ROLES, LAB_MUTATION_ROLES
 from app.core.security import require_roles
 from app.database.session import get_db_session
 from app.models.user import User
@@ -40,16 +40,7 @@ async def get_critical_results_dashboard(
 @router.post("/{alert_id}/notify", response_model=CriticalResultsActionResponse)
 async def start_notification_protocol(
     alert_id: str,
-    current_user: User = Depends(
-        require_roles(
-            [
-                "LAB_TECH",
-                "LAB_SUPERVISOR",
-                "LAB_ADMIN",
-                "HOSPITAL_ADMIN",
-            ]
-        )
-    ),
+    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> CriticalResultsActionResponse:
     svc = LabCriticalResultsService(db, current_user.hospital_id)

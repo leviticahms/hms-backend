@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.routers.lab.rbac import LAB_GET_ROLES
+from app.api.v1.routers.lab.rbac import LAB_GET_ROLES, LAB_MUTATION_ROLES
 from app.core.security import require_roles
 from app.database.session import get_db_session
 from app.models.user import User
@@ -30,10 +30,7 @@ router = APIRouter(
     "",
     response_model=ReportGenerationListResponse,
     summary="List reports",
-    description=(
-        "RBAC: LAB_TECH, LAB_SUPERVISOR, LAB_ADMIN, PATHOLOGIST, HOSPITAL_ADMIN "
-        "(hospital admin has read access for oversight)."
-    ),
+    description="RBAC: LAB_TECH only.",
 )
 async def list_reports(
     search: Optional[str] = Query(None),
@@ -57,11 +54,7 @@ async def list_ready_tests(
 @router.post("/generate", response_model=GenerateReportResponse)
 async def generate_report(
     request: GenerateReportRequest,
-    current_user: User = Depends(
-        require_roles(
-            ["LAB_TECH", "LAB_SUPERVISOR", "LAB_ADMIN", "PATHOLOGIST", "HOSPITAL_ADMIN"]
-        )
-    ),
+    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> GenerateReportResponse:
     svc = LabReportGenerationService(db, current_user.hospital_id)
@@ -82,11 +75,7 @@ async def preview_report(
 @router.post("/{report_id}/print", response_model=PrintReportResponse)
 async def print_report(
     report_id: str,
-    current_user: User = Depends(
-        require_roles(
-            ["LAB_TECH", "LAB_SUPERVISOR", "LAB_ADMIN", "PATHOLOGIST", "HOSPITAL_ADMIN"]
-        )
-    ),
+    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> PrintReportResponse:
     svc = LabReportGenerationService(db, current_user.hospital_id)

@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.routers.lab.rbac import LAB_GET_ROLES
+from app.api.v1.routers.lab.rbac import LAB_GET_ROLES, LAB_MUTATION_ROLES
 from app.database.session import get_platform_db_session
 from app.models.user import User
 from app.core.security import require_roles
@@ -36,9 +36,7 @@ router = APIRouter(
 @router.post("/equipment", response_model=EquipmentResponse)
 async def create_equipment(
     equipment_data: EquipmentCreateRequest,
-    current_user: User = Depends(
-        require_roles(["LAB_ADMIN", "LAB_SUPERVISOR", "HOSPITAL_ADMIN", "LAB_TECH"])
-    ),
+    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
     db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:
@@ -111,9 +109,7 @@ async def get_equipment(
 async def update_equipment(
     equipment_id: uuid.UUID,
     equipment_data: EquipmentUpdateRequest,
-    current_user: User = Depends(
-        require_roles(["LAB_ADMIN", "LAB_SUPERVISOR", "HOSPITAL_ADMIN", "LAB_TECH"])
-    ),
+    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
     db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:
@@ -137,9 +133,7 @@ async def update_equipment(
 async def update_equipment_status(
     equipment_id: uuid.UUID,
     status_data: EquipmentStatusUpdateRequest,
-    current_user: User = Depends(
-        require_roles(["LAB_ADMIN", "LAB_SUPERVISOR", "HOSPITAL_ADMIN", "LAB_TECH"])
-    ),
+    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
     db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:
@@ -193,9 +187,7 @@ async def get_equipment_logs(
 async def create_maintenance_log(
     equipment_id: uuid.UUID,
     log_data: MaintenanceLogCreateRequest,
-    current_user: User = Depends(
-        require_roles(["LAB_ADMIN", "LAB_SUPERVISOR", "HOSPITAL_ADMIN", "LAB_TECH"])
-    ),
+    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
     db: AsyncSession = Depends(get_platform_db_session),
 ):
     try:

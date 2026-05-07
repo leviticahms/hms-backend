@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.routers.lab.rbac import LAB_GET_ROLES
+from app.api.v1.routers.lab.rbac import LAB_GET_ROLES, LAB_MUTATION_ROLES
 from app.core.security import require_roles
 from app.database.session import get_db_session
 from app.models.user import User
@@ -47,17 +47,7 @@ async def lookup_sample_barcode(
 @router.post("/simulate-scan", response_model=BarcodeLookupResponse)
 async def simulate_scan(
     barcode: str = Query(..., description="Barcode to look up (same as /lookup)."),
-    current_user: User = Depends(
-        require_roles(
-            [
-                "LAB_TECH",
-                "LAB_SUPERVISOR",
-                "LAB_ADMIN",
-                "PATHOLOGIST",
-                "HOSPITAL_ADMIN",
-            ]
-        )
-    ),
+    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> BarcodeLookupResponse:
     """UI helper for the scan modal — resolves a barcode against stored samples."""
@@ -68,16 +58,7 @@ async def simulate_scan(
 @router.post("/action", response_model=SampleActionResponse)
 async def apply_sample_status_action(
     request: SampleActionRequest,
-    current_user: User = Depends(
-        require_roles(
-            [
-                "LAB_TECH",
-                "LAB_SUPERVISOR",
-                "LAB_ADMIN",
-                "HOSPITAL_ADMIN",
-            ]
-        )
-    ),
+    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> SampleActionResponse:
     svc = LabSampleTrackingService(db, current_user.hospital_id)
