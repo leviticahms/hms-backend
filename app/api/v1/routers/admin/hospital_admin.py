@@ -15,7 +15,7 @@ from app.api.deps import (
     require_hospital_admin_context,
     get_current_hospital_context,
 )
-from app.core.database import get_platform_db_session
+from app.core.database import get_platform_db_session, resolve_tenant_database_name_for_hospital
 from app.dependencies.auth import require_hospital_context
 from app.schemas.plan_features import HospitalFeatureFlagsOut
 from app.services.subscription_feature_service import get_plan_info_for_hospital
@@ -48,10 +48,22 @@ router = APIRouter(prefix="/hospital-admin")
 
 async def get_hospital_admin_service(
     context: Dict[str, Any] = Depends(require_hospital_admin_context()),
-    db: AsyncSession = Depends(get_platform_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ) -> HospitalAdminService:
-    """Get Hospital Admin service instance with proper access control"""
-    return HospitalAdminService(db, context["hospital_id"])
+    """
+    Hospital-scoped data uses ``get_db_session`` (tenant DB when provisioned + routing on).
+
+    JWT/auth still resolves ``User`` from the platform DB, so when a sub-database is in use we
+    pass ``platform_db`` for mirroring staff users and roles after writes.
+    """
+    hid = uuid.UUID(str(context["hospital_id"]))
+    tenant_db_name = await resolve_tenant_database_name_for_hospital(hid)
+    return HospitalAdminService(
+        db,
+        hid,
+        platform_db=platform_db if tenant_db_name else None,
+    )
 
 
 # ============================================================================

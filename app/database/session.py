@@ -17,7 +17,7 @@ import logging
 import threading
 from typing import AsyncGenerator, Dict, Optional
 
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.requests import Request
 
@@ -29,6 +29,7 @@ from app.database.tenant_context import (
     invalidate_hospital_tenant_cache,
     resolve_tenant_database_name_for_hospital,
 )
+from app.database.ssl_connect import psycopg2_engine_connect_args
 from app.services.tenant_database_provisioning import sync_url_for_tenant_database
 
 logger = logging.getLogger(__name__)
@@ -39,13 +40,40 @@ _tenant_session_lock = threading.Lock()
 
 _schema_drift_applied: set[str] = set()
 _schema_drift_lock = threading.Lock()
+_base_schema_applied: set[str] = set()
+_base_schema_lock = threading.Lock()
 
 
-async def _ensure_schema_drift_for_sync_dsn(sync_dsn: str) -> None:
-    """Run patient + doctor column patches once per process per database URL (idempotent)."""
+def _ensure_base_schema_for_sync_dsn(sync_dsn: str) -> None:
+    """
+    Ensure complete SQLAlchemy model schema exists in target database.
+
+    This runs once per process per DSN and is idempotent. It guarantees every tenant DB
+    has all tables used by hospital modules (admin, lab, pharmacy, etc.).
+    """
     dsn = (sync_dsn or "").strip()
     if not dsn:
         return
+
+    eng = create_engine(dsn, connect_args=psycopg2_engine_connect_args())
+    try:
+        logger.info("Ensuring Base.metadata schema exists for %s", dsn)
+        Base.metadata.create_all(bind=eng)
+    finally:
+        eng.dispose()
+
+
+async def _ensure_schema_drift_for_sync_dsn(sync_dsn: str) -> None:
+    """Run base schema self-heal + drift patches once per process per database URL."""
+    dsn = (sync_dsn or "").strip()
+    if not dsn:
+        return
+    with _base_schema_lock:
+        needs_base_schema = dsn not in _base_schema_applied
+    if needs_base_schema:
+        await asyncio.to_thread(_ensure_base_schema_for_sync_dsn, dsn)
+        with _base_schema_lock:
+            _base_schema_applied.add(dsn)
     with _schema_drift_lock:
         if dsn in _schema_drift_applied:
             return

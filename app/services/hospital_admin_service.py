@@ -3,6 +3,7 @@ Hospital Admin service for hospital-level administrative operations.
 Handles department management, staff management, and hospital operations.
 CRITICAL: All operations are scoped to the hospital_id from JWT token.
 """
+import logging
 import re
 import uuid
 import random
@@ -21,6 +22,8 @@ from app.models.patient import PatientProfile
 from app.models.doctor import DoctorProfile
 from app.core.enums import UserRole, UserStatus
 from app.core.security import SecurityManager
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_doctor_lookup_string(ref: str) -> str:
@@ -231,12 +234,141 @@ _CANONICAL_ROLE_BY_NAME: Dict[str, Dict[str, Any]] = {
 
 
 class HospitalAdminService:
-    """Service class for Hospital Admin operations"""
+    """
+    Hospital Admin operations: departments, staff profiles, wards/beds, admissions, appointments,
+    patients (non-clinical), schedules. All business writes use ``self.db`` — the tenant sub-database
+    whenever routing + ``tenant_database_name`` apply. Mutations to ``users`` also sync to the
+    platform DB (via ``platform_db``) because authentication resolves users there.
+    """
     
-    def __init__(self, db: AsyncSession, hospital_id: uuid.UUID):
+    def __init__(
+        self,
+        db: AsyncSession,
+        hospital_id: uuid.UUID,
+        platform_db: Optional[AsyncSession] = None,
+    ):
         self.db = db
         self.hospital_id = hospital_id
+        self.platform_db = platform_db
         self.security = SecurityManager()
+
+    async def _safe_platform_mirror(self, coro) -> bool:
+        """
+        Best-effort platform mirror.
+
+        Tenant (sub-DB) persistence is the source of truth for hospital-scoped operations.
+        Mirror errors must never fail the primary request after tenant commit.
+        """
+        try:
+            await coro
+            return True
+        except HTTPException:
+            # Preserve tenant success even if mirror branch raises HTTPException.
+            try:
+                if self.platform_db is not None:
+                    await self.platform_db.rollback()
+            except Exception:
+                pass
+            logger.exception("Platform DB mirror HTTPException (ignored to preserve tenant write)")
+            return False
+        except Exception as e:
+            logger.exception("Platform DB mirror failed: %s", e)
+            # Best-effort rollback in case the platform session is left in failed state.
+            try:
+                if self.platform_db is not None:
+                    await self.platform_db.rollback()
+            except Exception:
+                pass
+
+            cause = (str(e) or type(e).__name__).strip()
+            if len(cause) > 900:
+                cause = cause[:900] + "…"
+            logger.error(
+                "Ignoring platform mirror failure to preserve tenant data flow. cause=%s: %s",
+                type(e).__name__,
+                cause,
+            )
+            return False
+
+    async def _get_or_create_role_on_platform(self, role_name: Any) -> Role:
+        """Return Role on platform DB for staff assignment (IDs differ from tenant roles)."""
+        if self.platform_db is None:
+            raise RuntimeError("platform_db is required for _get_or_create_role_on_platform")
+        rn = (role_name.value if isinstance(role_name, UserRole) else str(role_name or "")).strip()
+        result = await self.platform_db.execute(select(Role).where(Role.name == rn))
+        role = result.scalar_one_or_none()
+        if role:
+            return role
+        spec = _CANONICAL_ROLE_BY_NAME.get(rn)
+        if not spec:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "ROLE_NOT_FOUND", "message": f"Role {rn} not found"},
+            )
+        role = Role(
+            id=uuid.uuid4(),
+            name=rn,
+            display_name=spec["display_name"],
+            description=spec["description"],
+            level=spec["level"],
+        )
+        self.platform_db.add(role)
+        await self.platform_db.flush()
+        return role
+
+    async def _upsert_platform_user_from_tenant_row(self, tu: User) -> None:
+        """Copy tenant User row into the platform session (no commit)."""
+        if self.platform_db is None:
+            return
+        pu = await self.platform_db.get(User, tu.id)
+        data = {col.name: getattr(tu, col.name) for col in User.__table__.columns}
+        if pu:
+            for k, v in data.items():
+                if k != "id":
+                    setattr(pu, k, v)
+        else:
+            self.platform_db.add(User(**data))
+
+    async def _mirror_staff_auth_to_platform(self, user_id: uuid.UUID, role_name: Any) -> None:
+        """Mirror User + user_roles to platform so staff can authenticate."""
+        if self.platform_db is None:
+            return
+        from app.models.user import user_roles
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        tu = await self.db.get(User, user_id)
+        if not tu:
+            logger.warning("mirror staff auth: user %s missing from primary DB after commit", user_id)
+            return
+
+        await self._upsert_platform_user_from_tenant_row(tu)
+
+        plat_role = await self._get_or_create_role_on_platform(role_name)
+
+        # Idempotent link insert (no-op if already exists).
+        await self.platform_db.execute(
+            pg_insert(user_roles)
+            .values(user_id=user_id, role_id=plat_role.id)
+            .on_conflict_do_nothing(index_elements=["user_id", "role_id"])
+        )
+
+        await self.platform_db.commit()
+
+    async def _sync_user_row_to_platform_after_mutation(self, user_id: uuid.UUID) -> None:
+        """Mirror User row only (e.g. password reset, activation)."""
+        if self.platform_db is None:
+            return
+        tu = await self.db.get(User, user_id)
+        if not tu:
+            return
+        await self._upsert_platform_user_from_tenant_row(tu)
+        await self.platform_db.commit()
+
+    async def _mirror_platform_user_if_configured(self, user_id: uuid.UUID) -> None:
+        """After tenant ``users`` mutations, upsert the same row on platform (login resolves there)."""
+        if self.platform_db is None:
+            return
+        await self._safe_platform_mirror(self._sync_user_row_to_platform_after_mutation(user_id))
 
     async def _get_or_create_role_for_staff(self, role_name: Any) -> Role:
         """
@@ -774,21 +906,13 @@ class HospitalAdminService:
                         },
                     )
             else:
-                # DoctorProfile and StaffProfile both require department_id (non-null).
                 # If caller omits department_name, fallback to first active department.
+                # If none exists, still allow doctor account creation and assign later.
                 department_for_create = await self._get_first_department()
-                if not department_for_create:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail={
-                            "code": "DEPARTMENT_REQUIRED",
-                            "message": (
-                                "Doctor creation requires a department. "
-                                "Create at least one department or pass department_name."
-                            ),
-                        },
-                    )
-            dept_label = department_for_create.name
+            if department_for_create:
+                dept_label = department_for_create.name
+            else:
+                dept_label = "GENERAL"
         elif role_name in (UserRole.NURSE, UserRole.RECEPTIONIST):
             if dn:
                 department_for_create = await self._get_department_by_name(dn)
@@ -871,6 +995,8 @@ class HospitalAdminService:
             extra_md["specialization"] = spec
             extra_md.setdefault("doctor_experience_years", 0)
             extra_md.setdefault("consultation_fee", 0)
+            if not department_for_create:
+                extra_md["department_assignment_pending"] = True
 
         password_hash = self.security.hash_password(staff_data["password"])
         recv_profile_photo = None
@@ -1167,6 +1293,10 @@ class HospitalAdminService:
         resp_first = user.first_name
         resp_last = user.last_name
         await self.db.commit()
+        if self.platform_db is not None:
+            await self._safe_platform_mirror(
+                self._mirror_staff_auth_to_platform(user.id, role_name)
+            )
 
         staff_name = f"{resp_first} {resp_last}"
         if role_name == UserRole.DOCTOR:
@@ -1656,6 +1786,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.DOCTOR.value,
@@ -1751,6 +1882,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.NURSE.value,
@@ -1856,6 +1988,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.RECEPTIONIST.value,
@@ -1887,6 +2020,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.LAB_TECH.value,
@@ -1918,6 +2052,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.PHARMACIST.value,
@@ -1966,6 +2101,7 @@ class HospitalAdminService:
             user.status = UserStatus.ACTIVE.value
         
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         
         status_text = "activated" if is_active else "deactivated"
         status_str = (
@@ -2024,6 +2160,7 @@ class HospitalAdminService:
         user.updated_at = datetime.utcnow()
         
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         
         return {
             "user_id": str(user.id),
@@ -2985,6 +3122,7 @@ class HospitalAdminService:
             patient.user.status = UserStatus.ACTIVE.value
         
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(patient.user.id)
         
         status_text = "activated" if is_active else "deactivated"
         
@@ -5838,6 +5976,7 @@ class HospitalAdminService:
                 receptionist_profile_created = True
 
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(staff_member.id)
         
         return {
             "staff_name": staff_name,

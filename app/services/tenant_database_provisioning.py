@@ -267,6 +267,7 @@ def bootstrap_tenant_database(db_name: str, hospital: Any, created_from_template
     """
     After CREATE DATABASE: apply schema (if empty DB) and insert this hospital row in the tenant DB.
     """
-    if not created_from_template:
-        ensure_tenant_schema(db_name)
+    # Always run schema ensure. It is idempotent and protects against stale templates
+    # that may miss newly-added tables (e.g. users/roles).
+    ensure_tenant_schema(db_name)
     copy_hospital_registry_row_to_tenant(db_name, hospital)
