@@ -38,6 +38,11 @@ class LabProfileService:
         row = (
             await self.db.execute(select(LabProfileConfig).where(LabProfileConfig.hospital_id == self.hospital_id))
         ).scalar_one_or_none()
+        def _str_or_blank(value) -> str:
+            if value is None:
+                return ""
+            return str(value)
+
         settings_blk = LabSettingsBlock(
             auto_print_reports=False,
             email_notifications=False,
@@ -53,23 +58,23 @@ class LabProfileService:
             ),
             stats=LabProfileStats(total_tests=0, total_staff=0, equipment=0, branches=0),
             lab_information=LabInfoBlock(
-                lab_id=row.lab_id if row else blank,
-                lab_name=row.lab_name if row else blank,
-                lab_type=row.lab_type if row else blank,
-                registration_number=row.registration_number if row else blank,
-                established_date=row.established_date if row else blank,
-                accreditation=row.accreditation if row else blank,
-                accreditation_number=row.accreditation_number if row else blank,
+                lab_id=_str_or_blank(row.lab_id) if row else blank,
+                lab_name=_str_or_blank(row.lab_name) if row else blank,
+                lab_type=_str_or_blank(row.lab_type) if row else blank,
+                registration_number=_str_or_blank(row.registration_number) if row else blank,
+                established_date=_str_or_blank(row.established_date) if row else blank,
+                accreditation=_str_or_blank(row.accreditation) if row else blank,
+                accreditation_number=_str_or_blank(row.accreditation_number) if row else blank,
             ),
             contact_information=ContactInfoBlock(
-                address=row.address if row else blank,
-                city=row.city if row else blank,
-                state=row.state if row else blank,
-                pincode=row.pincode if row else blank,
-                phone=row.phone if row else blank,
-                emergency_phone=row.emergency_phone if row else blank,
-                email=row.email if row else blank,
-                website=row.website if row else blank,
+                address=_str_or_blank(row.address) if row else blank,
+                city=_str_or_blank(row.city) if row else blank,
+                state=_str_or_blank(row.state) if row else blank,
+                pincode=_str_or_blank(row.pincode) if row else blank,
+                phone=_str_or_blank(row.phone) if row else blank,
+                emergency_phone=_str_or_blank(row.emergency_phone) if row else blank,
+                email=_str_or_blank(row.email) if row else blank,
+                website=_str_or_blank(row.website) if row else blank,
             ),
             facilities=FacilitiesBlock(
                 total_area_sqft=0,
