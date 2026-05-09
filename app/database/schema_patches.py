@@ -8,12 +8,28 @@ columns present without requiring manual SQL on every deploy.
 from __future__ import annotations
 
 import logging
+import uuid
 
 from sqlalchemy import create_engine, inspect, text
 
 from app.database.ssl_connect import psycopg2_engine_connect_args
 
 logger = logging.getLogger(__name__)
+
+_REQUIRED_ROLE_SPECS: list[dict[str, object]] = [
+    {"name": "SUPER_ADMIN", "display_name": "Super Administrator", "description": "Platform Super Administrator", "level": 100},
+    {"name": "HOSPITAL_ADMIN", "display_name": "Hospital Administrator", "description": "Hospital Administrator", "level": 90},
+    {"name": "DOCTOR", "display_name": "Doctor", "description": "Medical Doctor", "level": 80},
+    {"name": "PATHOLOGIST", "display_name": "Pathologist", "description": "Pathologist - signs off on lab results", "level": 78},
+    {"name": "NURSE", "display_name": "Nurse", "description": "Registered Nurse", "level": 70},
+    {"name": "PHARMACIST", "display_name": "Pharmacist", "description": "Licensed Pharmacist", "level": 65},
+    {"name": "LAB_ADMIN", "display_name": "Lab Administrator", "description": "Laboratory Department Administrator", "level": 64},
+    {"name": "LAB_SUPERVISOR", "display_name": "Lab Supervisor", "description": "Laboratory Supervisor - verifies and releases results", "level": 63},
+    {"name": "LAB_TECH", "display_name": "Lab Technician", "description": "Laboratory Technician", "level": 62},
+    {"name": "RECEPTIONIST", "display_name": "Receptionist", "description": "Front Desk Receptionist", "level": 60},
+    {"name": "STAFF", "display_name": "Staff", "description": "General Staff Member", "level": 50},
+    {"name": "PATIENT", "display_name": "Patient", "description": "Hospital Patient", "level": 10},
+]
 
 
 def _sync_url_from_env_async(async_url: str) -> str:
@@ -134,6 +150,58 @@ def ensure_core_schema_drift_fixes_for_database(sync_dsn: str) -> None:
     """
     ensure_patient_profiles_opd_schema(sync_dsn)
     ensure_doctor_profiles_consultation_schema(sync_dsn)
+    ensure_required_roles_catalog(sync_dsn)
+
+
+def ensure_required_roles_catalog(sync_dsn: str) -> None:
+    """
+    Ensure all canonical RBAC roles exist in this database.
+
+    Tenant DBs are frequently created from partial schema/template snapshots where
+    only a subset of roles may exist. This keeps `roles` complete and consistent.
+    """
+    dsn = (sync_dsn or "").strip()
+    if not dsn:
+        logger.warning("ensure_required_roles_catalog: empty DSN, skipping")
+        return
+
+    eng = create_engine(dsn, connect_args=psycopg2_engine_connect_args())
+    try:
+        insp = inspect(eng)
+        if not insp.has_table("roles"):
+            logger.debug("roles table missing; skipping role catalog seed")
+            return
+
+        with eng.begin() as conn:
+            existing = {
+                row[0]
+                for row in conn.execute(text("SELECT name FROM roles")).fetchall()
+                if row and row[0]
+            }
+            for role in _REQUIRED_ROLE_SPECS:
+                name = str(role["name"])
+                if name in existing:
+                    continue
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO roles (id, name, display_name, description, is_system_role, level, is_active)
+                        VALUES (:id, :name, :display_name, :description, :is_system_role, :level, :is_active)
+                        ON CONFLICT (name) DO NOTHING
+                        """
+                    ),
+                    {
+                        "id": uuid.uuid4(),
+                        "name": name,
+                        "display_name": role["display_name"],
+                        "description": role["description"],
+                        "is_system_role": True,
+                        "level": int(role["level"]),
+                        "is_active": True,
+                    },
+                )
+    finally:
+        eng.dispose()
 
 
 def ensure_doctor_profiles_consultation_schema(sync_dsn: str) -> None:
