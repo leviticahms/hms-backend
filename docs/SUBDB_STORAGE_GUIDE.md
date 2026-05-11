@@ -103,6 +103,10 @@ Use these files as the primary touchpoints:
   - `app/services/*lab*.py`
   - `app/services/*pharmacy*.py`
 
+## Pharmacy UI ↔ API map
+
+See **`docs/PHARMACY_SIDEBAR_API_MAP.md`** for pharmacist sidebar items (dashboard, inventory, settings, PO, sales, etc.) and the exact HTTP routes. New portal routes use the same tenant session as the rest of the pharmacy module.
+
 ## Coding pattern for sub-DB
 
 Use this pattern for hospital-scoped endpoints:

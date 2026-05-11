@@ -2,7 +2,7 @@
 Pharmacy Service - Business logic for pharmacy operations
 """
 from decimal import Decimal
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, or_, func, cast, Date
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Any
 from uuid import UUID, uuid4
@@ -11,7 +11,9 @@ from datetime import datetime, date, timezone
 from sqlalchemy.exc import IntegrityError
 
 from app.repositories.pharmacy_repository import PharmacyRepository
-from app.models.pharmacy import Medicine, Supplier, StockBatch
+from app.models.pharmacy import Medicine, Supplier, StockBatch, PurchaseOrder, Sale
+from app.models.tenant import Hospital
+from app.core.enums import PurchaseOrderStatus, SupplierStatus
 from app.core.exceptions import BusinessLogicError
 
 
@@ -1021,4 +1023,207 @@ class PharmacyService:
     ):
         """Profit margin report by medicine (revenue - cost from sale items)."""
         return await self.repo.report_profit_margins(hospital_id, from_date, to_date)
+
+    # ============================================================================
+    # DASHBOARD / INVENTORY / UI SETTINGS (tenant DB)
+    # ============================================================================
+
+    async def get_dashboard_overview(self, hospital_id: UUID) -> dict[str, Any]:
+        """Aggregate KPIs for pharmacist dashboard (reads only tenant tables)."""
+        med_cnt = (
+            await self.db.execute(
+                select(func.count()).select_from(Medicine).where(
+                    and_(Medicine.hospital_id == hospital_id, Medicine.is_active == True)
+                )
+            )
+        ).scalar_one()
+        sup_cnt = (
+            await self.db.execute(
+                select(func.count()).select_from(Supplier).where(
+                    and_(
+                        Supplier.hospital_id == hospital_id,
+                        Supplier.status == SupplierStatus.ACTIVE.value,
+                    )
+                )
+            )
+        ).scalar_one()
+        pending_po_statuses = (
+            PurchaseOrderStatus.DRAFT.value,
+            PurchaseOrderStatus.PENDING.value,
+            PurchaseOrderStatus.APPROVED.value,
+            PurchaseOrderStatus.SENT.value,
+            PurchaseOrderStatus.PARTIALLY_RECEIVED.value,
+        )
+        pending_pos = (
+            await self.db.execute(
+                select(func.count()).select_from(PurchaseOrder).where(
+                    and_(
+                        PurchaseOrder.hospital_id == hospital_id,
+                        PurchaseOrder.status.in_(pending_po_statuses),
+                    )
+                )
+            )
+        ).scalar_one()
+        today = date.today()
+        sales_today = (
+            await self.db.execute(
+                select(func.count()).select_from(Sale).where(
+                    and_(
+                        Sale.hospital_id == hospital_id,
+                        cast(Sale.created_at, Date) == today,
+                    )
+                )
+            )
+        ).scalar_one()
+        return {
+            "medicines_count": int(med_cnt or 0),
+            "active_suppliers_count": int(sup_cnt or 0),
+            "pending_purchase_orders_count": int(pending_pos or 0),
+            "sales_today_count": int(sales_today or 0),
+        }
+
+    async def list_inventory_summary(
+        self,
+        hospital_id: UUID,
+        *,
+        search: Optional[str] = None,
+        category: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """
+        One row per medicine with aggregated on-hand qty and nearest expiry (inventory screen).
+        """
+        filters = [
+            Medicine.hospital_id == hospital_id,
+            Medicine.is_active == True,
+        ]
+        if search and str(search).strip():
+            term = f"%{search.strip()}%"
+            filters.append(
+                or_(
+                    Medicine.generic_name.ilike(term),
+                    Medicine.brand_name.ilike(term),
+                    Medicine.sku.ilike(term),
+                )
+            )
+        if category and str(category).strip():
+            filters.append(Medicine.category == category.strip())
+
+        total = (
+            await self.db.execute(select(func.count()).select_from(Medicine).where(and_(*filters)))
+        ).scalar_one()
+
+        total_qty = func.coalesce(func.sum(StockBatch.qty_on_hand), 0).label("total_qty")
+        nearest_exp = func.min(StockBatch.expiry_date).label("nearest_expiry")
+        unit_price = func.min(StockBatch.selling_price).label("unit_price")
+
+        q = (
+            select(
+                Medicine.id,
+                Medicine.generic_name,
+                Medicine.brand_name,
+                Medicine.strength,
+                Medicine.category,
+                Medicine.reorder_level,
+                Medicine.sku,
+                total_qty,
+                nearest_exp,
+                unit_price,
+            )
+            .select_from(Medicine)
+            .outerjoin(
+                StockBatch,
+                and_(
+                    StockBatch.medicine_id == Medicine.id,
+                    StockBatch.hospital_id == hospital_id,
+                    StockBatch.is_active == True,
+                ),
+            )
+            .where(and_(*filters))
+            .group_by(
+                Medicine.id,
+                Medicine.generic_name,
+                Medicine.brand_name,
+                Medicine.strength,
+                Medicine.category,
+                Medicine.reorder_level,
+                Medicine.sku,
+            )
+            .order_by(Medicine.generic_name.asc())
+            .offset(skip)
+            .limit(limit)
+        )
+        rows = (await self.db.execute(q)).all()
+
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            tid, gname, bname, strength, cat, reorder, sku, tqty, nexp, uprice = r
+            qty = float(tqty or 0)
+            reorder_i = int(reorder or 0)
+            if qty <= 0:
+                st = "OUT_OF_STOCK"
+            elif reorder_i > 0 and qty <= float(reorder_i):
+                st = "LOW_STOCK"
+            else:
+                st = "IN_STOCK"
+            items.append(
+                {
+                    "medicine_id": str(tid),
+                    "display_name": f"{gname or ''} {strength or ''}".strip(),
+                    "generic_name": gname,
+                    "brand_name": bname,
+                    "strength": strength,
+                    "category": cat,
+                    "sku": sku,
+                    "stock_units": qty,
+                    "unit_price": float(uprice) if uprice is not None else None,
+                    "nearest_expiry": nexp.isoformat() if nexp else None,
+                    "reorder_level": reorder_i,
+                    "status": st,
+                }
+            )
+        return {"total": int(total or 0), "items": items}
+
+    async def get_pharmacy_ui_settings(self, hospital_id: UUID) -> dict[str, Any]:
+        """Pharmacy UI settings stored under hospitals.settings['pharmacy_ui'] (tenant row)."""
+        h = await self.db.get(Hospital, hospital_id)
+        root = dict(h.settings or {}) if h else {}
+        cur = dict(root.get("pharmacy_ui") or {})
+        defaults = {
+            "general": {
+                "pharmacy_name": "",
+                "pharmacy_address": "",
+                "phone": "",
+                "email": "",
+            },
+            "notifications": {
+                "low_stock_alerts": True,
+                "expiry_alerts": True,
+                "purchase_order_updates": True,
+                "sales_reports_email": False,
+            },
+        }
+        merged = {
+            "general": {**defaults["general"], **dict(cur.get("general") or {})},
+            "notifications": {**defaults["notifications"], **dict(cur.get("notifications") or {})},
+        }
+        return merged
+
+    async def update_pharmacy_ui_settings(self, hospital_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+        h = await self.db.get(Hospital, hospital_id)
+        if not h:
+            raise BusinessLogicError("Hospital not found in tenant database")
+        root = dict(h.settings or {})
+        cur = dict(root.get("pharmacy_ui") or {})
+        if "general" in payload and isinstance(payload["general"], dict):
+            cur["general"] = {**dict(cur.get("general") or {}), **payload["general"]}
+        if "notifications" in payload and isinstance(payload["notifications"], dict):
+            cur["notifications"] = {**dict(cur.get("notifications") or {}), **payload["notifications"]}
+        root["pharmacy_ui"] = cur
+        h.settings = root
+        h.updated_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        await self.db.refresh(h)
+        return await self.get_pharmacy_ui_settings(hospital_id)
 

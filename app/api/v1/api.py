@@ -176,7 +176,8 @@ try:
     from app.api.v1.routers.pharmacy.returns import router as pharmacy_returns_router
     from app.api.v1.routers.pharmacy.alerts import router as pharmacy_alerts_router
     from app.api.v1.routers.pharmacy.reports import router as pharmacy_reports_router
-    
+    from app.api.v1.routers.pharmacy.pharmacy_portal import router as pharmacy_portal_router
+
     api_router.include_router(
         pharmacy_medicines_router, prefix="/pharmacy", tags=["Pharmacy - Medicines"], dependencies=_pharmacy_dep
     )
@@ -201,7 +202,10 @@ try:
     api_router.include_router(
         pharmacy_reports_router, prefix="/pharmacy", tags=["Pharmacy - Reports"], dependencies=_pharmacy_dep
     )
-    logger.info("✓ Pharmacy routers loaded (9 routers - complete module)")
+    api_router.include_router(
+        pharmacy_portal_router, prefix="/pharmacy", tags=["Pharmacy - Portal"], dependencies=_pharmacy_dep
+    )
+    logger.info("✓ Pharmacy routers loaded (10 routers - complete module)")
 except ImportError as e:
     logger.error(f"✗ Failed to load pharmacy routers: {e}")
 
