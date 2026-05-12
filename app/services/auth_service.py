@@ -990,6 +990,10 @@ class AuthService:
         normalized_email = (email or "").strip().lower()
         user = await self._get_user_by_email(normalized_email)
         if not user:
+            # Staff (e.g. pharmacist) may exist only in a tenant DB if platform mirror failed earlier.
+            await self._heal_platform_auth_row_from_tenant_by_email(normalized_email)
+            user = await self._get_user_by_email(normalized_email)
+        if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"code": "AUTH_001", "message": "Invalid credentials"}
@@ -1440,6 +1444,125 @@ class AuthService:
             .where(func.lower(func.trim(User.email)) == normalized_email)
         )
         return result.scalar_one_or_none()
+
+    async def _heal_platform_auth_row_from_tenant_by_email(self, normalized_email: str) -> None:
+        """
+        Copy a staff user from a tenant DB onto the platform DB when missing.
+
+        Login always reads ``users`` from the platform session. If hospital-admin staff creation
+        committed to the tenant but the platform mirror failed (best-effort), pharmacists and other
+        staff cannot sign in until this heal runs.
+        """
+        if not normalized_email:
+            return
+
+        from sqlalchemy.orm import selectinload
+
+        from app.database.session import get_tenant_session_factory
+        from app.services.hospital_admin_service import _CANONICAL_ROLE_BY_NAME
+
+        # Do not pull self-registered patients through this path (they use patient login).
+        non_patient_staff_roles = {
+            "SUPER_ADMIN",
+            "HOSPITAL_ADMIN",
+            "DOCTOR",
+            "NURSE",
+            "RECEPTIONIST",
+            "PHARMACIST",
+            "LAB_TECH",
+            "LAB_ADMIN",
+            "LAB_SUPERVISOR",
+            "PATHOLOGIST",
+        }
+
+        res = await self.db.execute(
+            select(Hospital.tenant_database_name).where(
+                and_(
+                    Hospital.tenant_database_name.isnot(None),
+                    Hospital.tenant_database_name != "",
+                )
+            )
+        )
+        tenant_db_names = [str(row[0]).strip() for row in res.all() if row[0] and str(row[0]).strip()]
+
+        for db_name in tenant_db_names:
+            tu: Optional[User] = None
+            try:
+                fac = get_tenant_session_factory(db_name)
+                async with fac() as tdb:
+                    r = await tdb.execute(
+                        select(User)
+                        .options(selectinload(User.roles))
+                        .where(func.lower(func.trim(User.email)) == normalized_email)
+                    )
+                    tu = r.scalar_one_or_none()
+            except Exception:
+                logger.exception(
+                    "Auth heal: tenant lookup failed db=%s email=%s",
+                    db_name,
+                    normalized_email,
+                )
+                continue
+
+            if not tu:
+                continue
+
+            names = [getattr(role, "name", None) for role in (tu.roles or [])]
+            names = [n for n in names if n]
+            if not any(n in non_patient_staff_roles for n in names):
+                continue
+
+            try:
+                data = {c.name: getattr(tu, c.name) for c in User.__table__.columns}
+                pu = await self.db.get(User, tu.id)
+                if pu:
+                    for k, v in data.items():
+                        if k != "id":
+                            setattr(pu, k, v)
+                else:
+                    self.db.add(User(**data))
+                await self.db.flush()
+
+                for role in tu.roles or []:
+                    rn = getattr(role, "name", None)
+                    if not rn or rn not in non_patient_staff_roles:
+                        continue
+                    pr = await self.db.execute(select(Role).where(Role.name == rn))
+                    plat_role = pr.scalar_one_or_none()
+                    if not plat_role:
+                        spec = _CANONICAL_ROLE_BY_NAME.get(rn)
+                        if not spec:
+                            continue
+                        plat_role = Role(
+                            id=uuid.uuid4(),
+                            name=rn,
+                            display_name=spec["display_name"],
+                            description=spec["description"],
+                            level=int(spec["level"]),
+                            is_system_role=True,
+                        )
+                        self.db.add(plat_role)
+                        await self.db.flush()
+                    await self.db.execute(
+                        pg_insert(user_roles)
+                        .values(user_id=tu.id, role_id=plat_role.id)
+                        .on_conflict_do_nothing(index_elements=["user_id", "role_id"])
+                    )
+
+                await self.db.commit()
+                logger.info(
+                    "Auth heal: synced staff user from tenant db=%s to platform email=%s",
+                    db_name,
+                    normalized_email,
+                )
+                return
+            except Exception:
+                await self.db.rollback()
+                logger.exception(
+                    "Auth heal: platform upsert failed from tenant db=%s email=%s",
+                    db_name,
+                    normalized_email,
+                )
     
     async def _get_user_by_id(self, user_id: uuid.UUID) -> Optional[User]:
         """Get user by ID with roles loaded"""
