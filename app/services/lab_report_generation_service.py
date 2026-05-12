@@ -11,7 +11,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.lab_portal import LabReportReadyTest, LabReportRecord
+from app.models.lab_portal import LabReportRecord, LabReportReadyTest, LabTestRegistration
 from app.schemas.lab_report_generation import (
     GenerateReportRequest,
     GenerateReportResponse,
@@ -92,20 +92,54 @@ class LabReportGenerationService:
             LabReportReadyTest.source_test_id == sid,
         )
         ready = (await self.db.execute(stmt)).scalar_one_or_none()
-        if ready is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No ready test found for source_test_id={sid!r}.",
+
+        patient_name: str
+        patient_ref: str
+        doctor_name: Optional[str]
+        test_type: str
+
+        if ready is not None:
+            patient_name = ready.patient_name
+            patient_ref = ready.patient_ref or ""
+            doctor_name = ready.doctor_name
+            test_type = ready.test_type
+        else:
+            # UI often passes ``test_id`` from test registration (e.g. REG-...), not only ``lab_report_ready_tests``.
+            reg_stmt = select(LabTestRegistration).where(
+                LabTestRegistration.hospital_id == self.hospital_id,
+                LabTestRegistration.test_id == sid,
             )
+            reg = (await self.db.execute(reg_stmt)).scalar_one_or_none()
+            if reg is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=(
+                        f"No ready test or registered lab test found for source_test_id={sid!r}. "
+                        "Use GET /lab/report-generation/ready-tests for ready rows, or a valid test registration id."
+                    ),
+                )
+            if reg.status != "COMPLETED":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Registered test {sid!r} has status {reg.status!r}. "
+                        "Set status to COMPLETED via PATCH /api/v1/lab/test-registration/{test_id}/status before generating a report."
+                    ),
+                )
+            patient_name = reg.patient_name
+            patient_ref = reg.patient_ref or ""
+            doctor_name = reg.doctor_name
+            test_type = reg.test_type
+
         rid = f"REP-{uuid.uuid4().hex[:12].upper()}"
         tpl = _normalize_template(payload.template)
         rec = LabReportRecord(
             hospital_id=self.hospital_id,
             report_id=rid,
-            patient_ref=ready.patient_ref or "",
-            patient_name=ready.patient_name,
-            doctor_name=ready.doctor_name,
-            test_type=ready.test_type,
+            patient_ref=patient_ref,
+            patient_name=patient_name,
+            doctor_name=doctor_name,
+            test_type=test_type,
             completion_date=datetime.now(timezone.utc).date(),
             status="READY",
             verified_by=None,

@@ -849,9 +849,12 @@ class AuthService:
             )
 
         sub_result = await self.db.execute(
-            select(HospitalSubscription).where(HospitalSubscription.hospital_id == user.hospital_id)
+            select(HospitalSubscription)
+            .where(HospitalSubscription.hospital_id == user.hospital_id)
+            .order_by(HospitalSubscription.created_at.desc())
+            .limit(1)
         )
-        subscription = sub_result.scalar_one_or_none()
+        subscription = sub_result.scalars().first()
         if not subscription:
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
@@ -987,12 +990,18 @@ class AuthService:
 
         Patients must use the dedicated patient login endpoint.
         """
+        from app.core.role_aliases import normalize_staff_role_name, user_can_use_staff_login
+
         normalized_email = (email or "").strip().lower()
         user = await self._get_user_by_email(normalized_email)
         if not user:
-            # Staff (e.g. pharmacist) may exist only in a tenant DB if platform mirror failed earlier.
             await self._heal_platform_auth_row_from_tenant_by_email(normalized_email)
             user = await self._get_user_by_email(normalized_email)
+        else:
+            probe = [role.name for role in (user.roles or [])]
+            if not user_can_use_staff_login(probe):
+                await self._heal_platform_auth_row_from_tenant_by_email(normalized_email)
+                user = await self._get_user_by_email(normalized_email)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1001,15 +1010,9 @@ class AuthService:
 
         user_roles = [role.name for role in user.roles] if user.roles else []
 
-        staff_roles = ["DOCTOR", "NURSE", "RECEPTIONIST", "PHARMACIST", "LAB_TECH"]
-        has_allowed_role = (
-            "SUPER_ADMIN" in user_roles
-            or "HOSPITAL_ADMIN" in user_roles
-            or any(role in user_roles for role in staff_roles)
-        )
-
-        if not has_allowed_role:
-            if "PATIENT" in user_roles:
+        if not user_can_use_staff_login(user_roles):
+            norm = {normalize_staff_role_name(r) for r in user_roles if r}
+            if "PATIENT" in norm:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={"code": "AUTH_002", "message": "Patient accounts must use patient login"}
@@ -1077,9 +1080,12 @@ class AuthService:
     
     async def _generate_auth_response(self, user) -> Dict[str, Any]:
         """Generate authentication response with tokens"""
+        from app.core.role_aliases import normalize_staff_role_name
+
         # Create JWT payload (defensive: tolerate missing roles/permissions on inconsistent seed data).
         roles = list(getattr(user, "roles", None) or [])
-        user_roles = [str(getattr(role, "name", "")).strip() for role in roles if getattr(role, "name", None)]
+        raw_names = [str(getattr(role, "name", "")).strip() for role in roles if getattr(role, "name", None)]
+        user_roles = list(dict.fromkeys(normalize_staff_role_name(r) for r in raw_names if r))
         user_permissions: List[str] = []
         for role in roles:
             for permission in (getattr(role, "permissions", None) or []):
@@ -1460,6 +1466,7 @@ class AuthService:
 
         from app.database.session import get_tenant_session_factory
         from app.services.hospital_admin_service import _CANONICAL_ROLE_BY_NAME
+        from app.core.role_aliases import normalize_staff_role_name
 
         # Do not pull self-registered patients through this path (they use patient login).
         non_patient_staff_roles = {
@@ -1509,7 +1516,8 @@ class AuthService:
 
             names = [getattr(role, "name", None) for role in (tu.roles or [])]
             names = [n for n in names if n]
-            if not any(n in non_patient_staff_roles for n in names):
+            canon = {normalize_staff_role_name(n) for n in names}
+            if not (canon & non_patient_staff_roles):
                 continue
 
             try:
@@ -1525,17 +1533,20 @@ class AuthService:
 
                 for role in tu.roles or []:
                     rn = getattr(role, "name", None)
-                    if not rn or rn not in non_patient_staff_roles:
+                    if not rn:
                         continue
-                    pr = await self.db.execute(select(Role).where(Role.name == rn))
+                    canonical = normalize_staff_role_name(rn)
+                    if canonical not in non_patient_staff_roles:
+                        continue
+                    pr = await self.db.execute(select(Role).where(Role.name == canonical))
                     plat_role = pr.scalar_one_or_none()
                     if not plat_role:
-                        spec = _CANONICAL_ROLE_BY_NAME.get(rn)
+                        spec = _CANONICAL_ROLE_BY_NAME.get(canonical)
                         if not spec:
                             continue
                         plat_role = Role(
                             id=uuid.uuid4(),
-                            name=rn,
+                            name=canonical,
                             display_name=spec["display_name"],
                             description=spec["description"],
                             level=int(spec["level"]),

@@ -159,14 +159,17 @@ def _safe_decimal(val: Any) -> Decimal:
         return Decimal("0")
 
 
-# Role.name in DB is VARCHAR; SQLAlchemy must compare to string literals, not Enum instances (avoids DB errors).
-_STAFF_ROLE_VALUES_ORDERED: List[str] = [
-    UserRole.DOCTOR.value,
-    UserRole.NURSE.value,
-    UserRole.RECEPTIONIST.value,
-    UserRole.LAB_TECH.value,
-    UserRole.PHARMACIST.value,
-]
+from app.core.role_aliases import (
+    STAFF_ROLE_ORDER,
+    all_sql_role_names_for_staff_directory,
+    normalize_staff_role_name,
+    primary_staff_role_for_display,
+    role_name_variants_for_sql_filter,
+    user_can_use_staff_login,
+)
+
+# Back-compat: ordered canonical staff role strings for queries / UI.
+_STAFF_ROLE_VALUES_ORDERED: List[str] = list(STAFF_ROLE_ORDER)
 
 # Same definitions as main.py seed_superadmin(); tenant DBs get schema via Alembic but often have no role rows.
 _CANONICAL_ROLE_BY_NAME: Dict[str, Dict[str, Any]] = {
@@ -1366,9 +1369,10 @@ class HospitalAdminService:
         normalized_role_filter = (role_filter or "").strip().upper() if role_filter else None
 
         if normalized_role_filter:
-            query = query.join(User.roles).where(Role.name == normalized_role_filter)
+            variants = role_name_variants_for_sql_filter(normalized_role_filter)
+            query = query.join(User.roles).where(Role.name.in_(variants))
         else:
-            query = query.join(User.roles).where(Role.name.in_(_STAFF_ROLE_VALUES_ORDERED))
+            query = query.join(User.roles).where(Role.name.in_(all_sql_role_names_for_staff_directory()))
         
         if active_only:
             query = query.where(User.is_active == True)
@@ -1376,9 +1380,10 @@ class HospitalAdminService:
         # Get total count (same role filter as list query)
         count_query = select(func.count(User.id)).where(User.hospital_id == self.hospital_id)
         if normalized_role_filter:
-            count_query = count_query.join(User.roles).where(Role.name == normalized_role_filter)
+            variants = role_name_variants_for_sql_filter(normalized_role_filter)
+            count_query = count_query.join(User.roles).where(Role.name.in_(variants))
         else:
-            count_query = count_query.join(User.roles).where(Role.name.in_(_STAFF_ROLE_VALUES_ORDERED))
+            count_query = count_query.join(User.roles).where(Role.name.in_(all_sql_role_names_for_staff_directory()))
         if active_only:
             count_query = count_query.where(User.is_active == True)
         
@@ -1394,10 +1399,7 @@ class HospitalAdminService:
         staff_list = []
         for user in users:
             user_roles = [role.name for role in user.roles]
-            primary_role = next(
-                (r for r in _STAFF_ROLE_VALUES_ORDERED if r in user_roles),
-                None,
-            )
+            primary_role = primary_staff_role_for_display(user_roles)
             md = user.user_metadata or {}
             joining = md.get("joining_date")
             specialization = None
@@ -1487,16 +1489,13 @@ class HospitalAdminService:
             )
         
         user_roles = [role.name for role in user.roles]
-        if not any(r in _STAFF_ROLE_VALUES_ORDERED for r in user_roles):
+        primary_role = primary_staff_role_for_display(user_roles)
+        if not primary_role:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "NOT_STAFF_USER", "message": "User is not a staff member"}
             )
 
-        primary_role = next(
-            (r for r in _STAFF_ROLE_VALUES_ORDERED if r in user_roles),
-            None,
-        )
         md = user.user_metadata or {}
         joining = md.get("joining_date")
         shift_timing = md.get("shift_timing")
@@ -2083,7 +2082,7 @@ class HospitalAdminService:
         
         # Check if user has staff role
         user_roles = [role.name for role in user.roles]
-        if not any(r in _STAFF_ROLE_VALUES_ORDERED for r in user_roles):
+        if primary_staff_role_for_display(user_roles) is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "NOT_STAFF_USER", "message": "User is not a staff member"}
@@ -2142,7 +2141,7 @@ class HospitalAdminService:
             )
         
         user_roles = [role.name for role in user.roles]
-        if not any(r in _STAFF_ROLE_VALUES_ORDERED for r in user_roles):
+        if primary_staff_role_for_display(user_roles) is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "NOT_STAFF_USER", "message": "User is not a staff member"}
