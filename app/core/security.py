@@ -2,6 +2,7 @@
 Security utilities for authentication and authorization.
 Handles JWT tokens, password hashing, and permission checking.
 """
+import uuid
 from datetime import datetime, timedelta
 from typing import Any, List, Optional
 from passlib.context import CryptContext
@@ -134,6 +135,38 @@ class SecurityManager:
             )
 
 
+def _jwt_sub_as_uuid(raw: Any) -> uuid.UUID:
+    """Parse JWT `sub` as UUID; invalid values yield 401 (never pass bad strings to the DB driver)."""
+    if raw is None or str(raw).strip() == "":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+        )
+    try:
+        return uuid.UUID(str(raw).strip())
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user id in token",
+        )
+
+
+def _jwt_hospital_id_as_uuid(raw: Any) -> Optional[uuid.UUID]:
+    """
+    Parse optional JWT hospital_id. Treat empty / JS sentinels / malformed strings as absent
+    so asyncpg never receives non-UUID strings for UUID columns (avoids 500 on staff routes).
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if s.lower() in ("", "none", "null", "undefined"):
+        return None
+    try:
+        return uuid.UUID(s)
+    except ValueError:
+        return None
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_platform_db_session),
@@ -149,30 +182,22 @@ async def get_current_user(
     # Verify token
     payload = SecurityManager.verify_token(credentials.credentials)
     
-    # Extract user information
-    user_id = payload.get("sub")  # Use "sub" as per JWT standard
-    hospital_id = payload.get("hospital_id")
-    if hospital_id is not None and str(hospital_id).strip().lower() in ("", "none", "null"):
-        hospital_id = None
+    # Extract user information (UUID-safe: bad client claims must not reach asyncpg as bind params)
+    user_uuid = _jwt_sub_as_uuid(payload.get("sub"))
+    hospital_uuid = _jwt_hospital_id_as_uuid(payload.get("hospital_id"))
 
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token payload"
-        )
-    
     # Get user from database
-    if hospital_id:
+    if hospital_uuid is not None:
         result = await db.execute(
             select(User)
-            .where(User.id == user_id, User.hospital_id == hospital_id)
+            .where(User.id == user_uuid, User.hospital_id == hospital_uuid)
             .options(selectinload(User.roles).selectinload(Role.permissions))
         )
     else:
         # For Super Admin or users without hospital_id
         result = await db.execute(
             select(User)
-            .where(User.id == user_id)
+            .where(User.id == user_uuid)
             .options(selectinload(User.roles).selectinload(Role.permissions))
         )
     

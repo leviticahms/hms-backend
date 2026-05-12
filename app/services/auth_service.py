@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from fastapi import HTTPException, status
 
 from app.models.user import User, Role, user_roles
@@ -125,6 +126,62 @@ class AuthService:
         self.email_service = EmailService()
         # Use global OTP service so generated codes are visible across requests
         self.otp_service = otp_service
+    
+    async def _mirror_platform_user_to_tenant(
+        self,
+        tenant_database_name: str,
+        user_id: uuid.UUID,
+        role_name: str,
+    ) -> None:
+        """
+        Copy a platform ``users`` row (same id) into the tenant DB and link ``user_roles``.
+
+        Keeps tenant FKs working (pharmacy ``created_by``, department ``head_doctor_id``, etc.)
+        while login still resolves from platform.
+        """
+        tdb_key = (tenant_database_name or "").strip()
+        if not tdb_key:
+            return
+
+        plat_user = await self.db.get(User, user_id)
+        if not plat_user:
+            logger.warning("Tenant mirror skipped: platform user %s not found", user_id)
+            return
+
+        from app.database.session import get_tenant_session_factory
+
+        fac = get_tenant_session_factory(tdb_key)
+        async with fac() as tdb:
+            data = {c.name: getattr(plat_user, c.name) for c in User.__table__.columns}
+            existing = await tdb.get(User, user_id)
+            if existing:
+                for k, v in data.items():
+                    if k != "id":
+                        setattr(existing, k, v)
+            else:
+                tdb.add(User(**data))
+
+            r = await tdb.execute(select(Role).where(Role.name == role_name))
+            tr = r.scalar_one_or_none()
+            if not tr:
+                tr = Role(
+                    id=uuid.uuid4(),
+                    name=role_name,
+                    display_name="Hospital Administrator"
+                    if role_name == UserRole.HOSPITAL_ADMIN.value
+                    else role_name,
+                    description="Mirrored from platform bootstrap",
+                    level=90 if role_name == UserRole.HOSPITAL_ADMIN.value else 50,
+                )
+                tdb.add(tr)
+                await tdb.flush()
+
+            await tdb.execute(
+                pg_insert(user_roles)
+                .values(user_id=user_id, role_id=tr.id)
+                .on_conflict_do_nothing(index_elements=["user_id", "role_id"])
+            )
+            await tdb.commit()
     
     # SYSTEM USER CREATION METHODS (NEW)
     
@@ -344,12 +401,12 @@ class AuthService:
         logger.debug(f"DEBUG: User added to database with ID: {user.id}")
         
         # Assign hospital admin role
-        admin_role = await self._get_role_by_name(UserRole.HOSPITAL_ADMIN)
+        admin_role = await self._get_role_by_name(UserRole.HOSPITAL_ADMIN.value)
         if not admin_role:
             # Create HOSPITAL_ADMIN role if it doesn't exist
             admin_role = Role(
                 id=uuid.uuid4(),
-                name=UserRole.HOSPITAL_ADMIN,
+                name=UserRole.HOSPITAL_ADMIN.value,
                 display_name="Hospital Administrator",
                 description="Hospital Administrator Role",
                 level=50
@@ -363,6 +420,20 @@ class AuthService:
         )
         
         await self.db.commit()
+
+        if (hospital.tenant_database_name or "").strip():
+            try:
+                await self._mirror_platform_user_to_tenant(
+                    hospital.tenant_database_name,
+                    user.id,
+                    UserRole.HOSPITAL_ADMIN.value,
+                )
+            except Exception as e:
+                logger.exception(
+                    "Hospital admin created on platform but tenant mirror failed (tenant=%s): %s",
+                    hospital.tenant_database_name,
+                    e,
+                )
         
         result = {
             "user_id": str(user.id),
@@ -527,7 +598,7 @@ class AuthService:
         await self.db.flush()
         
         # Assign patient role
-        patient_role = await self._get_role_by_name(UserRole.PATIENT)
+        patient_role = await self._get_role_by_name(UserRole.PATIENT.value)
         if not patient_role:
             # Create PATIENT role if it doesn't exist
             patient_role = Role(

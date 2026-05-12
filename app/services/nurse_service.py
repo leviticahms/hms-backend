@@ -47,6 +47,16 @@ def _model_values_raw(obj: Any) -> Dict[str, Any]:
     return out
 
 
+def _require_uuid(value: Any, field: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(str(value).strip())
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid UUID for {field}",
+        )
+
+
 class NurseService:
     def __init__(self, tenant_db: AsyncSession, platform_db: AsyncSession):
         self.tenant_db = tenant_db
@@ -143,7 +153,7 @@ class NurseService:
         return out
 
     async def upsert_profile(self, payload: Dict[str, Any], current_user: User) -> Dict[str, Any]:
-        dep_id = uuid.UUID(payload["department_id"])
+        dep_id = _require_uuid(payload.get("department_id"), "department_id")
         q = await self.tenant_db.execute(
             select(NurseProfile).where(
                 and_(NurseProfile.user_id == current_user.id, NurseProfile.hospital_id == current_user.hospital_id)
@@ -401,8 +411,8 @@ class NurseService:
 
     async def list_beds(self, current_user: User, ward_id: Optional[str], status_filter: Optional[str]) -> List[Dict[str, Any]]:
         query = select(Bed).where(Bed.hospital_id == current_user.hospital_id).options(selectinload(Bed.ward))
-        if ward_id:
-            query = query.where(Bed.ward_id == uuid.UUID(ward_id))
+        if ward_id is not None and str(ward_id).strip() != "":
+            query = query.where(Bed.ward_id == _require_uuid(ward_id, "ward_id"))
         if status_filter:
             query = query.where(Bed.status == status_filter)
         res = await self.tenant_db.execute(query.order_by(Bed.bed_number))
@@ -418,7 +428,7 @@ class NurseService:
         bed = Bed(
             id=bed_id,
             hospital_id=current_user.hospital_id,
-            ward_id=uuid.UUID(payload["ward_id"]),
+            ward_id=_require_uuid(payload.get("ward_id"), "ward_id"),
             bed_number=payload["bed_number"],
             bed_code=payload["bed_code"],
             status=payload.get("status", "AVAILABLE"),

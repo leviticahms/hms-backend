@@ -41,7 +41,14 @@ Hospital-scoped business tables should live in tenant DB:
   - returns
   - alerts/reports
 
-## Data that should remain in platform DB
+## Users table: platform vs tenant (important)
+
+- **Login** still resolves from the **platform** `users` row (JWT / `get_current_user`).
+- **Hospital admin** is created on the **platform** first; when the hospital has `tenant_database_name`, the same `users` row (same `id`) is now **mirrored into the tenant DB** so tenant foreign keys work (`created_by`, department `head_doctor_id`, pharmacy references, etc.).
+- **Staff** (doctor, nurse, receptionist, lab, pharmacist) are created in the **tenant** DB first, then mirrored to platform for login (see `HospitalAdminService`).
+
+Hospital admin typically **does not** have a `staff_profiles` / role-specific clinical row — that is normal (admin is not clinical staff). Doctors/nurses/receptionists should have profile rows when creation flow completes or after department assignment.
+
 
 Global/platform tables:
 
