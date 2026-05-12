@@ -15,6 +15,7 @@ PriorityType = Literal["URGENT", "ROUTINE"]
 
 class TestRegistrationRow(BaseModel):
     test_id: str
+    patient_ref: Optional[str] = Field(None, description="Hospital patient id / ref when registered.")
     patient_name: str
     test_type: str
     sample_type: str
@@ -78,4 +79,31 @@ class RegisterTestResponse(BaseModel):
     special_instructions: Optional[str] = None
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+class LabPatientOption(BaseModel):
+    """One row for lab Register New Test patient name / ID dropdown."""
+
+    patient_id: str = Field(..., description="Hospital patient identifier (maps to registration patient_ref).")
+    patient_name: str = Field(..., description="Display name for the dropdown.")
+    patient_profile_id: str = Field(..., description="UUID of patient_profiles row.")
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    gender: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    mrn: Optional[str] = None
+
+
+class LabPatientSearchResponse(BaseModel):
+    patients: List[LabPatientOption] = Field(default_factory=list)
+
+
+class UpdateTestRegistrationStatusRequest(BaseModel):
+    status: TestStatus
+
+
+class UpdateTestRegistrationStatusResponse(BaseModel):
+    message: str
+    test_id: str
+    status: TestStatus
 
