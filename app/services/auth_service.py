@@ -146,9 +146,25 @@ class AuthService:
         plat_user = await self.db.get(User, user_id)
         if not plat_user:
             logger.warning("Tenant mirror skipped: platform user %s not found", user_id)
-            return
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"code": "TENANT_MIRROR_USER_MISSING", "message": "User row not available for tenant mirror"},
+            )
 
+        from app.database.schema_patches import ensure_required_roles_catalog
         from app.database.session import get_tenant_session_factory
+        from app.services.tenant_database_provisioning import (
+            copy_hospital_registry_row_to_tenant,
+            sync_url_for_tenant_database,
+        )
+
+        sync_dsn = sync_url_for_tenant_database(tdb_key)
+        ensure_required_roles_catalog(sync_dsn)
+
+        if plat_user.hospital_id:
+            ch = await self.db.get(Hospital, plat_user.hospital_id)
+            if ch:
+                await asyncio.to_thread(copy_hospital_registry_row_to_tenant, tdb_key, ch)
 
         fac = get_tenant_session_factory(tdb_key)
         async with fac() as tdb:
@@ -182,7 +198,82 @@ class AuthService:
                 .on_conflict_do_nothing(index_elements=["user_id", "role_id"])
             )
             await tdb.commit()
-    
+
+    async def _mirror_platform_patient_bundle_to_tenant(
+        self,
+        tenant_database_name: str,
+        user_id: uuid.UUID,
+    ) -> None:
+        """
+        After OTP verification, copy patient User + PatientProfile from platform into tenant DB
+        so hospital-scoped APIs (appointments, lab search, etc.) see the same rows.
+        """
+        tdb_key = (tenant_database_name or "").strip()
+        if not tdb_key:
+            return
+
+        plat_user = await self.db.get(User, user_id)
+        if not plat_user or not plat_user.hospital_id:
+            return
+
+        prof_row = await self.db.execute(select(PatientProfile).where(PatientProfile.user_id == user_id))
+        profile = prof_row.scalar_one_or_none()
+
+        from app.database.schema_patches import ensure_required_roles_catalog
+        from app.database.session import get_tenant_session_factory
+        from app.services.tenant_database_provisioning import (
+            copy_hospital_registry_row_to_tenant,
+            sync_url_for_tenant_database,
+        )
+
+        sync_dsn = sync_url_for_tenant_database(tdb_key)
+        ensure_required_roles_catalog(sync_dsn)
+
+        ch = await self.db.get(Hospital, plat_user.hospital_id)
+        if ch:
+            await asyncio.to_thread(copy_hospital_registry_row_to_tenant, tdb_key, ch)
+
+        fac = get_tenant_session_factory(tdb_key)
+        async with fac() as tdb:
+            udata = {c.name: getattr(plat_user, c.name) for c in User.__table__.columns}
+            existing_u = await tdb.get(User, user_id)
+            if existing_u:
+                for k, v in udata.items():
+                    if k != "id":
+                        setattr(existing_u, k, v)
+            else:
+                tdb.add(User(**udata))
+
+            if profile:
+                pdata = {c.name: getattr(profile, c.name) for c in PatientProfile.__table__.columns}
+                existing_p = await tdb.get(PatientProfile, profile.id)
+                if existing_p:
+                    for k, v in pdata.items():
+                        if k != "id":
+                            setattr(existing_p, k, v)
+                else:
+                    tdb.add(PatientProfile(**pdata))
+
+            r = await tdb.execute(select(Role).where(Role.name == UserRole.PATIENT.value))
+            tr = r.scalar_one_or_none()
+            if not tr:
+                tr = Role(
+                    id=uuid.uuid4(),
+                    name=UserRole.PATIENT.value,
+                    display_name="Patient",
+                    description="Mirrored from platform",
+                    level=1,
+                )
+                tdb.add(tr)
+                await tdb.flush()
+
+            await tdb.execute(
+                pg_insert(user_roles)
+                .values(user_id=user_id, role_id=tr.id)
+                .on_conflict_do_nothing(index_elements=["user_id", "role_id"])
+            )
+            await tdb.commit()
+
     # SYSTEM USER CREATION METHODS (NEW)
     
     async def create_hospital(self, hospital_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -418,23 +509,21 @@ class AuthService:
         await self.db.execute(
             user_roles.insert().values(user_id=user.id, role_id=admin_role.id)
         )
-        
+
+        await self.db.flush()
+
+        await self.db.refresh(hospital)
+
+        tdb_name = (hospital.tenant_database_name or "").strip()
+        if tdb_name:
+            await self._mirror_platform_user_to_tenant(
+                tdb_name,
+                user.id,
+                UserRole.HOSPITAL_ADMIN.value,
+            )
+
         await self.db.commit()
 
-        if (hospital.tenant_database_name or "").strip():
-            try:
-                await self._mirror_platform_user_to_tenant(
-                    hospital.tenant_database_name,
-                    user.id,
-                    UserRole.HOSPITAL_ADMIN.value,
-                )
-            except Exception as e:
-                logger.exception(
-                    "Hospital admin created on platform but tenant mirror failed (tenant=%s): %s",
-                    hospital.tenant_database_name,
-                    e,
-                )
-        
         result = {
             "user_id": str(user.id),
             "email": user.email,
@@ -603,7 +692,7 @@ class AuthService:
             # Create PATIENT role if it doesn't exist
             patient_role = Role(
                 id=uuid.uuid4(),
-                name=UserRole.PATIENT,
+                name=UserRole.PATIENT.value,
                 display_name="Patient",
                 description="Patient Role",
                 level=1
@@ -1120,6 +1209,22 @@ class AuthService:
         
         user.status = UserStatus.ACTIVE
         user.email_verified = True
+        await self.db.flush()
+
+        if user.hospital_id:
+            hosp = await self.db.get(Hospital, user.hospital_id)
+            tdn = (hosp.tenant_database_name or "").strip() if hosp else ""
+            if tdn:
+                try:
+                    await self._mirror_platform_patient_bundle_to_tenant(tdn, user.id)
+                except Exception as e:
+                    logger.exception(
+                        "Patient email verified on platform but tenant mirror failed (tenant=%s user=%s): %s",
+                        tdn,
+                        user.id,
+                        e,
+                    )
+
         await self.db.commit()
         
         return {"message": "Email verified successfully. You can now log in.", "status": "verified"}
