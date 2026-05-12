@@ -1,8 +1,8 @@
 """
-Lab portal patient search (autocomplete).
+Lab portal shortcuts used by some frontends (alternate URL paths).
 
-Frontend often calls ``GET /api/v1/lab/patients?search=...``; the canonical implementation
-lives in ``LabTestRegistrationService`` — this router aliases that contract.
+- ``GET /lab/patients`` — patient autocomplete (canonical: ``/lab/test-registration/patients``).
+- ``GET /lab/ready-tests`` — tests ready for report (canonical: ``/lab/report-generation/ready-tests``).
 """
 from typing import Optional
 
@@ -13,10 +13,12 @@ from app.api.v1.routers.lab.rbac import LAB_GET_ROLES
 from app.core.security import require_roles
 from app.database.session import get_db_session
 from app.models.user import User
+from app.schemas.lab_report_generation import ReadyTestsResponse
 from app.schemas.lab_test_registration import LabPatientSearchResponse
+from app.services.lab_report_generation_service import LabReportGenerationService
 from app.services.lab_test_registration_service import LabTestRegistrationService
 
-router = APIRouter(prefix="/lab", tags=["Lab - Patients"])
+router = APIRouter(prefix="/lab", tags=["Lab - Portal shortcuts"])
 
 
 def _resolve_search_term(
@@ -50,3 +52,15 @@ async def lab_patients_search(
     term = _resolve_search_term(q, search, query)
     svc = LabTestRegistrationService(db, current_user.hospital_id)
     return await svc.search_patients(term, limit=limit)
+
+
+@router.get("/ready-tests", response_model=ReadyTestsResponse)
+async def lab_ready_tests_shortcut(
+    current_user: User = Depends(require_roles(LAB_GET_ROLES)),
+    db: AsyncSession = Depends(get_db_session),
+) -> ReadyTestsResponse:
+    """
+    Alias for ``GET /lab/report-generation/ready-tests`` (some UIs call ``/lab/ready-tests``).
+    """
+    svc = LabReportGenerationService(db, current_user.hospital_id)
+    return await svc.ready_tests()
