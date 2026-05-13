@@ -238,6 +238,19 @@ class PharmacyService:
         kwargs.pop("items", None)
         kwargs.pop("received_at", None)
 
+        supplier = await self.repo.get_supplier_by_id(supplier_id, hospital_id)
+        if not supplier:
+            raise BusinessLogicError(
+                "Supplier not found for this hospital. Refresh suppliers and select a valid supplier before creating GRN."
+            )
+
+        if po_id:
+            po = await self.repo.get_purchase_order_by_id(po_id, hospital_id)
+            if not po:
+                raise BusinessLogicError("Purchase order not found for this hospital.")
+            if po.supplier_id != supplier_id:
+                raise BusinessLogicError("Purchase order supplier does not match selected supplier.")
+
         # Generate grn_number (GRN-YYYYMMDD-0001)
         today_str = date.today().strftime("%Y%m%d")
         count_result = await self.db.execute(

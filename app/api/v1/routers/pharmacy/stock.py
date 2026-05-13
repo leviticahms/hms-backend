@@ -5,7 +5,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.database.session import get_db_session
-from app.dependencies.auth import require_hospital_admin, require_admin_or_pharmacist, require_hospital_context
+from app.dependencies.auth import require_admin_or_pharmacist, require_hospital_context
 from app.models.user import User
 from app.services.pharmacy_service import PharmacyService
 from app.schemas.pharmacy import StockAdjustmentCreate
@@ -61,12 +61,12 @@ async def list_stock(
 @router.post("/adjustments", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_stock_adjustment(
     adjustment_data: StockAdjustmentCreate,
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_admin_or_pharmacist()),
     db: AsyncSession = Depends(get_db_session)
 ):
     """
     Stock adjustment (increase/decrease with reason).
-    Admin only. Creates ledger entry.
+    Hospital admin or pharmacist. Creates ledger entry.
     """
     service = PharmacyService(db)
     result = await service.create_stock_adjustment(
