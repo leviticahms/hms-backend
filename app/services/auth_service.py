@@ -126,6 +126,97 @@ class AuthService:
         self.email_service = EmailService()
         # Use global OTP service so generated codes are visible across requests
         self.otp_service = otp_service
+
+    async def _ensure_env_superadmin_for_login(self, normalized_email: str) -> None:
+        """
+        Last-mile Render safety net: if the requested email is SUPERADMIN_EMAIL,
+        ensure the platform DB has a usable SUPER_ADMIN account before password check.
+
+        Startup seeding can be skipped by deploy/env/setup problems; login should still
+        converge to the configured env credentials without exposing which condition failed.
+        """
+        env_email = (settings.SUPERADMIN_EMAIL or "").strip().lower()
+        env_password = (settings.SUPERADMIN_PASSWORD or "").strip()
+        if not env_email or not env_password or normalized_email != env_email:
+            return
+
+        try:
+            role_result = await self.db.execute(select(Role).where(Role.name == UserRole.SUPER_ADMIN.value).limit(1))
+            role = role_result.scalar_one_or_none()
+            if not role:
+                role = Role(
+                    id=uuid.uuid4(),
+                    name=UserRole.SUPER_ADMIN.value,
+                    display_name="Super Administrator",
+                    description="Platform Super Administrator",
+                    level=100,
+                    is_system_role=True,
+                )
+                self.db.add(role)
+                await self.db.flush()
+
+            result = await self.db.execute(
+                select(User).where(func.lower(func.trim(User.email)) == env_email).limit(1)
+            )
+            user = result.scalar_one_or_none()
+            if not user:
+                result = await self.db.execute(
+                    select(User)
+                    .join(user_roles, User.id == user_roles.c.user_id)
+                    .join(Role, user_roles.c.role_id == Role.id)
+                    .where(Role.name == UserRole.SUPER_ADMIN.value)
+                    .limit(1)
+                )
+                user = result.scalar_one_or_none()
+
+            first = (settings.SUPERADMIN_FIRST_NAME or "").strip() or "Super"
+            last = (settings.SUPERADMIN_LAST_NAME or "").strip() or "Admin"
+            changed = False
+            if user:
+                if (user.email or "").strip().lower() != env_email:
+                    user.email = env_email
+                    changed = True
+                if user.first_name != first:
+                    user.first_name = first
+                    changed = True
+                if user.last_name != last:
+                    user.last_name = last
+                    changed = True
+                if user.status != UserStatus.ACTIVE:
+                    user.status = UserStatus.ACTIVE
+                    changed = True
+                if not user.email_verified:
+                    user.email_verified = True
+                    changed = True
+                if not self.security.verify_password(env_password, user.password_hash):
+                    user.password_hash = self.security.hash_password(env_password)
+                    changed = True
+            else:
+                user = User(
+                    id=uuid.uuid4(),
+                    hospital_id=None,
+                    email=env_email,
+                    phone=(settings.HOSPITAL_PHONE or "").strip() or "0000000000",
+                    password_hash=self.security.hash_password(env_password),
+                    first_name=first,
+                    last_name=last,
+                    status=UserStatus.ACTIVE,
+                    email_verified=True,
+                    phone_verified=False,
+                )
+                self.db.add(user)
+                await self.db.flush()
+                changed = True
+
+            await self.db.execute(
+                pg_insert(user_roles)
+                .values(user_id=user.id, role_id=role.id)
+                .on_conflict_do_nothing(index_elements=["user_id", "role_id"])
+            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            logger.exception("SuperAdmin login self-heal failed")
     
     async def _mirror_platform_user_to_tenant(
         self,
@@ -784,7 +875,9 @@ class AuthService:
         logger.debug(f"DEBUG: Super Admin login attempt for email: {email}")
         
         # Get user
-        user = await self._get_user_by_email(email)
+        normalized_email = (email or "").strip().lower()
+        await self._ensure_env_superadmin_for_login(normalized_email)
+        user = await self._get_user_by_email(normalized_email)
         logger.debug(f"DEBUG: Found user: {user}")
         if not user:
             logger.debug("DEBUG: User not found")
@@ -995,6 +1088,7 @@ class AuthService:
         from app.core.role_aliases import normalize_staff_role_name, user_can_use_staff_login
 
         normalized_email = (email or "").strip().lower()
+        await self._ensure_env_superadmin_for_login(normalized_email)
         user = await self._get_user_by_email(normalized_email)
         if not user:
             await self._heal_platform_auth_row_from_tenant_by_email(normalized_email)
