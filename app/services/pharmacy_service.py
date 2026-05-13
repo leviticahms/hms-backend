@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from app.repositories.pharmacy_repository import PharmacyRepository
 from app.models.pharmacy import Medicine, Supplier, StockBatch, PurchaseOrder, Sale
 from app.models.tenant import Hospital
-from app.core.enums import PurchaseOrderStatus, SupplierStatus
+from app.core.enums import PurchaseOrderStatus, SupplierStatus, StockTransactionType
 from app.core.exceptions import BusinessLogicError
 
 
@@ -142,6 +142,71 @@ class PharmacyService:
             skip=skip,
             limit=limit
         )
+
+    async def create_stock_adjustment(
+        self,
+        hospital_id: UUID,
+        performed_by: UUID,
+        medicine_id: UUID,
+        qty_change,
+        reason,
+        batch_id: Optional[UUID] = None,
+        notes: Optional[str] = None,
+        **kwargs,
+    ):
+        """Adjust stock for a batch and write an audit ledger row."""
+        from app.models.pharmacy import StockLedger
+
+        qty_delta = Decimal(str(qty_change))
+        if qty_delta == 0:
+            raise BusinessLogicError("qty_change cannot be zero")
+
+        medicine = await self.get_medicine(medicine_id, hospital_id)
+
+        if not batch_id:
+            raise BusinessLogicError("batch_id is required for stock adjustment")
+
+        batch = await self.repo.get_stock_batch_by_id(batch_id, hospital_id)
+        if not batch or batch.medicine_id != medicine_id:
+            raise BusinessLogicError("Stock batch not found for this medicine")
+
+        current_qty = Decimal(str(batch.qty_on_hand or 0))
+        new_qty = current_qty + qty_delta
+        if new_qty < 0:
+            raise BusinessLogicError("Adjustment would make stock negative")
+
+        batch.qty_on_hand = new_qty
+        batch.updated_at = datetime.utcnow()
+
+        reason_value = reason.value if hasattr(reason, "value") else str(reason)
+        reason_text = reason_value
+        if notes:
+            reason_text = f"{reason_value}: {notes}"
+
+        ledger = StockLedger(
+            id=uuid4(),
+            hospital_id=hospital_id,
+            medicine_id=medicine.id,
+            batch_id=batch.id,
+            txn_type=StockTransactionType.ADJUSTMENT.value,
+            qty_change=qty_delta,
+            unit_cost=batch.purchase_rate or Decimal("0"),
+            reference_type="ADJUSTMENT",
+            reference_id=None,
+            performed_by=performed_by,
+            reason=reason_text,
+        )
+        self.db.add(ledger)
+        await self.db.flush()
+
+        return {
+            "medicine_id": str(medicine_id),
+            "batch_id": str(batch_id),
+            "qty_change": float(qty_delta),
+            "qty_on_hand": float(new_qty),
+            "ledger_id": str(ledger.id),
+            "reason": reason_value,
+        }
     
     # ============================================================================
     # SUPPLIER OPERATIONS
