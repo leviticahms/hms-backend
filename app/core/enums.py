@@ -227,6 +227,7 @@ class SaleStatus(str, Enum):
     """Sale status"""
     DRAFT = "DRAFT"  # Sale created but not paid
     PAID = "PAID"  # Payment completed
+    COMPLETED = "COMPLETED"  # Sale completed and stock deducted
     CANCELLED = "CANCELLED"  # Sale cancelled
 
 
