@@ -1,6 +1,8 @@
 """Purchase Order Router - Complete PO management"""
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from typing import Optional, List
 from uuid import UUID
 from pydantic import BaseModel
@@ -8,7 +10,7 @@ from datetime import date
 
 from app.database.session import get_db_session
 from app.dependencies.auth import require_admin_or_pharmacist, require_hospital_admin
-from app.models.user import User
+from app.models.user import User, Role, user_roles
 from app.services.pharmacy_service import PharmacyService
 from app.schemas.response import SuccessResponse
 
@@ -33,6 +35,39 @@ class PurchaseOrderCreate(BaseModel):
 class PurchaseOrderUpdate(BaseModel):
     expected_date: Optional[date] = None
     notes: Optional[str] = None
+
+
+async def ensure_current_user_in_tenant_db(db: AsyncSession, current_user: User) -> None:
+    """Keep tenant-side user FKs valid when auth resolves from the platform DB."""
+    data = {column.name: getattr(current_user, column.name) for column in User.__table__.columns}
+    existing_user = await db.get(User, current_user.id)
+    if existing_user:
+        for key, value in data.items():
+            if key != "id":
+                setattr(existing_user, key, value)
+    else:
+        db.add(User(**data))
+    await db.flush()
+
+    for role in current_user.roles or []:
+        role_name = getattr(role, "name", None)
+        if not role_name:
+            continue
+
+        role_result = await db.execute(select(Role).where(Role.name == role_name))
+        tenant_role = role_result.scalar_one_or_none()
+        if not tenant_role:
+            role_data = {column.name: getattr(role, column.name) for column in Role.__table__.columns}
+            tenant_role = Role(**role_data)
+            db.add(tenant_role)
+            await db.flush()
+
+        await db.execute(
+            pg_insert(user_roles)
+            .values(user_id=current_user.id, role_id=tenant_role.id)
+            .on_conflict_do_nothing(index_elements=["user_id", "role_id"])
+        )
+    await db.flush()
 
 
 @router.get("")
@@ -143,6 +178,7 @@ async def create_purchase_order(
     db: AsyncSession = Depends(get_db_session)
 ):
     """Create a new purchase order"""
+    await ensure_current_user_in_tenant_db(db, current_user)
     service = PharmacyService(db)
     po = await service.create_purchase_order(
         hospital_id=current_user.hospital_id,
@@ -218,6 +254,7 @@ async def approve_purchase_order(
     db: AsyncSession = Depends(get_db_session)
 ):
     """Approve a purchase order"""
+    await ensure_current_user_in_tenant_db(db, current_user)
     service = PharmacyService(db)
     po = await service.approve_purchase_order(
         po_id=po_id,
