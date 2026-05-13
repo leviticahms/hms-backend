@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Paths that always use the platform database (no tenant routing).
 PLATFORM_ONLY_PREFIXES: tuple[str, ...] = (
+    "/api/v1/auth/super-admin",
     "/api/v1/super-admin",
     "/api/v1/analytics",
 )
