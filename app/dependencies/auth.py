@@ -18,6 +18,7 @@ from app.core.security import get_current_user
 from app.models.user import User
 from app.models.patient import PatientProfile
 from app.core.enums import UserRole
+from app.core.role_aliases import normalize_staff_role_name
 
 
 # ============================================================================
@@ -177,20 +178,23 @@ def require_roles(*required_roles: UserRole) -> Callable:
             # Hospital admins or doctors can access
     """
     def role_checker(current_user: User = Depends(get_current_user)) -> User:
-        user_roles = [role.name for role in current_user.roles] if current_user.roles else []
-        
+        raw = [getattr(role, "name", None) for role in (current_user.roles or [])]
+        raw = [str(r).strip() for r in raw if r]
+        # DB may store labels (e.g. "Pharmacists"); JWT normalizes elsewhere — align RBAC here.
+        user_roles_norm = {normalize_staff_role_name(r) for r in raw if r}
+
         # Convert required roles to strings for comparison
         required_role_names = [role.value for role in required_roles]
-        
+
         # Check if user has at least one required role
-        if not any(role in user_roles for role in required_role_names):
+        if not any(req in user_roles_norm for req in required_role_names):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied. Required roles: {', '.join(required_role_names)}"
+                detail=f"Access denied. Required roles: {', '.join(required_role_names)}",
             )
-        
+
         return current_user
-    
+
     return role_checker
 
 

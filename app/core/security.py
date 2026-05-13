@@ -279,8 +279,12 @@ def require_roles(required_roles: List[Any]):
             normalized.append(str(r))
 
     def role_checker(current_user: User = Depends(get_current_user)):
-        user_roles = [role.name for role in current_user.roles]
-        if not any(role in user_roles for role in normalized):
+        from app.core.role_aliases import normalize_staff_role_name
+
+        raw = [getattr(r, "name", None) for r in (current_user.roles or [])]
+        raw = [str(x).strip() for x in raw if x]
+        user_roles_norm = {normalize_staff_role_name(x) for x in raw if x}
+        if not any(req in user_roles_norm for req in normalized):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Required roles: {', '.join(normalized)}",

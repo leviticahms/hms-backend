@@ -29,7 +29,8 @@ DEFAULT_FEATURES_BY_PLAN: Dict[str, Dict[str, bool]] = {
     "STANDARD": {
         FEATURE_LAB_TESTS: True,
         FEATURE_VIDEO_CONSULTATION: False,
-        FEATURE_PHARMACY: False,
+        # Pharmacy is core HMS for most hospitals; gate via plan JSON if you need upsell.
+        FEATURE_PHARMACY: True,
     },
     "PREMIUM": {
         FEATURE_LAB_TESTS: True,
