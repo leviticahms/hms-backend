@@ -299,7 +299,14 @@ class AppointmentSchedulingCreate(BaseModel):
         description="Full name as registered (e.g. 'Jane Doe'). Used to resolve patient when patient_ref is omitted.",
     )
     doctor_name: str  # "Dr. John Smith"
-    department_name: str  # "Cardiology"
+    department_id: Optional[str] = Field(
+        default=None,
+        description="Optional department UUID. If omitted/invalid, the department is derived from the selected doctor.",
+    )
+    department_name: Optional[str] = Field(
+        default=None,
+        description="Optional department name/code (e.g. Cardiology). If omitted, derive from doctor assignment.",
+    )
     appointment_date: str  # YYYY-MM-DD
     appointment_time: str  # HH:MM
     appointment_type: str = "CONSULTATION"  # CONSULTATION, FOLLOW_UP, EMERGENCY

@@ -7,14 +7,12 @@ import logging
 
 from app.core.plan_features import (
     FEATURE_LAB_TESTS,
-    FEATURE_PHARMACY,
     FEATURE_VIDEO_CONSULTATION,
 )
 from app.dependencies.plan_features import require_plan_feature
 
 logger = logging.getLogger(__name__)
 
-_pharmacy_dep = [Depends(require_plan_feature(FEATURE_PHARMACY))]
 _telemed_dep = [Depends(require_plan_feature(FEATURE_VIDEO_CONSULTATION))]
 _lab_dep = [Depends(require_plan_feature(FEATURE_LAB_TESTS))]
 
@@ -178,33 +176,22 @@ try:
     from app.api.v1.routers.pharmacy.reports import router as pharmacy_reports_router
     from app.api.v1.routers.pharmacy.pharmacy_portal import router as pharmacy_portal_router
 
-    api_router.include_router(
-        pharmacy_medicines_router, prefix="/pharmacy", tags=["Pharmacy - Medicines"], dependencies=_pharmacy_dep
-    )
-    api_router.include_router(
-        pharmacy_suppliers_router, prefix="/pharmacy", tags=["Pharmacy - Suppliers"], dependencies=_pharmacy_dep
-    )
+    # Pharmacy endpoints are protected by their router-level staff/admin role dependencies.
+    # Do not apply the subscription feature gate here; dashboard/module visibility uses plan flags.
+    api_router.include_router(pharmacy_medicines_router, prefix="/pharmacy", tags=["Pharmacy - Medicines"])
+    api_router.include_router(pharmacy_suppliers_router, prefix="/pharmacy", tags=["Pharmacy - Suppliers"])
     api_router.include_router(
         pharmacy_purchase_orders_router,
         prefix="/pharmacy",
         tags=["Pharmacy - Purchase Orders"],
-        dependencies=_pharmacy_dep,
     )
-    api_router.include_router(pharmacy_grn_router, prefix="/pharmacy", tags=["Pharmacy - GRN"], dependencies=_pharmacy_dep)
-    api_router.include_router(pharmacy_stock_router, prefix="/pharmacy", tags=["Pharmacy - Stock"], dependencies=_pharmacy_dep)
-    api_router.include_router(pharmacy_sales_router, prefix="/pharmacy", tags=["Pharmacy - Sales"], dependencies=_pharmacy_dep)
-    api_router.include_router(
-        pharmacy_returns_router, prefix="/pharmacy", tags=["Pharmacy - Returns"], dependencies=_pharmacy_dep
-    )
-    api_router.include_router(
-        pharmacy_alerts_router, prefix="/pharmacy", tags=["Pharmacy - Alerts"], dependencies=_pharmacy_dep
-    )
-    api_router.include_router(
-        pharmacy_reports_router, prefix="/pharmacy", tags=["Pharmacy - Reports"], dependencies=_pharmacy_dep
-    )
-    api_router.include_router(
-        pharmacy_portal_router, prefix="/pharmacy", tags=["Pharmacy - Portal"], dependencies=_pharmacy_dep
-    )
+    api_router.include_router(pharmacy_grn_router, prefix="/pharmacy", tags=["Pharmacy - GRN"])
+    api_router.include_router(pharmacy_stock_router, prefix="/pharmacy", tags=["Pharmacy - Stock"])
+    api_router.include_router(pharmacy_sales_router, prefix="/pharmacy", tags=["Pharmacy - Sales"])
+    api_router.include_router(pharmacy_returns_router, prefix="/pharmacy", tags=["Pharmacy - Returns"])
+    api_router.include_router(pharmacy_alerts_router, prefix="/pharmacy", tags=["Pharmacy - Alerts"])
+    api_router.include_router(pharmacy_reports_router, prefix="/pharmacy", tags=["Pharmacy - Reports"])
+    api_router.include_router(pharmacy_portal_router, prefix="/pharmacy", tags=["Pharmacy - Portal"])
     logger.info("✓ Pharmacy routers loaded (10 routers - complete module)")
 except ImportError as e:
     logger.error(f"✗ Failed to load pharmacy routers: {e}")

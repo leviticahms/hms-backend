@@ -881,10 +881,18 @@ class ClinicalService:
         )
 
         hid = user_context.get("hospital_id")
-        department = await self.get_department_by_name(appointment_data["department_name"], hid)
-        doctor = await self.get_doctor_by_name(
-            appointment_data["doctor_name"], hid, department_id=department.id
+        department = await self.get_department_by_id_or_name(
+            appointment_data.get("department_id"),
+            appointment_data.get("department_name"),
+            hid,
         )
+        doctor = await self.get_doctor_by_name(
+            appointment_data["doctor_name"],
+            hid,
+            department_id=department.id if department else None,
+        )
+        if department is None:
+            department = await self.get_primary_department_for_doctor(doctor.id, hospital_id_uuid)
 
         try:
             time_hhmmss = _appointment_time_to_db_hms(appointment_data.get("appointment_time"))
@@ -2679,6 +2687,215 @@ class ClinicalService:
                 "message": f"Multiple doctors match '{doctor_name}'. Refine the name or use doctor_id.",
             },
         )
+
+    async def get_department_by_id_or_name(
+        self,
+        department_id: Optional[Any],
+        department_name: Optional[str],
+        hospital_id: str,
+    ) -> Optional[Department]:
+        """Resolve an optional department from UUID/name; return None so caller can derive from doctor."""
+        raw_id = str(department_id or "").strip()
+        if raw_id:
+            try:
+                dept_uuid = uuid.UUID(raw_id)
+            except (TypeError, ValueError):
+                dept_uuid = None
+            if dept_uuid is not None:
+                result = await self.db.execute(
+                    select(Department).where(
+                        and_(
+                            Department.id == dept_uuid,
+                            Department.hospital_id == hospital_id,
+                            Department.is_active == True,
+                        )
+                    )
+                )
+                department = result.scalar_one_or_none()
+                if department:
+                    return department
+
+        dname = (department_name or "").strip()
+        if dname:
+            try:
+                return await self.get_department_by_name(dname, hospital_id)
+            except HTTPException as exc:
+                # A stale/free-text UI value should not block scheduling if the doctor has a department.
+                if exc.status_code != status.HTTP_404_NOT_FOUND:
+                    raise
+
+        return None
+
+    async def get_primary_department_for_doctor(
+        self,
+        doctor_id: uuid.UUID,
+        hospital_id: uuid.UUID,
+    ) -> Department:
+        """Resolve the doctor's active department from assignment first, then doctor profile."""
+        from app.models.doctor import DoctorProfile
+
+        result = await self.db.execute(
+            select(Department)
+            .join(
+                StaffDepartmentAssignment,
+                StaffDepartmentAssignment.department_id == Department.id,
+            )
+            .where(
+                and_(
+                    StaffDepartmentAssignment.staff_id == doctor_id,
+                    StaffDepartmentAssignment.hospital_id == hospital_id,
+                    StaffDepartmentAssignment.is_active == True,
+                    Department.is_active == True,
+                )
+            )
+            .order_by(desc(StaffDepartmentAssignment.is_primary))
+            .limit(1)
+        )
+        department = result.scalar_one_or_none()
+        if department:
+            return department
+
+        result = await self.db.execute(
+            select(Department)
+            .join(DoctorProfile, DoctorProfile.department_id == Department.id)
+            .where(
+                and_(
+                    DoctorProfile.user_id == doctor_id,
+                    DoctorProfile.hospital_id == hospital_id,
+                    Department.is_active == True,
+                )
+            )
+            .limit(1)
+        )
+        department = result.scalar_one_or_none()
+        if department:
+            return department
+
+        department = await self._sync_doctor_department_from_tenant(doctor_id, hospital_id)
+        if department:
+            return department
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Selected doctor has no active department assignment. "
+                "Assign the doctor to a department in Hospital Admin first."
+            ),
+        )
+
+    async def _sync_doctor_department_from_tenant(
+        self,
+        doctor_id: uuid.UUID,
+        hospital_id: uuid.UUID,
+    ) -> Optional[Department]:
+        """
+        Receptionist OPD routes use the platform DB because OPD patients log in there.
+        Hospital Admin writes departments/assignments to tenant DBs, so lazily copy the
+        selected doctor's active department into the current session when needed.
+        """
+        try:
+            from app.database.session import get_tenant_session_factory
+            from app.database.tenant_context import resolve_tenant_database_name_for_hospital
+            from app.models.doctor import DoctorProfile
+
+            tenant_db = await resolve_tenant_database_name_for_hospital(hospital_id)
+            if not tenant_db:
+                return None
+
+            fac = get_tenant_session_factory(tenant_db)
+            tenant_department: Optional[Department] = None
+            tenant_assignment: Optional[StaffDepartmentAssignment] = None
+
+            async with fac() as tdb:
+                result = await tdb.execute(
+                    select(StaffDepartmentAssignment, Department)
+                    .join(Department, StaffDepartmentAssignment.department_id == Department.id)
+                    .where(
+                        and_(
+                            StaffDepartmentAssignment.staff_id == doctor_id,
+                            StaffDepartmentAssignment.hospital_id == hospital_id,
+                            StaffDepartmentAssignment.is_active == True,
+                            Department.is_active == True,
+                        )
+                    )
+                    .order_by(desc(StaffDepartmentAssignment.is_primary))
+                    .limit(1)
+                )
+                row = result.first()
+                if row:
+                    tenant_assignment, tenant_department = row
+                else:
+                    result = await tdb.execute(
+                        select(Department)
+                        .join(DoctorProfile, DoctorProfile.department_id == Department.id)
+                        .where(
+                            and_(
+                                DoctorProfile.user_id == doctor_id,
+                                DoctorProfile.hospital_id == hospital_id,
+                                Department.is_active == True,
+                            )
+                        )
+                        .limit(1)
+                    )
+                    tenant_department = result.scalar_one_or_none()
+
+                if not tenant_department:
+                    return None
+
+                department_data = {
+                    col.name: getattr(tenant_department, col.name)
+                    for col in Department.__table__.columns
+                }
+                assignment_data = (
+                    {
+                        col.name: getattr(tenant_assignment, col.name)
+                        for col in StaffDepartmentAssignment.__table__.columns
+                    }
+                    if tenant_assignment
+                    else None
+                )
+
+            head_doctor_id = department_data.get("head_doctor_id")
+            if head_doctor_id and not await self.db.get(User, head_doctor_id):
+                # Keep the department row insertable even when only the selected doctor was mirrored.
+                department_data["head_doctor_id"] = None
+
+            existing_department = await self.db.get(Department, department_data["id"])
+            if existing_department:
+                for key, value in department_data.items():
+                    if key != "id":
+                        setattr(existing_department, key, value)
+                department = existing_department
+            else:
+                department = Department(**department_data)
+                self.db.add(department)
+            await self.db.flush()
+
+            if assignment_data:
+                existing_assignment = await self.db.get(
+                    StaffDepartmentAssignment,
+                    assignment_data["id"],
+                )
+                if existing_assignment:
+                    for key, value in assignment_data.items():
+                        if key != "id":
+                            setattr(existing_assignment, key, value)
+                else:
+                    self.db.add(StaffDepartmentAssignment(**assignment_data))
+                await self.db.flush()
+
+            return department
+        except Exception:
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            logger.exception(
+                "Failed to sync doctor department from tenant hospital_id=%s doctor_id=%s",
+                hospital_id,
+                doctor_id,
+            )
+            return None
 
     async def get_department_by_name(self, department_name: str, hospital_id: str) -> Department:
         """Resolve department by name (exact case-insensitive, then partial match if unique)."""

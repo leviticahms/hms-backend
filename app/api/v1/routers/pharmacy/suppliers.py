@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from uuid import UUID
 from app.database.session import get_db_session
-from app.dependencies.auth import require_hospital_admin
+from app.dependencies.auth import require_admin_or_pharmacist
 from app.models.user import User
 from app.services.pharmacy_service import PharmacyService
 from app.schemas.pharmacy_suppliers_crud import SupplierCreate, SupplierUpdate
@@ -19,7 +19,7 @@ async def list_suppliers(
     search: Optional[str] = Query(None, description="Search by name"),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_admin_or_pharmacist()),
     db: AsyncSession = Depends(get_db_session)
 ):
     """List all suppliers"""
@@ -56,7 +56,7 @@ async def list_suppliers(
 @router.get("/{supplier_id}")
 async def get_supplier(
     supplier_id: UUID,
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_admin_or_pharmacist()),
     db: AsyncSession = Depends(get_db_session)
 ):
     """Get supplier details by ID"""
@@ -96,7 +96,7 @@ async def get_supplier(
 @router.post("")
 async def create_supplier(
     supplier_data: SupplierCreate,
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_admin_or_pharmacist()),
     db: AsyncSession = Depends(get_db_session)
 ):
     """Create a new supplier"""
@@ -118,7 +118,7 @@ async def create_supplier(
 async def update_supplier(
     supplier_id: UUID,
     supplier_data: SupplierUpdate,
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_admin_or_pharmacist()),
     db: AsyncSession = Depends(get_db_session)
 ):
     """Update supplier details"""
@@ -141,7 +141,7 @@ async def update_supplier(
 @router.delete("/{supplier_id}")
 async def delete_supplier(
     supplier_id: UUID,
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_admin_or_pharmacist()),
     db: AsyncSession = Depends(get_db_session)
 ):
     """Soft delete a supplier"""
