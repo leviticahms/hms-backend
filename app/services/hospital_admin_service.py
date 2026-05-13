@@ -2492,8 +2492,8 @@ class HospitalAdminService:
         existing_schedule = await self.db.execute(
             select(DoctorSchedule).where(
                 and_(
-                    DoctorSchedule.doctor_id == doctor_id,
-                    DoctorSchedule.day_of_week == schedule_data['day_of_week'],
+                    DoctorSchedule.doctor_id.in_([doctor.user_id, doctor_id]),
+                    func.upper(func.trim(DoctorSchedule.day_of_week)) == str(schedule_data['day_of_week']).strip().upper(),
                     DoctorSchedule.is_active == True
                 )
             )
@@ -2552,8 +2552,8 @@ class HospitalAdminService:
         schedule = DoctorSchedule(
             id=uuid.uuid4(),
             hospital_id=self.hospital_id,
-            doctor_id=doctor_id,
-            day_of_week=schedule_data['day_of_week'],
+            doctor_id=doctor.user_id,
+            day_of_week=str(schedule_data['day_of_week']).strip().upper(),
             start_time=start_time,
             end_time=end_time,
             slot_duration_minutes=slot_mins,
@@ -2601,13 +2601,20 @@ class HospitalAdminService:
         # Get schedules
         schedules_result = await self.db.execute(
             select(DoctorSchedule).where(
-                DoctorSchedule.doctor_id == doctor_id
+                DoctorSchedule.doctor_id.in_([doctor.user_id, doctor_id])
             ).order_by(
                 DoctorSchedule.day_of_week.asc(),
                 DoctorSchedule.start_time.asc()
             )
         )
         schedules = schedules_result.scalars().all()
+        repaired = False
+        for schedule in schedules:
+            if schedule.doctor_id != doctor.user_id:
+                schedule.doctor_id = doctor.user_id
+                repaired = True
+        if repaired:
+            await self.db.flush()
         
         # Format response
         schedule_list = []

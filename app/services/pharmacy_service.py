@@ -179,6 +179,40 @@ class PharmacyService:
         )
         return await self.repo.create_supplier(supplier)
 
+    async def update_supplier(
+        self,
+        supplier_id: UUID,
+        hospital_id: UUID,
+        **updates
+    ) -> Supplier:
+        """Update supplier details."""
+        supplier = await self.get_supplier(supplier_id, hospital_id)
+        allowed_fields = {
+            "name",
+            "contact_person",
+            "phone",
+            "email",
+            "address_line1",
+            "address_line2",
+            "city",
+            "state",
+            "pincode",
+            "country",
+            "gstin",
+            "drug_license_no",
+            "payment_terms",
+            "credit_limit",
+            "rating",
+            "status",
+            "notes",
+        }
+        for field, value in updates.items():
+            if field in allowed_fields:
+                setattr(supplier, field, value)
+        await self.db.flush()
+        await self.db.refresh(supplier)
+        return supplier
+
 
 
     # ============================================================================

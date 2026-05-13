@@ -925,11 +925,13 @@ class ClinicalService:
         svc = AppointmentService(self.db)
         day_slots = await svc.get_available_time_slots_for_doctor_user(doctor.id, appt_date)
         if not day_slots:
+            requested_weekday = appointment_datetime.strftime("%A").upper()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    "This doctor has no published availability on that day. "
-                    "Choose another date or verify the doctor's schedule."
+                    f"This doctor has no published {requested_weekday} availability. "
+                    "Doctor schedules are weekly templates (day_of_week + time), not date-wise rows. "
+                    "Choose a date that matches one of the doctor's scheduled weekdays or add that weekday schedule."
                 ),
             )
         match = next((s for s in day_slots if s["time"] == time_hhmm), None)
