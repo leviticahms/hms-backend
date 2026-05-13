@@ -176,6 +176,7 @@ class AuthService:
                         setattr(existing, k, v)
             else:
                 tdb.add(User(**data))
+            await tdb.flush()
 
             r = await tdb.execute(select(Role).where(Role.name == role_name))
             tr = r.scalar_one_or_none()
@@ -243,6 +244,7 @@ class AuthService:
                         setattr(existing_u, k, v)
             else:
                 tdb.add(User(**udata))
+            await tdb.flush()
 
             if profile:
                 pdata = {c.name: getattr(profile, c.name) for c in PatientProfile.__table__.columns}

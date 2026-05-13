@@ -345,6 +345,8 @@ class HospitalAdminService:
             return
 
         await self._upsert_platform_user_from_tenant_row(tu)
+        # FK user_roles.user_id -> users.id: row must exist before role link insert.
+        await self.platform_db.flush()
 
         plat_role = await self._get_or_create_role_on_platform(role_name)
 
@@ -1360,40 +1362,49 @@ class HospitalAdminService:
         
         offset = (page - 1) * limit
 
-        # Build query with hospital filter
-        query = select(User).options(
-            selectinload(User.roles)
-        ).where(User.hospital_id == self.hospital_id)
-        
         # Filter by role if specified
         normalized_role_filter = (role_filter or "").strip().upper() if role_filter else None
+        if normalized_role_filter:
+            role_names = role_name_variants_for_sql_filter(normalized_role_filter)
+            if not role_names:
+                return {
+                    "staff": [],
+                    "pagination": {
+                        "page": page,
+                        "limit": limit,
+                        "total": 0,
+                        "pages": 0,
+                    },
+                }
+        else:
+            role_names = all_sql_role_names_for_staff_directory()
 
-        if normalized_role_filter:
-            variants = role_name_variants_for_sql_filter(normalized_role_filter)
-            query = query.join(User.roles).where(Role.name.in_(variants))
-        else:
-            query = query.join(User.roles).where(Role.name.in_(all_sql_role_names_for_staff_directory()))
-        
+        # Distinct user ids: join on roles can duplicate rows; count must be per-user, not per-role row.
+        staff_id_select = (
+            select(User.id)
+            .where(User.hospital_id == self.hospital_id)
+            .join(User.roles)
+            .where(Role.name.in_(role_names))
+        )
         if active_only:
-            query = query.where(User.is_active == True)
-        
-        # Get total count (same role filter as list query)
-        count_query = select(func.count(User.id)).where(User.hospital_id == self.hospital_id)
-        if normalized_role_filter:
-            variants = role_name_variants_for_sql_filter(normalized_role_filter)
-            count_query = count_query.join(User.roles).where(Role.name.in_(variants))
-        else:
-            count_query = count_query.join(User.roles).where(Role.name.in_(all_sql_role_names_for_staff_directory()))
-        if active_only:
-            count_query = count_query.where(User.is_active == True)
-        
+            staff_id_select = staff_id_select.where(User.is_active == True)
+        staff_id_select = staff_id_select.distinct()
+        id_subq = staff_id_select.subquery()
+
+        count_query = select(func.count()).select_from(id_subq)
         total_result = await self.db.execute(count_query)
-        total = total_result.scalar()
-        
-        # Get paginated results
-        query = query.offset(offset).limit(limit).order_by(User.first_name.asc(), User.last_name.asc())
+        total = int(total_result.scalar() or 0)
+
+        query = (
+            select(User)
+            .options(selectinload(User.roles))
+            .where(User.hospital_id == self.hospital_id, User.id.in_(select(id_subq.c.id)))
+            .order_by(User.first_name.asc(), User.last_name.asc())
+            .offset(offset)
+            .limit(limit)
+        )
         result = await self.db.execute(query)
-        users = result.unique().scalars().all()
+        users = result.scalars().all()
         
         # Format response
         staff_list = []
