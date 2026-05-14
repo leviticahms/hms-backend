@@ -640,7 +640,10 @@ class SuperAdminService:
         
         # Check if hospital already has a subscription
         existing_subscription = await self.db.execute(
-            select(HospitalSubscription).where(HospitalSubscription.hospital_id == hospital_id)
+            select(HospitalSubscription)
+            .where(HospitalSubscription.hospital_id == hospital_id)
+            .order_by(desc(HospitalSubscription.created_at))
+            .limit(1)
         )
         current_subscription = existing_subscription.scalar_one_or_none()
         
@@ -738,7 +741,9 @@ class SuperAdminService:
         # Get subscription with plan details
         query = select(HospitalSubscription).options(
             selectinload(HospitalSubscription.plan)
-        ).where(HospitalSubscription.hospital_id == hospital_id)
+        ).where(HospitalSubscription.hospital_id == hospital_id).order_by(
+            desc(HospitalSubscription.created_at)
+        ).limit(1)
         
         result = await self.db.execute(query)
         subscription = result.scalar_one_or_none()
