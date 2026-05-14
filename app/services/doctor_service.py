@@ -12,13 +12,15 @@ from fastapi import HTTPException, status
 
 from app.models.user import User, Role, user_roles
 from app.models.patient import PatientProfile, Appointment, MedicalRecord, Admission
-from app.models.hospital import Department, StaffDepartmentAssignment
+from app.models.hospital import Department, StaffDepartmentAssignment, StaffProfile
 from app.models.doctor import DoctorProfile
 from app.models.nurse import NurseProfile
 from app.models.receptionist import ReceptionistProfile
 from app.models.schedule import DoctorSchedule
 from app.core.enums import UserRole, AppointmentStatus, UserStatus, DayOfWeek
 from app.core.utils import generate_patient_ref, parse_date_string, validate_medicine_id
+from app.database.session import get_tenant_session_factory
+from app.database.tenant_context import resolve_tenant_database_name_for_hospital
 
 DEFAULT_APPOINTMENT_SLOT_MINUTES = 30
 
@@ -50,7 +52,7 @@ class DoctorService:
             self.medical_license_number = f"LIC-{user.id}"
             self.is_available = True
 
-    async def _department_from_user_metadata(self, user: User):
+    async def _department_from_user_metadata(self, user: User, db: Optional[AsyncSession] = None):
         """Fallback for platform-routed schedule APIs after hospital-admin assignment mirroring."""
         metadata = user.user_metadata if isinstance(user.user_metadata, dict) else {}
         raw_department_id = metadata.get("department_id")
@@ -67,8 +69,9 @@ class DoctorService:
                 department_id = None
 
         department = None
+        query_db = db or self.db
         if department_id:
-            result = await self.db.execute(
+            result = await query_db.execute(
                 select(Department).where(
                     and_(
                         Department.id == department_id,
@@ -78,7 +81,7 @@ class DoctorService:
             )
             department = result.scalar_one_or_none()
         if not department and department_name and user.hospital_id:
-            result = await self.db.execute(
+            result = await query_db.execute(
                 select(Department).where(
                     and_(
                         Department.hospital_id == user.hospital_id,
@@ -92,6 +95,67 @@ class DoctorService:
             return department
         if department_id:
             return self._DepartmentRef(department_id, str(department_name))
+        return None
+
+    async def _department_from_tenant_staff_records(self, user_id: uuid.UUID, hospital_id: uuid.UUID):
+        """Read tenant-side staff/profile assignment when platform mirror has not caught up."""
+        tenant_name = await resolve_tenant_database_name_for_hospital(hospital_id)
+        if not tenant_name:
+            return None
+
+        tenant_factory = get_tenant_session_factory(tenant_name)
+        async with tenant_factory() as tenant_db:
+            user = await tenant_db.get(User, user_id)
+            if user:
+                department = await self._department_from_user_metadata(user, tenant_db)
+                if department:
+                    return department
+
+            assignment_result = await tenant_db.execute(
+                select(StaffDepartmentAssignment)
+                .where(
+                    and_(
+                        StaffDepartmentAssignment.staff_id == user_id,
+                        StaffDepartmentAssignment.hospital_id == hospital_id,
+                        StaffDepartmentAssignment.is_active == True,
+                    )
+                )
+                .options(selectinload(StaffDepartmentAssignment.department))
+                .order_by(
+                    StaffDepartmentAssignment.is_primary.desc(),
+                    StaffDepartmentAssignment.effective_from.desc(),
+                )
+                .limit(1)
+            )
+            assignment = assignment_result.scalars().first()
+            if assignment:
+                if assignment.department:
+                    return self._DepartmentRef(
+                        assignment.department.id,
+                        assignment.department.name,
+                    )
+                return self._DepartmentRef(assignment.department_id, "Assigned Department")
+
+            for model in (DoctorProfile, ReceptionistProfile, NurseProfile, StaffProfile):
+                result = await tenant_db.execute(
+                    select(model)
+                    .where(
+                        and_(
+                            model.user_id == user_id,
+                            model.hospital_id == hospital_id,
+                        )
+                    )
+                    .options(selectinload(model.department))
+                    .limit(1)
+                )
+                profile = result.scalars().first()
+                if profile:
+                    department = getattr(profile, "department", None)
+                    department_id = getattr(profile, "department_id", None)
+                    if department:
+                        return self._DepartmentRef(department.id, department.name)
+                    if department_id:
+                        return self._DepartmentRef(department_id, "Assigned Department")
         return None
     
     @staticmethod
@@ -223,6 +287,13 @@ class DoctorService:
             department = await self._department_from_user_metadata(doctor_user)
             if department:
                 return self._DoctorRef(doctor_user, department)
+            if doctor_user.hospital_id:
+                department = await self._department_from_tenant_staff_records(
+                    staff_uuid,
+                    doctor_user.hospital_id,
+                )
+                if department:
+                    return self._DoctorRef(doctor_user, department)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=(
@@ -681,6 +752,12 @@ class DoctorService:
             department = await self._department_from_user_metadata(acting_user)
             dept_id = department.id if department else None
         if not dept_id:
+            department = await self._department_from_tenant_staff_records(
+                acting_user.id,
+                acting_user.hospital_id,
+            )
+            dept_id = department.id if department else None
+        if not dept_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
@@ -789,6 +866,11 @@ class DoctorService:
             doctors = []
             for candidate in candidates:
                 department = await self._department_from_user_metadata(candidate)
+                if not department and candidate.hospital_id:
+                    department = await self._department_from_tenant_staff_records(
+                        candidate.id,
+                        candidate.hospital_id,
+                    )
                 if department and department.id == dept_id:
                     doctors.append(candidate)
         if len(doctors) > 1:
@@ -845,6 +927,11 @@ class DoctorService:
             doctor_user = user_result.scalar_one_or_none()
             if doctor_user:
                 department = await self._department_from_user_metadata(doctor_user)
+                if not department and doctor_user.hospital_id:
+                    department = await self._department_from_tenant_staff_records(
+                        doctor_user.id,
+                        doctor_user.hospital_id,
+                    )
                 if department and department.id == dept_id:
                     return
             raise HTTPException(
