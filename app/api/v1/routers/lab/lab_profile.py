@@ -55,12 +55,12 @@ async def configure_lab_settings(
 
 @router.post("/change-password", response_model=ChangePasswordResponse)
 async def change_lab_profile_password(
+    request: ChangePasswordRequest,
     current_user: User = Depends(
         require_roles(LAB_MUTATION_ROLES)
     ),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ) -> ChangePasswordResponse:
-    
     return await LabProfileService(
         db,
         current_user.hospital_id
