@@ -49,6 +49,14 @@ class MedicineBase(BaseModel):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
 
+    @field_validator("dosage_form", mode="before")
+    @classmethod
+    def coerce_dosage_form(cls, v: Union[str, DosageForm, None]) -> Union[str, DosageForm, None]:
+        if v is None or isinstance(v, DosageForm):
+            return v
+        s = str(v).strip()
+        return s.upper() if s else v
+
     @field_validator("pack_size", mode="before")
     @classmethod
     def coerce_pack_size(cls, v: Union[int, str, None]) -> Optional[str]:
@@ -461,6 +469,17 @@ class SaleOut(BaseModel):
     items: List[SaleItemOut] = []
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("sale_type", "status", "payment_status", "payment_method", mode="before")
+    @classmethod
+    def coerce_sale_enums(cls, v):
+        if v is None:
+            return v
+        raw = getattr(v, "value", v)
+        s = str(raw).strip()
+        if "." in s:
+            s = s.split(".")[-1]
+        return s.upper() if s else raw
 
     class Config:
         from_attributes = True

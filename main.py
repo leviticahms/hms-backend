@@ -134,8 +134,8 @@ async def seed_superadmin():
                 security = SecurityManager()
                 superadmin_email = (settings.SUPERADMIN_EMAIL or "").strip().lower()
                 superadmin_password = (settings.SUPERADMIN_PASSWORD or "").strip()
-                superadmin_first = (settings.SUPERADMIN_FIRST_NAME or "").strip()
-                superadmin_last = (settings.SUPERADMIN_LAST_NAME or "").strip()
+                superadmin_first = (settings.SUPERADMIN_FIRST_NAME or "").strip() or "Super"
+                superadmin_last = (settings.SUPERADMIN_LAST_NAME or "").strip() or "Admin"
 
                 if not superadmin_email or not superadmin_password:
                     logger.warning(
@@ -144,22 +144,41 @@ async def seed_superadmin():
                     )
                     return
 
-                if not superadmin_first or not superadmin_last:
-                    logger.warning(
-                        "SuperAdmin user bootstrap skipped: set SUPERADMIN_FIRST_NAME and "
-                        "SUPERADMIN_LAST_NAME in the environment."
-                    )
-                    return
-
                 logger.info(f"Checking if SuperAdmin exists: {superadmin_email}")
                 existing_admin_query = select(User).where(func.lower(User.email) == superadmin_email)
                 existing_admin_result = await db.execute(existing_admin_query)
                 existing_admin = existing_admin_result.scalar_one_or_none()
+                if not existing_admin:
+                    # If the env email changed on Render, reuse the existing SUPER_ADMIN account
+                    # instead of creating a second admin or leaving the deployment locked out.
+                    existing_admin_result = await db.execute(
+                        select(User)
+                        .join(user_roles, User.id == user_roles.c.user_id)
+                        .join(Role, user_roles.c.role_id == Role.id)
+                        .where(Role.name == "SUPER_ADMIN")
+                        .limit(1)
+                    )
+                    existing_admin = existing_admin_result.scalar_one_or_none()
                 
                 if existing_admin:
-                    logger.info(f"SuperAdmin already exists, skipping creation: {superadmin_email}")
-                    # Keep superadmin credentials in sync with environment for deployments.
-                    # This avoids login lockout when DB is reused but SUPERADMIN_PASSWORD changes.
+                    logger.info(f"SuperAdmin already exists, syncing environment credentials: {superadmin_email}")
+                    changed = False
+                    if (existing_admin.email or "").strip().lower() != superadmin_email:
+                        existing_admin.email = superadmin_email
+                        changed = True
+                    if existing_admin.first_name != superadmin_first:
+                        existing_admin.first_name = superadmin_first
+                        changed = True
+                    if existing_admin.last_name != superadmin_last:
+                        existing_admin.last_name = superadmin_last
+                        changed = True
+                    if existing_admin.status != "ACTIVE":
+                        existing_admin.status = "ACTIVE"
+                        changed = True
+                    if not existing_admin.email_verified:
+                        existing_admin.email_verified = True
+                        changed = True
+
                     if superadmin_password:
                         password_ok = security.verify_password(
                             superadmin_password,
@@ -168,8 +187,26 @@ async def seed_superadmin():
                         if not password_ok:
                             logger.info("SuperAdmin password mismatch detected; syncing from environment")
                             existing_admin.password_hash = security.hash_password(superadmin_password)
-                            await db.commit()
-                            logger.info("SuperAdmin password synced successfully")
+                            changed = True
+
+                    role_link_result = await db.execute(
+                        select(user_roles.c.user_id).where(
+                            user_roles.c.user_id == existing_admin.id,
+                            user_roles.c.role_id == role_ids["SUPER_ADMIN"],
+                        )
+                    )
+                    if not role_link_result.first():
+                        await db.execute(
+                            user_roles.insert().values(
+                                user_id=existing_admin.id,
+                                role_id=role_ids["SUPER_ADMIN"],
+                            )
+                        )
+                        changed = True
+
+                    if changed:
+                        await db.commit()
+                        logger.info("SuperAdmin env credentials synced successfully")
                     # Verify all roles exist
                     logger.info(f"Verifying all {len(required_roles)} roles exist...")
                     all_roles_query = select(Role)
@@ -189,51 +226,47 @@ async def seed_superadmin():
                 hco = (settings.HOSPITAL_COUNTRY or "").strip()
                 hpcode = (settings.HOSPITAL_PINCODE or "").strip()
 
-                if not all([hn, he, hp, ha, hc, hs, hco, hpcode]):
-                    logger.warning(
-                        "SuperAdmin user bootstrap skipped: set HOSPITAL_NAME, HOSPITAL_EMAIL, "
-                        "HOSPITAL_PHONE, HOSPITAL_ADDRESS, HOSPITAL_CITY, HOSPITAL_STATE, "
-                        "HOSPITAL_COUNTRY, and HOSPITAL_PINCODE for the platform hospital record."
+                hospital_id = None
+                if all([hn, he, hp, ha, hc, hs, hco, hpcode]):
+                    reg_num = (settings.PLATFORM_REGISTRATION_NUMBER or "").strip()
+                    if not reg_num:
+                        reg_num = "PLATFORM-" + hashlib.sha256(he.encode()).hexdigest()[:16].upper()
+
+                    # Step 3: Get or create platform hospital (match by registration number or hospital email)
+                    from sqlalchemy import or_
+
+                    logger.info("Checking for platform hospital record...")
+                    platform_hospital_query = (
+                        select(Hospital)
+                        .where(or_(Hospital.registration_number == reg_num, Hospital.email == he))
+                        .limit(1)
                     )
-                    return
-
-                reg_num = (settings.PLATFORM_REGISTRATION_NUMBER or "").strip()
-                if not reg_num:
-                    reg_num = "PLATFORM-" + hashlib.sha256(he.encode()).hexdigest()[:16].upper()
-
-                # Step 3: Get or create platform hospital (match by registration number or hospital email)
-                from sqlalchemy import or_
-
-                logger.info("Checking for platform hospital record...")
-                platform_hospital_query = (
-                    select(Hospital)
-                    .where(or_(Hospital.registration_number == reg_num, Hospital.email == he))
-                    .limit(1)
-                )
-                platform_hospital_result = await db.execute(platform_hospital_query)
-                existing_hospital = platform_hospital_result.scalar_one_or_none()
-                
-                if not existing_hospital:
-                    logger.info("Creating platform hospital from environment...")
-                    hospital = Hospital(
-                        id=uuid.uuid4(),
-                        name=hn,
-                        registration_number=reg_num,
-                        email=he,
-                        phone=hp,
-                        address=ha,
-                        city=hc,
-                        state=hs,
-                        country=hco,
-                        pincode=hpcode,
-                    )
-                    db.add(hospital)
-                    await db.flush()
-                    hospital_id = hospital.id
-                    logger.info(f"Platform hospital created: {hospital_id}")
+                    platform_hospital_result = await db.execute(platform_hospital_query)
+                    existing_hospital = platform_hospital_result.scalar_one_or_none()
+                    
+                    if not existing_hospital:
+                        logger.info("Creating platform hospital from environment...")
+                        hospital = Hospital(
+                            id=uuid.uuid4(),
+                            name=hn,
+                            registration_number=reg_num,
+                            email=he,
+                            phone=hp,
+                            address=ha,
+                            city=hc,
+                            state=hs,
+                            country=hco,
+                            pincode=hpcode,
+                        )
+                        db.add(hospital)
+                        await db.flush()
+                        hospital_id = hospital.id
+                        logger.info(f"Platform hospital created: {hospital_id}")
+                    else:
+                        hospital_id = existing_hospital.id
+                        logger.info(f"Platform hospital found: {hospital_id}")
                 else:
-                    hospital_id = existing_hospital.id
-                    logger.info(f"Platform hospital found: {hospital_id}")
+                    logger.info("Platform hospital env incomplete; creating superadmin without hospital_id")
                 
                 # Step 4: Hash password using project's security manager
                 logger.info(" Hashing SuperAdmin password...")
@@ -245,7 +278,7 @@ async def seed_superadmin():
                     id=uuid.uuid4(),
                     hospital_id=hospital_id,
                     email=superadmin_email,
-                    phone=hp,
+                    phone=hp or "0000000000",
                     password_hash=password_hash,
                     first_name=superadmin_first,
                     last_name=superadmin_last,
@@ -438,7 +471,7 @@ async def sync_superadmin_credentials():
     Runs independently from migration lock flow.
     """
     from app.database.session import AsyncSessionLocal
-    from app.models.user import User
+    from app.models.user import User, Role, user_roles
     from app.core.security import SecurityManager
     from sqlalchemy import select, func
 
@@ -448,19 +481,62 @@ async def sync_superadmin_credentials():
         return
 
     async with AsyncSessionLocal() as db:
+        role_result = await db.execute(select(Role).where(Role.name == "SUPER_ADMIN").limit(1))
+        super_role = role_result.scalar_one_or_none()
         result = await db.execute(
             select(User).where(func.lower(User.email) == superadmin_email).limit(1)
         )
         user = result.scalar_one_or_none()
         if not user:
+            result = await db.execute(
+                select(User)
+                .join(user_roles, User.id == user_roles.c.user_id)
+                .join(Role, user_roles.c.role_id == Role.id)
+                .where(Role.name == "SUPER_ADMIN")
+                .limit(1)
+            )
+            user = result.scalar_one_or_none()
+        if not user:
             logger.warning("SuperAdmin sync skipped: user not found in database yet")
             return
 
         security = SecurityManager()
+        changed = False
+        if (user.email or "").strip().lower() != superadmin_email:
+            user.email = superadmin_email
+            changed = True
         if not security.verify_password(superadmin_password, user.password_hash):
             user.password_hash = security.hash_password(superadmin_password)
+            changed = True
+        if user.status != "ACTIVE":
+            user.status = "ACTIVE"
+            changed = True
+        if not user.email_verified:
+            user.email_verified = True
+            changed = True
+        first = (settings.SUPERADMIN_FIRST_NAME or "").strip() or "Super"
+        last = (settings.SUPERADMIN_LAST_NAME or "").strip() or "Admin"
+        if user.first_name != first:
+            user.first_name = first
+            changed = True
+        if user.last_name != last:
+            user.last_name = last
+            changed = True
+        if super_role:
+            link_result = await db.execute(
+                select(user_roles.c.user_id).where(
+                    user_roles.c.user_id == user.id,
+                    user_roles.c.role_id == super_role.id,
+                )
+            )
+            if not link_result.first():
+                await db.execute(
+                    user_roles.insert().values(user_id=user.id, role_id=super_role.id)
+                )
+                changed = True
+        if changed:
             await db.commit()
-            logger.info("SuperAdmin password synced from environment")
+            logger.info("SuperAdmin credentials synced from environment")
 
 
 async def lifespan(app: FastAPI):

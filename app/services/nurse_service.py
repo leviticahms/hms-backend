@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Type
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import and_, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -45,6 +45,22 @@ def _model_values_raw(obj: Any) -> Dict[str, Any]:
     for col in obj.__table__.columns:
         out[col.name] = getattr(obj, col.name)
     return out
+
+
+def _json_items(value: Any) -> List[Dict[str, Any]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _is_pending_item(item: Dict[str, Any], done_statuses: set[str]) -> bool:
+    status_value = item.get("status") or item.get("result_status") or item.get("notify_status")
+    if status_value is None:
+        return True
+    status_text = str(status_value).strip().upper()
+    return status_text not in done_statuses
 
 
 def _require_uuid(value: Any, field: str) -> uuid.UUID:
@@ -197,8 +213,8 @@ class NurseService:
 
     async def get_dashboard(self, current_user: User) -> Dict[str, Any]:
         assignment = await self._get_nurse_department(current_user)
-        admissions = await self.tenant_db.execute(
-            select(func.count(Admission.id)).where(
+        admissions_res = await self.tenant_db.execute(
+            select(Admission.patient_id, Admission.discharge_summary_id).where(
                 and_(
                     Admission.hospital_id == current_user.hospital_id,
                     Admission.department_id == assignment.department_id,
@@ -206,64 +222,95 @@ class NurseService:
                 )
             )
         )
-        active_count = admissions.scalar() or 0
-        recent_vitals = await self.tenant_db.execute(
-            select(MedicalRecord.vital_signs)
-            .where(
-                and_(
-                    MedicalRecord.hospital_id == current_user.hospital_id,
-                    MedicalRecord.vital_signs.isnot(None),
-                )
-            )
-            .order_by(desc(MedicalRecord.created_at))
-            .limit(200)
-        )
-        critical_count = 0
-        for row in recent_vitals.all():
-            vs = row[0] or {}
-            if self._is_critical_vitals(vs):
-                critical_count += 1
+        active_admissions = admissions_res.all()
+        patient_ids = [row.patient_id for row in active_admissions]
+        active_count = len(active_admissions)
+        discharge_preparations = sum(1 for row in active_admissions if row.discharge_summary_id is None)
 
-        pending_meds_q = await self.tenant_db.execute(
-            select(MedicalRecord.prescriptions).where(
-                and_(
-                    MedicalRecord.hospital_id == current_user.hospital_id,
-                    MedicalRecord.prescriptions.isnot(None),
-                )
-            )
-        )
+        critical_count = 0
         pending_meds = 0
-        for row in pending_meds_q.all():
-            for med in row[0] or []:
-                if str(med.get("status", "")).upper() == "PENDING":
-                    pending_meds += 1
+        pending_lab_reports = 0
+        if patient_ids:
+            records_res = await self.tenant_db.execute(
+                select(MedicalRecord.vital_signs, MedicalRecord.prescriptions, MedicalRecord.lab_orders)
+                .where(
+                    and_(
+                        MedicalRecord.hospital_id == current_user.hospital_id,
+                        MedicalRecord.patient_id.in_(patient_ids),
+                    )
+                )
+                .order_by(desc(MedicalRecord.created_at))
+                .limit(500)
+            )
+
+            medication_done_statuses = {"ADMINISTERED", "GIVEN", "COMPLETED", "CANCELLED", "STOPPED", "DISCONTINUED"}
+            lab_done_statuses = {"RESULT_ENTERED", "APPROVED", "REPORTED", "COMPLETED", "CANCELLED", "REJECTED"}
+            for vital_signs, prescriptions, lab_orders in records_res.all():
+                if self._is_critical_vitals(vital_signs or {}):
+                    critical_count += 1
+                for med in _json_items(prescriptions):
+                    if _is_pending_item(med, medication_done_statuses):
+                        pending_meds += 1
+                for lab_order in _json_items(lab_orders):
+                    if _is_pending_item(lab_order, lab_done_statuses):
+                        pending_lab_reports += 1
+
         profile = await self.get_profile(current_user)
+        stats = {
+            "assigned_patients": active_count,
+            "active_patients": active_count,
+            "critical_alerts": critical_count,
+            "medication_rounds": pending_meds,
+            "lab_reports_pending": pending_lab_reports,
+            "discharge_preparations": discharge_preparations,
+        }
+        pending_tasks = {
+            "medication_rounds": pending_meds,
+            "lab_reports_pending": pending_lab_reports,
+            "discharge_preparations": discharge_preparations,
+        }
         return {
             "profile": profile,
-            "stats": {
-                "active_patients": active_count,
-                "critical_alerts": critical_count,
-            },
-            "pending_tasks": {
-                "medication_rounds": pending_meds,
-                "lab_reports_pending": 0,
-                "discharge_preparations": 0,
-            },
+            "stats": stats,
+            "pending_tasks": pending_tasks,
+            # Compatibility aliases for dashboard clients that read counters at top level.
+            "assigned_patients": active_count,
+            "active_patients": active_count,
+            "critical_alerts": critical_count,
+            "medication_rounds": pending_meds,
+            "lab_reports_pending": pending_lab_reports,
+            "discharge_preparations": discharge_preparations,
         }
 
     @staticmethod
-    def _is_critical_vitals(vital_signs: Dict[str, Any]) -> bool:
-        temp = vital_signs.get("temperature_f")
-        spo2 = vital_signs.get("oxygen_saturation")
-        systolic = vital_signs.get("blood_pressure_systolic")
-        diastolic = vital_signs.get("blood_pressure_diastolic")
-        if isinstance(temp, (int, float)) and temp >= 102:
+    def _as_float(value: Any) -> Optional[float]:
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            text = str(value).strip()
+            if not text:
+                return None
+            return float(text)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _is_critical_vitals(cls, vital_signs: Dict[str, Any]) -> bool:
+        alert_flags = vital_signs.get("alert_flags") if isinstance(vital_signs, dict) else None
+        if isinstance(alert_flags, dict) and alert_flags.get("critical") is True:
             return True
-        if isinstance(spo2, (int, float)) and spo2 < 92:
+
+        temp = cls._as_float(vital_signs.get("temperature_f"))
+        spo2 = cls._as_float(vital_signs.get("oxygen_saturation"))
+        systolic = cls._as_float(vital_signs.get("blood_pressure_systolic"))
+        diastolic = cls._as_float(vital_signs.get("blood_pressure_diastolic"))
+        if temp is not None and temp >= 102:
             return True
-        if isinstance(systolic, (int, float)) and systolic >= 180:
+        if spo2 is not None and spo2 < 92:
             return True
-        if isinstance(diastolic, (int, float)) and diastolic >= 120:
+        if systolic is not None and systolic >= 180:
+            return True
+        if diastolic is not None and diastolic >= 120:
             return True
         return False
 

@@ -2492,8 +2492,8 @@ class HospitalAdminService:
         existing_schedule = await self.db.execute(
             select(DoctorSchedule).where(
                 and_(
-                    DoctorSchedule.doctor_id == doctor_id,
-                    DoctorSchedule.day_of_week == schedule_data['day_of_week'],
+                    DoctorSchedule.doctor_id.in_([doctor.user_id, doctor_id]),
+                    func.upper(func.trim(DoctorSchedule.day_of_week)) == str(schedule_data['day_of_week']).strip().upper(),
                     DoctorSchedule.is_active == True
                 )
             )
@@ -2552,8 +2552,8 @@ class HospitalAdminService:
         schedule = DoctorSchedule(
             id=uuid.uuid4(),
             hospital_id=self.hospital_id,
-            doctor_id=doctor_id,
-            day_of_week=schedule_data['day_of_week'],
+            doctor_id=doctor.user_id,
+            day_of_week=str(schedule_data['day_of_week']).strip().upper(),
             start_time=start_time,
             end_time=end_time,
             slot_duration_minutes=slot_mins,
@@ -2601,13 +2601,20 @@ class HospitalAdminService:
         # Get schedules
         schedules_result = await self.db.execute(
             select(DoctorSchedule).where(
-                DoctorSchedule.doctor_id == doctor_id
+                DoctorSchedule.doctor_id.in_([doctor.user_id, doctor_id])
             ).order_by(
                 DoctorSchedule.day_of_week.asc(),
                 DoctorSchedule.start_time.asc()
             )
         )
         schedules = schedules_result.scalars().all()
+        repaired = False
+        for schedule in schedules:
+            if schedule.doctor_id != doctor.user_id:
+                schedule.doctor_id = doctor.user_id
+                repaired = True
+        if repaired:
+            await self.db.flush()
         
         # Format response
         schedule_list = []
@@ -3230,12 +3237,14 @@ class HospitalAdminService:
 
         # Check if ward code already exists in this hospital
         existing_ward = await self.db.execute(
-            select(Ward).where(
+            select(Ward.id)
+            .where(
                 and_(
                     Ward.hospital_id == self.hospital_id,
                     Ward.code == ward_data['code']
                 )
             )
+            .limit(1)
         )
         if existing_ward.scalar_one_or_none():
             raise HTTPException(
@@ -3317,15 +3326,12 @@ class HospitalAdminService:
         active_only: bool = False
     ) -> Dict[str, Any]:
         """Get paginated list of wards"""
-        from app.models.hospital import Ward
+        from app.models.hospital import Bed, Ward
         
         offset = (page - 1) * limit
         
         # Build query with hospital filter
-        query = select(Ward).options(
-            selectinload(Ward.head_nurse),
-            selectinload(Ward.beds)
-        ).where(Ward.hospital_id == self.hospital_id)
+        query = select(Ward).where(Ward.hospital_id == self.hospital_id)
         
         # Filter by ward type
         if ward_type:
@@ -3348,19 +3354,64 @@ class HospitalAdminService:
         query = query.offset(offset).limit(limit).order_by(Ward.name.asc())
         result = await self.db.execute(query)
         wards = result.scalars().all()
+
+        ward_ids = [ward.id for ward in wards]
+        bed_stats: Dict[uuid.UUID, Dict[str, int]] = {
+            ward_id: {"total": 0, "available": 0, "occupied": 0, "maintenance": 0}
+            for ward_id in ward_ids
+        }
+        if ward_ids:
+            bed_result = await self.db.execute(
+                select(Bed.ward_id, Bed.status).where(
+                    and_(
+                        Bed.hospital_id == self.hospital_id,
+                        Bed.ward_id.in_(ward_ids),
+                    )
+                )
+            )
+            for ward_id, bed_status in bed_result.all():
+                stats = bed_stats.setdefault(
+                    ward_id,
+                    {"total": 0, "available": 0, "occupied": 0, "maintenance": 0},
+                )
+                status_label = (
+                    bed_status.value if hasattr(bed_status, "value") else str(bed_status or "")
+                ).upper()
+                stats["total"] += 1
+                if status_label == "AVAILABLE":
+                    stats["available"] += 1
+                elif status_label == "OCCUPIED":
+                    stats["occupied"] += 1
+                elif status_label == "MAINTENANCE":
+                    stats["maintenance"] += 1
+
+        nurse_ids = {ward.head_nurse_id for ward in wards if ward.head_nurse_id}
+        head_nurse_names: Dict[uuid.UUID, str] = {}
+        if nurse_ids:
+            nurse_result = await self.db.execute(
+                select(User.id, User.first_name, User.last_name).where(
+                    and_(
+                        User.hospital_id == self.hospital_id,
+                        User.id.in_(nurse_ids),
+                    )
+                )
+            )
+            for nurse_id, first_name, last_name in nurse_result.all():
+                head_nurse_names[nurse_id] = f"{first_name or ''} {last_name or ''}".strip()
         
         # Format response
         ward_list = []
         for ward in wards:
             # Calculate bed statistics
-            total_beds = len(ward.beds)
-            available_beds = len([bed for bed in ward.beds if bed.status == "AVAILABLE"])
-            occupied_beds = len([bed for bed in ward.beds if bed.status == "OCCUPIED"])
-            maintenance_beds = len([bed for bed in ward.beds if bed.status == "MAINTENANCE"])
-            
-            head_nurse_name = None
-            if ward.head_nurse:
-                head_nurse_name = f"{ward.head_nurse.first_name} {ward.head_nurse.last_name}"
+            stats = bed_stats.get(
+                ward.id,
+                {"total": 0, "available": 0, "occupied": 0, "maintenance": 0},
+            )
+            total_beds = stats["total"]
+            available_beds = stats["available"]
+            occupied_beds = stats["occupied"]
+            maintenance_beds = stats["maintenance"]
+            head_nurse_name = head_nurse_names.get(ward.head_nurse_id)
             
             ward_list.append({
                 "id": str(ward.id),
@@ -3436,13 +3487,15 @@ class HospitalAdminService:
 
         if "code" in data and data["code"] is not None and data["code"] != ward.code:
             existing_ward = await self.db.execute(
-                select(Ward).where(
+                select(Ward.id)
+                .where(
                     and_(
                         Ward.hospital_id == self.hospital_id,
                         Ward.code == data["code"],
                         Ward.id != ward_id,
                     )
                 )
+                .limit(1)
             )
             if existing_ward.scalar_one_or_none():
                 raise HTTPException(
@@ -6171,23 +6224,29 @@ class HospitalAdminService:
         last_name = " ".join(name_parts[1:])  # Handle multiple last names
         
         # Try exact match first
-        query = select(User).options(selectinload(User.roles)).where(
-            and_(
-                User.hospital_id == self.hospital_id,
-                User.roles.any(
-                    Role.name.in_(
-                        [
-                            UserRole.DOCTOR.value,
-                            UserRole.NURSE.value,
-                            UserRole.RECEPTIONIST.value,
-                            UserRole.PHARMACIST.value,
-                            UserRole.LAB_TECH.value,
-                        ]
-                    )
-                ),
-                User.first_name.ilike(first_name),
-                User.last_name.ilike(last_name)
+        query = (
+            select(User)
+            .options(selectinload(User.roles))
+            .where(
+                and_(
+                    User.hospital_id == self.hospital_id,
+                    User.roles.any(
+                        Role.name.in_(
+                            [
+                                UserRole.DOCTOR.value,
+                                UserRole.NURSE.value,
+                                UserRole.RECEPTIONIST.value,
+                                UserRole.PHARMACIST.value,
+                                UserRole.LAB_TECH.value,
+                            ]
+                        )
+                    ),
+                    User.first_name.ilike(first_name),
+                    User.last_name.ilike(last_name)
+                )
             )
+            .order_by(User.created_at.desc(), User.id.asc())
+            .limit(1)
         )
         result = await self.db.execute(query)
         staff = result.scalar_one_or_none()
@@ -6196,23 +6255,29 @@ class HospitalAdminService:
             return staff
         
         # If exact match fails, try partial match
-        query = select(User).options(selectinload(User.roles)).where(
-            and_(
-                User.hospital_id == self.hospital_id,
-                User.roles.any(
-                    Role.name.in_(
-                        [
-                            UserRole.DOCTOR.value,
-                            UserRole.NURSE.value,
-                            UserRole.RECEPTIONIST.value,
-                            UserRole.PHARMACIST.value,
-                            UserRole.LAB_TECH.value,
-                        ]
-                    )
-                ),
-                User.first_name.ilike(f"%{first_name}%"),
-                User.last_name.ilike(f"%{last_name}%")
+        query = (
+            select(User)
+            .options(selectinload(User.roles))
+            .where(
+                and_(
+                    User.hospital_id == self.hospital_id,
+                    User.roles.any(
+                        Role.name.in_(
+                            [
+                                UserRole.DOCTOR.value,
+                                UserRole.NURSE.value,
+                                UserRole.RECEPTIONIST.value,
+                                UserRole.PHARMACIST.value,
+                                UserRole.LAB_TECH.value,
+                            ]
+                        )
+                    ),
+                    User.first_name.ilike(f"%{first_name}%"),
+                    User.last_name.ilike(f"%{last_name}%")
+                )
             )
+            .order_by(User.created_at.desc(), User.id.asc())
+            .limit(1)
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
@@ -6230,11 +6295,16 @@ class HospitalAdminService:
 
     async def _get_department_by_name(self, department_name: str) -> Optional[Department]:
         """Get department by name within this hospital"""
-        query = select(Department).where(
-            and_(
-                Department.hospital_id == self.hospital_id,
-                Department.name.ilike(f"%{department_name}%")
+        query = (
+            select(Department)
+            .where(
+                and_(
+                    Department.hospital_id == self.hospital_id,
+                    Department.name.ilike(f"%{department_name}%")
+                )
             )
+            .order_by(Department.name.asc(), Department.id.asc())
+            .limit(1)
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
@@ -6242,11 +6312,16 @@ class HospitalAdminService:
     async def _get_ward_by_name(self, ward_name: str) -> Optional['Ward']:
         """Get ward by name within this hospital"""
         from app.models.hospital import Ward
-        query = select(Ward).where(
-            and_(
-                Ward.hospital_id == self.hospital_id,
-                Ward.name.ilike(f"%{ward_name}%")
+        query = (
+            select(Ward)
+            .where(
+                and_(
+                    Ward.hospital_id == self.hospital_id,
+                    Ward.name.ilike(f"%{ward_name}%")
+                )
             )
+            .order_by(Ward.name.asc(), Ward.id.asc())
+            .limit(1)
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
