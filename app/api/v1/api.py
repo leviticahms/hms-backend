@@ -135,8 +135,14 @@ try:
     from app.api.v1.routers.management.staff_doctor_schedules import (
         router as staff_doctor_schedules_router,
     )
+    from app.api.v1.routers.management.receptionist_directory import (
+        appointments_router as receptionist_appointment_directory_router,
+        directory_router as receptionist_directory_router,
+    )
     api_router.include_router(nurse_management_router)
     api_router.include_router(receptionist_management_router)
+    api_router.include_router(receptionist_directory_router)
+    api_router.include_router(receptionist_appointment_directory_router)
     api_router.include_router(staff_doctor_schedules_router)
     logger.info("✓ Management routers loaded")
 except ImportError as e:

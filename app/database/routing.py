@@ -28,6 +28,9 @@ PLATFORM_ONLY_PREFIXES: tuple[str, ...] = (
     # OPD appointment workflow lives in the platform DB because receptionist and patient
     # booking create patients/appointments there for patient auth and shared doctor visibility.
     "/api/v1/receptionist",
+    "/api/v1/doctors",
+    "/api/v1/departments",
+    "/api/v1/appointments/available-slots",
     "/api/v1/patient-appointment-booking",
     "/api/v1/doctor-management",
     "/api/v1/staff/doctor-schedules",
