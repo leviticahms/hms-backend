@@ -11,7 +11,7 @@ from app.database.session import get_db_session
 from app.dependencies.auth import require_pharmacy_staff, require_hospital_context
 from app.models.user import User, Role, user_roles
 from app.services.pharmacy_service import PharmacyService
-from app.schemas.pharmacy import PatientReturnCreate, SupplierReturnCreate
+from app.schemas.pharmacy import PatientReturnCreate, ReturnOut, SupplierReturnCreate
 from app.schemas.response import SuccessResponse
 
 router = APIRouter(prefix="/returns", tags=["Pharmacy - Returns"])
@@ -103,4 +103,8 @@ async def list_returns(
     """List returns"""
     service = PharmacyService(db)
     returns_list = await service.get_returns(UUID(context["hospital_id"]), return_type, skip, limit)
-    return SuccessResponse(success=True, message=f"Found {len(returns_list)} returns", data={"returns": returns_list}).dict()
+    returns_data = [
+        ReturnOut.model_validate(return_record).model_dump(mode="json")
+        for return_record in returns_list
+    ]
+    return SuccessResponse(success=True, message=f"Found {len(returns_list)} returns", data={"returns": returns_data}).dict()

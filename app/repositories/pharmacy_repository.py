@@ -451,7 +451,12 @@ class PharmacyRepository:
         limit: int = 100
     ) -> List[Return]:
         """Get returns"""
-        query = select(Return).where(
+        query = select(Return).options(
+            selectinload(Return.items).selectinload(ReturnItem.medicine),
+            selectinload(Return.items)
+            .selectinload(ReturnItem.batch)
+            .selectinload(StockBatch.medicine),
+        ).where(
             and_(
                 Return.hospital_id == hospital_id,
                 Return.is_active == True
