@@ -124,6 +124,10 @@ class ConfigureLabSettingsResponse(BaseModel):
     settings: LabSettingsBlock
 
 
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
 class ChangePasswordResponse(BaseModel):
     message: str
 

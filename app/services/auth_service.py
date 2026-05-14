@@ -12,9 +12,7 @@ UPDATED RULES:
 """
 import asyncio
 import re
-import secrets
 import uuid
-import string
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -535,7 +533,7 @@ class AuthService:
         return result
     
     async def create_hospital_staff(self, staff_data: Dict[str, Any], creator_hospital_id: uuid.UUID) -> Dict[str, Any]:
-        """Create hospital staff by Hospital Admin (system-generated password)"""
+        """Create hospital staff by Hospital Admin """
         # Get hospital to check approved domains
         hospital = await self._get_hospital_by_id(creator_hospital_id)
         if not hospital:
@@ -593,9 +591,6 @@ class AuthService:
                 }
             )
         
-        # Generate system password
-        system_password = self._generate_system_password()
-        
         # Create staff user
         user = User(
             id=uuid.uuid4(),
@@ -611,7 +606,7 @@ class AuthService:
         
         self.db.add(user)
         await self.db.flush()
-        
+
         # Assign role
         role = await self._get_role_by_name(staff_data['role'])
         if not role:
@@ -625,6 +620,15 @@ class AuthService:
             )
             self.db.add(role)
             await self.db.flush()
+        await self.db.refresh(hospital)
+        tdb_name = (hospital.tenant_database_name or "").strip()
+        if tdb_name:
+            await self._mirror_platform_user_to_tenant(
+                    tdb_name,
+                    user.id,
+                    staff_data['role'],
+            )
+
         
         # Add role to user using direct SQL to avoid lazy loading issues
         await self.db.execute(
@@ -777,46 +781,6 @@ class AuthService:
             result["hospital_name"] = hospital.name
         return result
     
-    # LOGIN METHODS (SPECIFIC FOR EACH USER TYPE)
-    
-    async def super_admin_login(self, email: str, password: str) -> Dict[str, Any]:
-        """Super Admin login - no OTP required"""
-        logger.debug(f"DEBUG: Super Admin login attempt for email: {email}")
-        
-        # Get user
-        user = await self._get_user_by_email(email)
-        logger.debug(f"DEBUG: Found user: {user}")
-        if not user:
-            logger.debug("DEBUG: User not found")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "AUTH_001", "message": "Invalid credentials"}
-            )
-        
-        # Check if user has SUPER_ADMIN role
-        user_roles = [role.name for role in user.roles]
-        logger.debug(f"DEBUG: User roles: {user_roles}")
-        if "SUPER_ADMIN" not in user_roles:
-            logger.debug("DEBUG: User does not have SUPER_ADMIN role")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"code": "AUTH_002", "message": "Super Admin access required"}
-            )
-        
-        # Check password
-        logger.debug(f"DEBUG: Checking password")
-        if not self.security.verify_password(password, user.password_hash):
-            logger.debug("DEBUG: Password verification failed")
-            await self._log_failed_login(user.id, "invalid_password")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "AUTH_001", "message": "Invalid credentials"}
-            )
-        
-        logger.debug("DEBUG: Login successful, generating tokens")
-        # Generate tokens
-        return await self._generate_auth_response(user)
-
     async def _enforce_hospital_login_access(self, user: User, user_roles: List[str]) -> None:
         """
         Enforce hospital active status + subscription for hospital-scoped (non-patient) users.
@@ -893,96 +857,7 @@ class AuthService:
                     "message": f"Subscription is {status_str.lower()}.",
                 },
             )
-    
-    async def hospital_admin_login(self, email: str, password: str) -> Dict[str, Any]:
-        """Hospital Admin login - no OTP required"""
-        logger.debug(f"DEBUG: Hospital Admin login attempt for email: {email}")
         
-        # Get user
-        user = await self._get_user_by_email(email)
-        logger.debug(f"DEBUG: Found user: {user}")
-        
-        if not user:
-            logger.debug("DEBUG: User not found")
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid credentials"
-            )
-        
-        # Check if user has HOSPITAL_ADMIN role
-        user_roles = [role.name for role in user.roles]
-        logger.debug(f"DEBUG: User roles: {user_roles}")
-
-        if "HOSPITAL_ADMIN" not in user_roles:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"code": "AUTH_002", "message": "Hospital Admin access required"}
-            )
-        
-        # Check password
-        logger.debug(f"DEBUG: Checking password")
-        password_valid = self.security.verify_password(password, user.password_hash)
-        logger.debug(f"DEBUG: Password valid: {password_valid}")
-
-        if not password_valid:
-            await self._log_failed_login(user.id, "invalid_password")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "AUTH_001", "message": "Invalid credentials"}
-            )
-
-        # Account must be active (hospital delete blocks users).
-        if user.status != UserStatus.ACTIVE:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"code": "USER_INACTIVE", "message": "Account is inactive. Contact your administrator."},
-            )
-
-        # Hospital + subscription gating (covers new hospitals too).
-        await self._enforce_hospital_login_access(user, user_roles)
-        
-        logger.debug("DEBUG: Login successful, generating tokens")
-        # Generate tokens
-        return await self._generate_auth_response(user)
-    
-    async def staff_login(self, email: str, password: str) -> Dict[str, Any]:
-        """Staff login - no OTP required"""
-        # Get user
-        user = await self._get_user_by_email(email)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "AUTH_001", "message": "Invalid credentials"}
-            )
-        
-        # Check if user has staff role
-        user_roles = [role.name for role in user.roles]
-        staff_roles = ["DOCTOR", "NURSE", "RECEPTIONIST", "PHARMACIST", "LAB_TECH"]
-        if not any(role in user_roles for role in staff_roles):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"code": "AUTH_002", "message": "Staff access required"}
-            )
-        
-        # Check password
-        if not self.security.verify_password(password, user.password_hash):
-            await self._log_failed_login(user.id, "invalid_password")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "AUTH_001", "message": "Invalid credentials"}
-            )
-
-        if user.status != UserStatus.ACTIVE:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"code": "USER_INACTIVE", "message": "Account is inactive. Contact your administrator."},
-            )
-
-        await self._enforce_hospital_login_access(user, user_roles)
-        
-        # Generate tokens
-        return await self._generate_auth_response(user)
-    
     async def staff_admin_super_admin_login(self, email: str, password: str) -> Dict[str, Any]:
         """
         Unified login for:
@@ -1124,77 +999,7 @@ class AuthService:
                 "roles": user_roles,
                 "hospital_id": str(user.hospital_id) if user.hospital_id else None
             }
-        }
-
-    # ORIGINAL LOGIN METHOD (KEPT FOR BACKWARD COMPATIBILITY)
-    
-    async def login(self, email: str, password: str) -> Dict[str, Any]:
-        """Authenticate user (different rules for staff vs patients)"""
-        # Get user
-        user = await self._get_user_by_email(email)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "AUTH_001", "message": "Invalid credentials"}
-            )
-        
-        # Check password
-        if not self.security.verify_password(password, user.password_hash):
-            await self._log_failed_login(user.id, "invalid_password")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "AUTH_001", "message": "Invalid credentials"}
-            )
-        
-        # Check account status
-        if user.status != UserStatus.ACTIVE:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "AUTH_002", "message": "Account not verified or inactive"}
-            )
-        
-        # Check email verification ONLY for patients
-        if not user.email_verified and self._is_patient(user):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "AUTH_002", "message": "Please verify your email before logging in"}
-            )
-        
-        # Generate tokens
-        user_roles = [role.name for role in user.roles]
-        user_permissions = []
-        for role in user.roles:
-            for permission in role.permissions:
-                user_permissions.append(permission.name)
-        
-        token_data = {
-            "sub": str(user.id),
-            "hospital_id": str(user.hospital_id) if user.hospital_id else None,
-            "roles": user_roles,
-            "permissions": user_permissions
-        }
-        
-        access_token = self.security.create_access_token(token_data)
-        refresh_token = self.security.create_refresh_token({"sub": str(user.id)})
-        
-        # Update last login
-        user.last_login = datetime.utcnow()
-        await self.db.commit()
-        
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "bearer",
-            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            "user": {
-                "id": str(user.id),
-                "email": user.email,
-                "name": f"{user.first_name} {user.last_name}",
-                "roles": user_roles,
-                "hospital_id": str(user.hospital_id)
-            }
-        }
-    
+        } 
     # EMAIL VERIFICATION (ONLY FOR PATIENTS)
     
     async def verify_email(self, email: str, otp_code: str) -> Dict[str, Any]:
@@ -1336,6 +1141,23 @@ class AuthService:
         # Update password
         new_password_hash = self.security.hash_password(new_password)
         user.password_hash = new_password_hash
+        if user.hospital_id:
+            hosp = await self.db.get(Hospital, user.hospital_id)
+            tdb_name = (hosp.tenant_database_name or "").strip() if hosp else ""
+
+            if tdb_name:
+                from app.database.session import get_tenant_session_factory
+
+                fac = get_tenant_session_factory(tdb_name)
+
+                async with fac() as tdb:
+                    tenant_user = await tdb.get(User, user.id)
+
+                    if tenant_user:
+                        tenant_user.password_hash = new_password_hash
+                        tenant_user.password_changed_at = datetime.utcnow()
+
+                        await tdb.commit()
         user.password_changed_at = datetime.utcnow()
         
         # Save to password history
@@ -1385,7 +1207,7 @@ class AuthService:
         """Get list of available hospitals for patient registration"""
         result = await self.db.execute(
             select(Hospital)
-            .where(Hospital.is_active == True)
+            .where(Hospital.is_active.is_(True))
             .order_by(Hospital.name)
         )
         hospitals = result.scalars().all()
@@ -1428,18 +1250,6 @@ class AuthService:
             "created_at": (user.created_at.isoformat() if getattr(user, "created_at", None) else datetime.utcnow().isoformat()),
         }
 
-    # HELPER METHODS
-    
-    def _generate_system_password(self) -> str:
-        """Generate secure system password for hospital admin/staff"""
-        chars = string.ascii_letters + string.digits + "@#$%!"
-        password = ''.join(secrets.choice(chars) for _ in range(12))
-        
-        # Ensure it meets password policy
-        while not PasswordValidator.validate_password(password)['valid']:
-            password = ''.join(secrets.choice(chars) for _ in range(12))
-        
-        return password
     
     async def _get_user_by_email(self, email: str) -> Optional[User]:
         """Get user by email with roles loaded (case-insensitive; trims stored email)."""
@@ -1679,7 +1489,11 @@ class AuthService:
     
     async def _log_failed_login(self, user_id: uuid.UUID, reason: str):
         """Log failed login attempt"""
-        pass  # Implement audit logging
+        logger.warning("FAILED LOGIN | user_id=%s | reason=%s | time=%s",
+        user_id,
+        reason,
+        datetime.utcnow().isoformat()
+    )
     
     async def _is_password_reused(self, user_id: uuid.UUID, new_password: str) -> bool:
         """Check if password was used recently (last 3 passwords)"""
