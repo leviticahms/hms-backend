@@ -3237,12 +3237,14 @@ class HospitalAdminService:
 
         # Check if ward code already exists in this hospital
         existing_ward = await self.db.execute(
-            select(Ward).where(
+            select(Ward.id)
+            .where(
                 and_(
                     Ward.hospital_id == self.hospital_id,
                     Ward.code == ward_data['code']
                 )
             )
+            .limit(1)
         )
         if existing_ward.scalar_one_or_none():
             raise HTTPException(
@@ -3485,13 +3487,15 @@ class HospitalAdminService:
 
         if "code" in data and data["code"] is not None and data["code"] != ward.code:
             existing_ward = await self.db.execute(
-                select(Ward).where(
+                select(Ward.id)
+                .where(
                     and_(
                         Ward.hospital_id == self.hospital_id,
                         Ward.code == data["code"],
                         Ward.id != ward_id,
                     )
                 )
+                .limit(1)
             )
             if existing_ward.scalar_one_or_none():
                 raise HTTPException(
@@ -6220,23 +6224,29 @@ class HospitalAdminService:
         last_name = " ".join(name_parts[1:])  # Handle multiple last names
         
         # Try exact match first
-        query = select(User).options(selectinload(User.roles)).where(
-            and_(
-                User.hospital_id == self.hospital_id,
-                User.roles.any(
-                    Role.name.in_(
-                        [
-                            UserRole.DOCTOR.value,
-                            UserRole.NURSE.value,
-                            UserRole.RECEPTIONIST.value,
-                            UserRole.PHARMACIST.value,
-                            UserRole.LAB_TECH.value,
-                        ]
-                    )
-                ),
-                User.first_name.ilike(first_name),
-                User.last_name.ilike(last_name)
+        query = (
+            select(User)
+            .options(selectinload(User.roles))
+            .where(
+                and_(
+                    User.hospital_id == self.hospital_id,
+                    User.roles.any(
+                        Role.name.in_(
+                            [
+                                UserRole.DOCTOR.value,
+                                UserRole.NURSE.value,
+                                UserRole.RECEPTIONIST.value,
+                                UserRole.PHARMACIST.value,
+                                UserRole.LAB_TECH.value,
+                            ]
+                        )
+                    ),
+                    User.first_name.ilike(first_name),
+                    User.last_name.ilike(last_name)
+                )
             )
+            .order_by(User.created_at.desc(), User.id.asc())
+            .limit(1)
         )
         result = await self.db.execute(query)
         staff = result.scalar_one_or_none()
@@ -6245,23 +6255,29 @@ class HospitalAdminService:
             return staff
         
         # If exact match fails, try partial match
-        query = select(User).options(selectinload(User.roles)).where(
-            and_(
-                User.hospital_id == self.hospital_id,
-                User.roles.any(
-                    Role.name.in_(
-                        [
-                            UserRole.DOCTOR.value,
-                            UserRole.NURSE.value,
-                            UserRole.RECEPTIONIST.value,
-                            UserRole.PHARMACIST.value,
-                            UserRole.LAB_TECH.value,
-                        ]
-                    )
-                ),
-                User.first_name.ilike(f"%{first_name}%"),
-                User.last_name.ilike(f"%{last_name}%")
+        query = (
+            select(User)
+            .options(selectinload(User.roles))
+            .where(
+                and_(
+                    User.hospital_id == self.hospital_id,
+                    User.roles.any(
+                        Role.name.in_(
+                            [
+                                UserRole.DOCTOR.value,
+                                UserRole.NURSE.value,
+                                UserRole.RECEPTIONIST.value,
+                                UserRole.PHARMACIST.value,
+                                UserRole.LAB_TECH.value,
+                            ]
+                        )
+                    ),
+                    User.first_name.ilike(f"%{first_name}%"),
+                    User.last_name.ilike(f"%{last_name}%")
+                )
             )
+            .order_by(User.created_at.desc(), User.id.asc())
+            .limit(1)
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
@@ -6279,11 +6295,16 @@ class HospitalAdminService:
 
     async def _get_department_by_name(self, department_name: str) -> Optional[Department]:
         """Get department by name within this hospital"""
-        query = select(Department).where(
-            and_(
-                Department.hospital_id == self.hospital_id,
-                Department.name.ilike(f"%{department_name}%")
+        query = (
+            select(Department)
+            .where(
+                and_(
+                    Department.hospital_id == self.hospital_id,
+                    Department.name.ilike(f"%{department_name}%")
+                )
             )
+            .order_by(Department.name.asc(), Department.id.asc())
+            .limit(1)
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
@@ -6291,11 +6312,16 @@ class HospitalAdminService:
     async def _get_ward_by_name(self, ward_name: str) -> Optional['Ward']:
         """Get ward by name within this hospital"""
         from app.models.hospital import Ward
-        query = select(Ward).where(
-            and_(
-                Ward.hospital_id == self.hospital_id,
-                Ward.name.ilike(f"%{ward_name}%")
+        query = (
+            select(Ward)
+            .where(
+                and_(
+                    Ward.hospital_id == self.hospital_id,
+                    Ward.name.ilike(f"%{ward_name}%")
+                )
             )
+            .order_by(Ward.name.asc(), Ward.id.asc())
+            .limit(1)
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
