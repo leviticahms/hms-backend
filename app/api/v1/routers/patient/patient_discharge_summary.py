@@ -34,11 +34,23 @@ router = APIRouter(prefix="/patient-discharge-summary", tags=["Patient Portal - 
 def get_user_context(current_user: User) -> dict:
     """Extract user context from JWT token"""
     user_roles = [role.name for role in current_user.roles]
+    primary_role = next(
+        (
+            role
+            for role in (
+                UserRole.DOCTOR.value,
+                UserRole.HOSPITAL_ADMIN.value,
+                UserRole.PATIENT.value,
+            )
+            if role in user_roles
+        ),
+        user_roles[0] if user_roles else None,
+    )
     
     return {
         "user_id": current_user.id,  # Keep as UUID for comparison
         "hospital_id": str(current_user.hospital_id) if current_user.hospital_id else None,
-        "role": user_roles[0] if user_roles else None,
+        "role": primary_role,
         "all_roles": user_roles
     }
 
@@ -238,9 +250,12 @@ async def get_admissions_ready_for_discharge(
             .where(DoctorProfile.user_id == user_context["user_id"])
         )
         doctor = doctor_result.scalar_one_or_none()
-        
-        if doctor:
-            query = query.where(Admission.doctor_id == doctor.user_id)
+        if not doctor:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Doctor profile not found"
+            )
+        query = query.where(Admission.doctor_id == doctor.user_id)
     
     # Apply department filter
     if department_name:
@@ -650,7 +665,7 @@ async def update_discharge_summary(
         )
     
     # Update fields
-    update_fields = update_data.dict(exclude_unset=True)
+    update_fields = update_data.model_dump(exclude_unset=True)
     
     for field, value in update_fields.items():
         setattr(summary, field, value)
@@ -838,25 +853,29 @@ async def get_patient_discharge_summaries(
             .where(DoctorProfile.user_id == user_context["user_id"])
         )
         doctor = doctor_result.scalar_one_or_none()
-        
-        if doctor:
-            # Check if doctor has medical records for this patient
-            record_check = await db.execute(
-                select(MedicalRecord)
-                .where(
-                    and_(
-                        MedicalRecord.patient_id == patient.id,
-                        MedicalRecord.doctor_id == doctor.user_id
-                    )
-                )
-                .limit(1)
+        if not doctor:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Doctor profile not found",
             )
-            
-            if not record_check.scalar_one_or_none():
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied - no treatment history"
+
+        # Check if doctor has medical records for this patient
+        record_check = await db.execute(
+            select(MedicalRecord)
+            .where(
+                and_(
+                    MedicalRecord.patient_id == patient.id,
+                    MedicalRecord.doctor_id == doctor.user_id
                 )
+            )
+            .limit(1)
+        )
+
+        if not record_check.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - no treatment history"
+            )
     
     # Build query
     offset = (page - 1) * limit

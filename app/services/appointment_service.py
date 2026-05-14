@@ -84,7 +84,9 @@ class AppointmentService:
         
         return [
             {
-                "id": str(doctor.id),
+                "id": str(doctor.user_id),
+                "user_id": str(doctor.user_id),
+                "doctor_profile_id": str(doctor.id),
                 "doctor_id": doctor.doctor_id,
                 "name": f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
                 "designation": doctor.designation,

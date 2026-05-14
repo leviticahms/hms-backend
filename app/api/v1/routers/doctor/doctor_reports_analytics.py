@@ -1078,7 +1078,7 @@ async def get_appointment_analytics(
 # PRESCRIPTION ANALYTICS
 # ============================================================================
 
-@router.get("/prescription-analytics")
+# Disabled: prescription endpoints are exposed only through Doctor Portal sidebar routes.
 async def get_prescription_analytics(
     report_period: ReportPeriod = Query(ReportPeriod.THIS_MONTH),
     custom_date_from: Optional[str] = Query(None),

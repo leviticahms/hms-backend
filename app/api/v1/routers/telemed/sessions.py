@@ -443,7 +443,7 @@ async def create_note(
 
 # --- Prescription (doctor only) ---
 
-@router.post("/{session_id}/prescriptions", response_model=dict)
+# Disabled in API registration: prescriptions are exposed only through Doctor Portal routes.
 async def create_prescription(
     session_id: str,
     body: TelemedPrescriptionCreate,

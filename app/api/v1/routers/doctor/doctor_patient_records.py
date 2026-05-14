@@ -21,7 +21,7 @@ from sqlalchemy import select, and_, or_, desc, func, asc, text, update, cast
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.expression import literal
 from sqlalchemy.dialects.postgresql import JSONB
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from enum import Enum
 
 from app.core.database import get_db_session
@@ -91,7 +91,7 @@ class PatientSummary(BaseModel):
     gender: str
     blood_group: Optional[str]
     phone_number: str
-    email: str
+    email: Optional[str] = None
     address: Optional[str]
     
     # Medical summary
@@ -242,11 +242,12 @@ class PatientDocumentSummary(BaseModel):
 def get_user_context(current_user: User) -> dict:
     """Extract user context from JWT token"""
     user_roles = [role.name for role in current_user.roles]
+    primary_role = UserRole.DOCTOR.value if UserRole.DOCTOR.value in user_roles else (user_roles[0] if user_roles else None)
     
     return {
         "user_id": str(current_user.id),
         "hospital_id": str(current_user.hospital_id) if current_user.hospital_id else None,
-        "role": user_roles[0] if user_roles else None,
+        "role": primary_role,
         "all_roles": user_roles
     }
 
@@ -379,7 +380,7 @@ async def get_doctor_profile(user_context: dict, db: AsyncSession):
 
 def ensure_doctor_access(user_context: dict):
     """Ensure user is a doctor"""
-    if user_context["role"] != UserRole.DOCTOR:
+    if UserRole.DOCTOR.value not in user_context.get("all_roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied - Doctor role required"
@@ -1862,48 +1863,146 @@ async def get_clinical_alerts(
 
 class CreateMedicalRecordRequest(BaseModel):
     """Request to create a new medical record"""
-    patient_ref: str = Field(..., description="Patient reference ID")
-    appointment_ref: Optional[str] = Field(None, description="Associated appointment reference")
+    model_config = ConfigDict(populate_by_name=True)
+
+    patient_ref: str = Field(
+        ...,
+        validation_alias=AliasChoices("patient_ref", "patientRef", "patient_id", "patientId"),
+        description="Patient reference ID",
+    )
+    appointment_ref: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("appointment_ref", "appointmentRef"),
+        description="Associated appointment reference",
+    )
     
     # Clinical details
-    chief_complaint: str = Field(..., min_length=5, description="Patient's chief complaint")
-    history_of_present_illness: Optional[str] = Field(None, description="History of present illness")
-    past_medical_history: Optional[str] = Field(None, description="Past medical history")
+    chief_complaint: str = Field(
+        ...,
+        min_length=5,
+        validation_alias=AliasChoices("chief_complaint", "chiefComplaint", "complaint", "reason"),
+        description="Patient's chief complaint",
+    )
+    history_of_present_illness: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("history_of_present_illness", "historyOfPresentIllness"),
+        description="History of present illness",
+    )
+    past_medical_history: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("past_medical_history", "pastMedicalHistory"),
+        description="Past medical history",
+    )
     
     # Physical examination
-    vital_signs: Optional[Dict[str, Any]] = Field(None, description="Vital signs measurements")
-    physical_examination: Optional[str] = Field(None, description="Physical examination findings")
+    vital_signs: Optional[Dict[str, Any]] = Field(
+        None,
+        validation_alias=AliasChoices("vital_signs", "vitalSigns"),
+        description="Vital signs measurements",
+    )
+    physical_examination: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("physical_examination", "physicalExamination", "examination_findings"),
+        description="Physical examination findings",
+    )
     
     # Assessment and plan
     diagnosis: str = Field(..., min_length=3, description="Primary diagnosis")
-    differential_diagnosis: Optional[List[str]] = Field(None, description="Differential diagnoses")
-    treatment_plan: Optional[str] = Field(None, description="Treatment plan")
+    differential_diagnosis: Optional[List[str]] = Field(
+        None,
+        validation_alias=AliasChoices("differential_diagnosis", "differentialDiagnosis"),
+        description="Differential diagnoses",
+    )
+    treatment_plan: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("treatment_plan", "treatmentPlan"),
+        description="Treatment plan",
+    )
     
     # Orders and instructions
-    lab_orders: Optional[List[Dict[str, Any]]] = Field(None, description="Laboratory orders")
-    imaging_orders: Optional[List[Dict[str, Any]]] = Field(None, description="Imaging orders")
-    follow_up_instructions: Optional[str] = Field(None, description="Follow-up instructions")
+    lab_orders: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        validation_alias=AliasChoices("lab_orders", "labOrders"),
+        description="Laboratory orders",
+    )
+    imaging_orders: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        validation_alias=AliasChoices("imaging_orders", "imagingOrders"),
+        description="Imaging orders",
+    )
+    follow_up_instructions: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("follow_up_instructions", "followUpInstructions"),
+        description="Follow-up instructions",
+    )
     
     # Additional notes
-    clinical_notes: Optional[str] = Field(None, description="Additional clinical notes")
-    is_finalized: bool = Field(False, description="Whether the record is finalized")
+    clinical_notes: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("clinical_notes", "clinicalNotes"),
+        description="Additional clinical notes",
+    )
+    is_finalized: bool = Field(
+        False,
+        validation_alias=AliasChoices("is_finalized", "isFinalized"),
+        description="Whether the record is finalized",
+    )
 
 
 class UpdateMedicalRecordRequest(BaseModel):
     """Request to update an existing medical record"""
-    chief_complaint: Optional[str] = Field(None, min_length=5)
-    history_of_present_illness: Optional[str] = None
-    past_medical_history: Optional[str] = None
-    vital_signs: Optional[Dict[str, Any]] = None
-    physical_examination: Optional[str] = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    chief_complaint: Optional[str] = Field(
+        None,
+        min_length=5,
+        validation_alias=AliasChoices("chief_complaint", "chiefComplaint", "complaint", "reason"),
+    )
+    history_of_present_illness: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("history_of_present_illness", "historyOfPresentIllness"),
+    )
+    past_medical_history: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("past_medical_history", "pastMedicalHistory"),
+    )
+    vital_signs: Optional[Dict[str, Any]] = Field(
+        None,
+        validation_alias=AliasChoices("vital_signs", "vitalSigns"),
+    )
+    physical_examination: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("physical_examination", "physicalExamination", "examination_findings"),
+    )
     diagnosis: Optional[str] = Field(None, min_length=3)
-    differential_diagnosis: Optional[List[str]] = None
-    treatment_plan: Optional[str] = None
-    lab_orders: Optional[List[Dict[str, Any]]] = None
-    imaging_orders: Optional[List[Dict[str, Any]]] = None
-    follow_up_instructions: Optional[str] = None
-    clinical_notes: Optional[str] = None
-    is_finalized: Optional[bool] = None
+    differential_diagnosis: Optional[List[str]] = Field(
+        None,
+        validation_alias=AliasChoices("differential_diagnosis", "differentialDiagnosis"),
+    )
+    treatment_plan: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("treatment_plan", "treatmentPlan"),
+    )
+    lab_orders: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        validation_alias=AliasChoices("lab_orders", "labOrders"),
+    )
+    imaging_orders: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        validation_alias=AliasChoices("imaging_orders", "imagingOrders"),
+    )
+    follow_up_instructions: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("follow_up_instructions", "followUpInstructions"),
+    )
+    clinical_notes: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("clinical_notes", "clinicalNotes"),
+    )
+    is_finalized: Optional[bool] = Field(
+        None,
+        validation_alias=AliasChoices("is_finalized", "isFinalized"),
+    )
 
 
 @router.post("/medical-records")
@@ -2046,7 +2145,7 @@ async def update_medical_record(
         .where(
             and_(
                 MedicalRecord.id == record_id,
-                MedicalRecord.doctor_id == doctor.id,
+                MedicalRecord.doctor_id == doctor.user_id,
                 MedicalRecord.hospital_id == user_context["hospital_id"]
             )
         )

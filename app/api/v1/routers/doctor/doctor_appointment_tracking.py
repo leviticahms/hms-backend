@@ -229,18 +229,19 @@ class AppointmentMetrics(BaseModel):
 def get_user_context(current_user: User) -> dict:
     """Extract user context from JWT token"""
     user_roles = [role.name for role in current_user.roles]
+    primary_role = UserRole.DOCTOR.value if UserRole.DOCTOR.value in user_roles else (user_roles[0] if user_roles else None)
     
     return {
         "user_id": str(current_user.id),
         "hospital_id": str(current_user.hospital_id) if current_user.hospital_id else None,
-        "role": user_roles[0] if user_roles else None,
+        "role": primary_role,
         "all_roles": user_roles
     }
 
 
 async def get_doctor_profile(user_context: dict, db: AsyncSession):
     """Get doctor profile with department information"""
-    if user_context["role"] != UserRole.DOCTOR:
+    if UserRole.DOCTOR.value not in user_context.get("all_roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied - Doctor role required"
@@ -330,7 +331,7 @@ async def get_doctor_profile(user_context: dict, db: AsyncSession):
 
 def ensure_doctor_access(user_context: dict):
     """Ensure user is a doctor"""
-    if user_context["role"] != UserRole.DOCTOR:
+    if UserRole.DOCTOR.value not in user_context.get("all_roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied - Doctor role required"

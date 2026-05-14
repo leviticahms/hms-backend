@@ -20,7 +20,7 @@ from app.services.telemed_prescription_service import TelemedPrescriptionService
 router = APIRouter(prefix="/patients", tags=["Telemedicine - Vitals"])
 
 
-@router.get("/me/prescriptions", response_model=dict)
+# Disabled in API registration: prescriptions are exposed only through Doctor Portal routes.
 async def list_my_prescriptions(
     context: dict = Depends(require_hospital_context),
     current_user: User = Depends(get_current_user),

@@ -44,18 +44,19 @@ router = APIRouter(prefix="/doctor-treatment-plans", tags=["Doctor Portal - Trea
 def get_user_context(current_user: User) -> dict:
     """Extract user context from JWT token"""
     user_roles = [role.name for role in current_user.roles]
+    primary_role = UserRole.DOCTOR.value if UserRole.DOCTOR.value in user_roles else (user_roles[0] if user_roles else None)
     
     return {
         "user_id": str(current_user.id),
         "hospital_id": str(current_user.hospital_id) if current_user.hospital_id else None,
-        "role": user_roles[0] if user_roles else None,
+        "role": primary_role,
         "all_roles": user_roles
     }
 
 
 async def get_doctor_profile(user_context: dict, db: AsyncSession):
     """Get doctor profile with department information"""
-    if user_context["role"] != UserRole.DOCTOR:
+    if UserRole.DOCTOR.value not in user_context.get("all_roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied - Doctor role required"
@@ -181,7 +182,7 @@ async def get_patient_by_ref(patient_ref: str, hospital_id: Optional[str], db: A
 
 def ensure_doctor_access(user_context: dict):
     """Ensure user is a doctor"""
-    if user_context["role"] != UserRole.DOCTOR:
+    if UserRole.DOCTOR.value not in user_context.get("all_roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied - Doctor role required"
@@ -666,6 +667,7 @@ async def create_treatment_plan(
         progress_notes=initial_progress_notes,
         start_date=datetime.now().strftime("%Y-%m-%d"),
         expected_end_date=None,  # Can be set later
+        review_frequency=request.review_frequency.value if hasattr(request.review_frequency, "value") else request.review_frequency,
         status="ACTIVE"
     )
     
@@ -1507,7 +1509,7 @@ async def create_plan_from_template(
         template.update(customizations)
     
     # Create treatment plan from template
-    create_request = CreateTreatmentPlanRequest(
+    create_request = TreatmentPlanCreate(
         patient_ref=patient_ref,
         plan_name=template["template_name"],
         primary_diagnosis=template["diagnosis"],

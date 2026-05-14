@@ -3,7 +3,7 @@ Doctor schemas for schedule management, prescriptions, treatment plans, and pati
 Note: This extends the existing app/schemas/doctor.py with additional schemas from router files.
 """
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from enum import Enum
 
 
@@ -169,54 +169,114 @@ class PharmacyDispenseCreate(BaseModel):
 
 class TreatmentPlanCreate(BaseModel):
     """Request to create new treatment plan"""
-    patient_ref: str
-    plan_name: str
-    primary_diagnosis: str
-    secondary_diagnoses: List[str] = []
+    model_config = ConfigDict(populate_by_name=True)
+
+    patient_ref: str = Field(validation_alias=AliasChoices("patient_ref", "patientRef", "patient_id", "patientId"))
+    plan_name: str = Field(validation_alias=AliasChoices("plan_name", "planName"))
+    primary_diagnosis: str = Field(validation_alias=AliasChoices("primary_diagnosis", "primaryDiagnosis", "diagnosis"))
+    secondary_diagnoses: List[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("secondary_diagnoses", "secondaryDiagnoses"),
+    )
     priority: PlanPriority = PlanPriority.MEDIUM
-    estimated_duration: Optional[str] = None
-    review_frequency: ReviewFrequency = ReviewFrequency.MONTHLY
+    estimated_duration: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("estimated_duration", "estimatedDuration"),
+    )
+    review_frequency: ReviewFrequency = Field(
+        default=ReviewFrequency.MONTHLY,
+        validation_alias=AliasChoices("review_frequency", "reviewFrequency"),
+    )
     
     # Initial goals
-    short_term_goals: List[Dict[str, Any]] = []
-    long_term_goals: List[Dict[str, Any]] = []
+    short_term_goals: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("short_term_goals", "shortTermGoals"),
+    )
+    long_term_goals: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("long_term_goals", "longTermGoals"),
+    )
     
     # Initial interventions
-    interventions: List[Dict[str, Any]] = []
+    interventions: List[Dict[str, Any]] = Field(default_factory=list)
     
     # Initial milestones
-    milestones: List[Dict[str, Any]] = []
+    milestones: List[Dict[str, Any]] = Field(default_factory=list)
     
     # Notes
-    initial_notes: Optional[str] = None
+    initial_notes: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("initial_notes", "initialNotes", "notes"),
+    )
 
 
 class TreatmentPlanUpdate(BaseModel):
     """Request to update treatment plan"""
-    plan_name: Optional[str] = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    plan_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("plan_name", "planName"))
     status: Optional[TreatmentPlanStatus] = None
     priority: Optional[PlanPriority] = None
-    expected_end_date: Optional[str] = None
-    review_frequency: Optional[ReviewFrequency] = None
+    expected_end_date: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("expected_end_date", "expectedEndDate"),
+    )
+    review_frequency: Optional[ReviewFrequency] = Field(
+        default=None,
+        validation_alias=AliasChoices("review_frequency", "reviewFrequency"),
+    )
     
     # Updated components
-    updated_goals: Optional[List[Dict[str, Any]]] = None
-    updated_interventions: Optional[List[Dict[str, Any]]] = None
-    updated_milestones: Optional[List[Dict[str, Any]]] = None
+    updated_goals: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        validation_alias=AliasChoices("updated_goals", "updatedGoals"),
+    )
+    updated_interventions: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        validation_alias=AliasChoices("updated_interventions", "updatedInterventions"),
+    )
+    updated_milestones: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        validation_alias=AliasChoices("updated_milestones", "updatedMilestones"),
+    )
     
     # Progress update
-    progress_notes: Optional[str] = None
-    completion_notes: Optional[str] = None
+    progress_notes: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("progress_notes", "progressNotes"),
+    )
+    completion_notes: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("completion_notes", "completionNotes"),
+    )
 
 
 class ProgressUpdate(BaseModel):
     """Request to update treatment progress"""
-    milestone_updates: List[Dict[str, Any]] = []
-    goal_updates: List[Dict[str, Any]] = []
-    intervention_updates: List[Dict[str, Any]] = []
-    progress_note: str
-    significant_change: bool = False
-    next_review_date: Optional[str] = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    milestone_updates: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("milestone_updates", "milestoneUpdates"),
+    )
+    goal_updates: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("goal_updates", "goalUpdates"),
+    )
+    intervention_updates: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("intervention_updates", "interventionUpdates"),
+    )
+    progress_note: str = Field(validation_alias=AliasChoices("progress_note", "progressNote", "note"))
+    significant_change: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("significant_change", "significantChange"),
+    )
+    next_review_date: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("next_review_date", "nextReviewDate"),
+    )
 
 
 # ============================================================================

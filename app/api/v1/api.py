@@ -83,7 +83,6 @@ try:
     from app.api.v1.routers.doctor.doctor_patient_records import router as doctor_patient_records_router
     from app.api.v1.routers.doctor.doctor_reports_analytics import router as doctor_reports_router
     from app.api.v1.routers.doctor.doctor_treatment_plans import router as doctor_treatment_router
-    from app.api.v1.routers.doctor.simple_prescription import router as simple_prescription_router
     from app.api.v1.routers.doctor.doctor_sidebar import router as doctor_sidebar_router
     
     api_router.include_router(doctor_dashboard_router)
@@ -92,9 +91,9 @@ try:
     api_router.include_router(doctor_patient_records_router)
     api_router.include_router(doctor_reports_router)
     api_router.include_router(doctor_treatment_router)
-    api_router.include_router(simple_prescription_router)
+    # Keep prescription APIs only under the Doctor Portal sidebar routes to avoid duplicate prescription surfaces.
     api_router.include_router(doctor_sidebar_router)
-    logger.info("✓ Doctor routers loaded (sidebar + simple-prescription)")
+    logger.info("✓ Doctor routers loaded (sidebar prescriptions only)")
 except ImportError as e:
     logger.error(f"✗ Failed to load doctor routers: {e}")
 
@@ -109,7 +108,6 @@ try:
     from app.api.v1.routers.patient.ipd_management import router as ipd_management_router
     from app.api.v1.routers.patient.patient_dashboard import router as patient_dashboard_router
     from app.api.v1.routers.patient.patient_billing import router as patient_billing_router
-    from app.api.v1.routers.patient.patient_prescriptions import router as patient_prescriptions_router
     from app.api.v1.routers.patient.patient_profile import router as patient_profile_router
     from app.api.v1.routers.patient.patient_lab_tests import router as patient_lab_tests_router
     from app.api.v1.routers.patient.patient_messaging import router as patient_messaging_router
@@ -117,7 +115,6 @@ try:
     api_router.include_router(patient_booking_router)
     api_router.include_router(patient_dashboard_router)
     api_router.include_router(patient_billing_router)
-    api_router.include_router(patient_prescriptions_router)
     api_router.include_router(patient_profile_router)
     api_router.include_router(patient_lab_tests_router)
     api_router.include_router(patient_messaging_router)

@@ -473,7 +473,11 @@ async def check_in_patient(
     - Estimated wait time
     """
     clinical_service = ClinicalService(db)
-    result = await clinical_service.check_in_patient(appointment_ref, checkin_data.dict(), current_user)
+    result = await clinical_service.check_in_patient(
+        appointment_ref,
+        checkin_data.model_dump(),
+        current_user,
+    )
     return success_response(message="Patient checked-in successfully", data=result)
 
 

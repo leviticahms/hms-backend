@@ -475,7 +475,7 @@ class AppointmentUpdate(BaseModel):
 
 class PatientCheckInCreate(BaseModel):
     """Check-in patient for appointment"""
-    appointment_ref: str
+    appointment_ref: Optional[str] = None
     arrival_time: Optional[str] = None  # HH:MM, defaults to current time
     notes: Optional[str] = None
 

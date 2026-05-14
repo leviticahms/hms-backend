@@ -924,6 +924,19 @@ class ClinicalService:
             )
             doctor = doctor_result.scalar_one_or_none()
             if not doctor:
+                profile_result = await self.db.execute(
+                    select(DoctorProfile)
+                    .where(
+                        and_(
+                            DoctorProfile.id == doctor_user_id,
+                            DoctorProfile.hospital_id == hospital_id_uuid,
+                        )
+                    )
+                    .options(selectinload(DoctorProfile.user))
+                )
+                doctor_profile = profile_result.scalar_one_or_none()
+                doctor = doctor_profile.user if doctor_profile else None
+            if not doctor:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Doctor not found for provided doctor_id",

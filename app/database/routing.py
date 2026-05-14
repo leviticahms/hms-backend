@@ -25,6 +25,18 @@ PLATFORM_ONLY_PREFIXES: tuple[str, ...] = (
     "/api/v1/auth/super-admin",
     "/api/v1/super-admin",
     "/api/v1/analytics",
+    # OPD appointment workflow lives in the platform DB because receptionist and patient
+    # booking create patients/appointments there for patient auth and shared doctor visibility.
+    "/api/v1/receptionist",
+    "/api/v1/patient-appointment-booking",
+    "/api/v1/doctor-management",
+    "/api/v1/staff/doctor-schedules",
+    "/api/v1/doctor-dashboard",
+    "/api/v1/doctor-appointment-tracking",
+    "/api/v1/doctor-patient-records",
+    "/api/v1/doctor-treatment-plans",
+    "/api/v1/doctor-sidebar",
+    "/api/v1/patient-discharge-summary",
 )
 
 def path_requires_platform_database(path: str) -> bool:
