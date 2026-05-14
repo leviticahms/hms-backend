@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.routers.lab.rbac import LAB_GET_ROLES, LAB_MUTATION_ROLES
+from app.api.v1.routers.lab.rbac import LAB_EQUIPMENT_WRITE_ROLES, LAB_GET_ROLES
 from app.core.security import require_roles
 from app.database.session import get_db_session
 from app.models.user import User
@@ -38,7 +38,7 @@ async def get_equipment_tracking(
 @router.post("/equipment", response_model=AddEquipmentTrackingResponse)
 async def add_equipment_tracking(
     request: AddEquipmentTrackingRequest,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(require_roles(LAB_EQUIPMENT_WRITE_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> AddEquipmentTrackingResponse:
     lab = LabService(db, current_user.hospital_id)
@@ -49,7 +49,7 @@ async def add_equipment_tracking(
 @router.post("/quick-action/{action}", response_model=EquipmentTrackingActionResponse)
 async def run_equipment_quick_action(
     action: str,
-    _current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    _current_user: User = Depends(require_roles(LAB_EQUIPMENT_WRITE_ROLES)),
 ) -> EquipmentTrackingActionResponse:
     return EquipmentTrackingActionResponse(message=f"{action} initiated.", action=action)
 

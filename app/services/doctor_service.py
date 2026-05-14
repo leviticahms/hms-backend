@@ -64,11 +64,13 @@ class DoctorService:
     async def get_doctor_profile(self, user_context: dict):
         """Get doctor profile with department information"""
         await self.validate_doctor_access(user_context)
+
+        staff_uuid = uuid.UUID(str(user_context["user_id"]))
         
         # Get doctor user and their department assignment
         doctor_result = await self.db.execute(
             select(User)
-            .where(User.id == user_context["user_id"])
+            .where(User.id == staff_uuid)
         )
         doctor_user = doctor_result.scalar_one_or_none()
         
@@ -83,7 +85,7 @@ class DoctorService:
             select(StaffDepartmentAssignment)
             .where(
                 and_(
-                    StaffDepartmentAssignment.staff_id == user_context["user_id"],
+                    StaffDepartmentAssignment.staff_id == staff_uuid,
                     StaffDepartmentAssignment.is_active == True,
                 )
             )
@@ -230,7 +232,10 @@ class DoctorService:
                 
                 # Calculate total available time
                 total_time = end_time - start_time - break_duration
-                day_total_slots = int(total_time.total_seconds() / slot_duration.total_seconds())
+                day_total_slots = max(
+                    0,
+                    int(total_time.total_seconds() / slot_duration.total_seconds()),
+                )
                 total_slots += day_total_slots
                 
                 daily_schedules.append({
@@ -290,10 +295,13 @@ class DoctorService:
         
         available_slots = total_slots - total_appointments
         
+        doc_first = (getattr(doctor.user, "first_name", None) or "").strip()
+        doc_last = (getattr(doctor.user, "last_name", None) or "").strip()
+        doc_display = " ".join(p for p in (doc_first, doc_last) if p).strip()
         return {
             "week_start": start_date.isoformat(),
             "week_end": end_date.isoformat(),
-            "doctor_name": f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
+            "doctor_name": f"Dr. {doc_display}" if doc_display else "Dr.",
             "total_slots": total_slots,
             "total_appointments": total_appointments,
             "available_slots": available_slots,
@@ -334,8 +342,11 @@ class DoctorService:
                 "notes": schedule.notes
             })
         
+        doc_first = (getattr(doctor.user, "first_name", None) or "").strip()
+        doc_last = (getattr(doctor.user, "last_name", None) or "").strip()
+        doc_display = " ".join(p for p in (doc_first, doc_last) if p).strip()
         return {
-            "doctor_name": f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
+            "doctor_name": f"Dr. {doc_display}" if doc_display else "Dr.",
             "department": doctor.department.name,
             "total_schedules": len(schedule_slots),
             "schedules": schedule_slots
@@ -389,7 +400,7 @@ class DoctorService:
         # Create schedule
         schedule = DoctorSchedule(
             id=uuid.uuid4(),
-            hospital_id=user_context["hospital_id"],
+            hospital_id=uuid.UUID(str(user_context["hospital_id"])),
             doctor_id=doctor.user_id,
             day_of_week=schedule_data["day_of_week"],
             start_time=start_time,

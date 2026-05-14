@@ -42,7 +42,9 @@ async def list_test_catalogue(
 @router.post("/category", response_model=AddCategoryResponse)
 async def add_test_category(
     request: AddCategoryRequest,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ) -> AddCategoryResponse:
     svc = LabTestCatalogueService(db, current_user.hospital_id)
@@ -52,7 +54,9 @@ async def add_test_category(
 @router.post("/test", response_model=AddTestResponse)
 async def add_catalogue_test(
     request: AddTestRequest,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ) -> AddTestResponse:
     svc = LabTestCatalogueService(db, current_user.hospital_id)
@@ -62,7 +66,9 @@ async def add_catalogue_test(
 @router.post("/bulk/{action}", response_model=BulkActionResponse)
 async def run_catalogue_bulk_action(
     action: str,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ) -> BulkActionResponse:
     svc = LabTestCatalogueService(db, current_user.hospital_id)

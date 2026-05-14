@@ -41,7 +41,9 @@ async def record_qc_run(
 @router.post("/workflow/{action}", response_model=QcWorkflowActionResponse)
 async def trigger_qc_workflow_action(
     action: str,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ) -> QcWorkflowActionResponse:
     svc = LabQualityControlService(db, current_user.hospital_id)

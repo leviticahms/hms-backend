@@ -36,7 +36,9 @@ router = APIRouter(
 @router.post("/equipment", response_model=EquipmentResponse)
 async def create_equipment(
     equipment_data: EquipmentCreateRequest,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ):
     try:
@@ -109,7 +111,9 @@ async def get_equipment(
 async def update_equipment(
     equipment_id: uuid.UUID,
     equipment_data: EquipmentUpdateRequest,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ):
     try:
@@ -133,7 +137,9 @@ async def update_equipment(
 async def update_equipment_status(
     equipment_id: uuid.UUID,
     status_data: EquipmentStatusUpdateRequest,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ):
     try:
@@ -219,7 +225,9 @@ async def get_equipment_logs(
 async def create_maintenance_log(
     equipment_id: uuid.UUID,
     log_data: MaintenanceLogCreateRequest,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ):
     try:

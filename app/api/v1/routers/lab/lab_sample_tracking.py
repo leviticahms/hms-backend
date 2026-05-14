@@ -46,7 +46,7 @@ async def lookup_sample_barcode(
 
 @router.post("/simulate-scan", response_model=BarcodeLookupResponse)
 async def simulate_scan(
-    barcode: str = Query(..., description="Barcode to look up (same as /lookup)."),
+    barcode: str = Query("BC001", description="Simulated barcode to return"),
     current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> BarcodeLookupResponse:

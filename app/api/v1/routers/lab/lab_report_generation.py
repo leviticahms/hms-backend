@@ -30,7 +30,9 @@ router = APIRouter(
     "",
     response_model=ReportGenerationListResponse,
     summary="List reports",
-    description="RBAC: LAB_TECH only.",
+    description=(
+        "RBAC: LAB_TECH and HOSPITAL_ADMIN (hospital admin has read access for oversight)."
+    ),
 )
 async def list_reports(
     search: Optional[str] = Query(None),
@@ -54,7 +56,9 @@ async def list_ready_tests(
 @router.post("/generate", response_model=GenerateReportResponse)
 async def generate_report(
     request: GenerateReportRequest,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ) -> GenerateReportResponse:
     svc = LabReportGenerationService(db, current_user.hospital_id)
@@ -75,7 +79,9 @@ async def preview_report(
 @router.post("/{report_id}/print", response_model=PrintReportResponse)
 async def print_report(
     report_id: str,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ) -> PrintReportResponse:
     svc = LabReportGenerationService(db, current_user.hospital_id)

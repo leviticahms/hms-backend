@@ -34,7 +34,9 @@ async def get_lab_profile(
 @router.post("/edit", response_model=EditLabProfileResponse)
 async def edit_lab_profile(
     request: EditLabProfileRequest,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ) -> EditLabProfileResponse:
     return await LabProfileService(db, current_user.hospital_id).edit_profile(request)
@@ -43,7 +45,9 @@ async def edit_lab_profile(
 @router.post("/configure-settings", response_model=ConfigureLabSettingsResponse)
 async def configure_lab_settings(
     request: ConfigureLabSettingsRequest,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ) -> ConfigureLabSettingsResponse:
     return await LabProfileService(db, current_user.hospital_id).configure_settings(request)
@@ -51,9 +55,10 @@ async def configure_lab_settings(
 
 @router.post("/change-password", response_model=ChangePasswordResponse)
 async def change_lab_profile_password(
-    request: ChangePasswordRequest,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
-    db: AsyncSession = Depends(get_platform_db_session),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
+    db: AsyncSession = Depends(get_db_session),
 ) -> ChangePasswordResponse:
     
     return await LabProfileService(
@@ -64,7 +69,9 @@ async def change_lab_profile_password(
 @router.post("/action/{action}", response_model=LabProfileActionResponse)
 async def run_lab_profile_action(
     action: str,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    current_user: User = Depends(
+        require_roles(LAB_MUTATION_ROLES)
+    ),
     db: AsyncSession = Depends(get_db_session),
 ) -> LabProfileActionResponse:
     return await LabProfileService(db, current_user.hospital_id).utility_action(action)

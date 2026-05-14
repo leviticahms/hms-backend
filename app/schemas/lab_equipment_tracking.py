@@ -42,9 +42,9 @@ class MaintenanceLogTrackingRow(BaseModel):
 
 
 class EquipmentTrackingMeta(BaseModel):
+    """Response envelope timestamp only — avoids ambiguous demo/live toggles in payloads."""
+
     generated_at: datetime
-    live_data: bool = False
-    demo_data: bool = False
 
 
 class EquipmentTrackingDashboardResponse(BaseModel):
@@ -66,6 +66,21 @@ class AddEquipmentTrackingRequest(BaseModel):
     location: str = Field(..., min_length=2, max_length=160)
     initial_status: Literal["OPERATIONAL", "MAINTENANCE", "INACTIVE"] = "OPERATIONAL"
     next_maintenance_date: Optional[date] = None
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "equipment_name": "AU680 Chemistry Analyzer",
+                "equipment_type": "analyzer",
+                "brand": "Beckman Coulter",
+                "model": "AU680",
+                "serial_number": "SN-2024-88421",
+                "location": "Core Lab - Room B12",
+                "initial_status": "OPERATIONAL",
+                "next_maintenance_date": "2026-06-01",
+            }
+        }
+    )
 
 
 class AddEquipmentTrackingResponse(BaseModel):
