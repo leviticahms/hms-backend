@@ -5,7 +5,7 @@ Pydantic models for request/response validation for pharmacy operations.
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime, date
 from decimal import Decimal
-from pydantic import BaseModel, Field, validator, field_validator
+from pydantic import BaseModel, Field, validator, field_validator, model_validator
 from uuid import UUID
 
 from app.core.enums import (
@@ -358,8 +358,15 @@ class StockBatchOut(BaseModel):
     qty_on_hand: Decimal
     qty_reserved: Decimal
     reorder_level: Optional[Decimal]
-    is_expired: bool
-    days_until_expiry: Optional[int]
+    is_expired: bool = False
+    days_until_expiry: Optional[int] = None
+
+    @model_validator(mode="after")
+    def calculate_expiry_fields(self):
+        days_until_expiry = (self.expiry_date - date.today()).days
+        self.days_until_expiry = days_until_expiry
+        self.is_expired = days_until_expiry < 0
+        return self
 
     class Config:
         from_attributes = True
