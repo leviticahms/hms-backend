@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, desc, func
 from sqlalchemy.orm import selectinload
 
-from app.core.database import get_db_session
+from app.core.database import get_platform_db_session
 from app.core.security import get_current_user
 from app.dependencies.auth import get_current_patient
 from app.models.user import User
@@ -79,7 +79,7 @@ async def get_my_discharge_summaries(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get all discharge summaries for the logged-in patient.
@@ -198,7 +198,7 @@ async def get_admissions_ready_for_discharge(
     limit: int = Query(20, ge=1, le=100),
     department_name: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get list of admissions ready for discharge (active admissions without discharge summary).
@@ -312,7 +312,7 @@ async def get_admissions_ready_for_discharge(
 async def get_discharge_summary_template(
     admission_number: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get pre-filled discharge summary template for an admission.
@@ -399,7 +399,7 @@ async def get_discharge_summary_template(
 async def create_discharge_summary(
     summary_data: DischargeSummaryCreate,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Create a new discharge summary.
@@ -508,7 +508,7 @@ async def create_discharge_summary(
 async def get_discharge_summary(
     summary_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get discharge summary by ID.
@@ -593,7 +593,7 @@ async def update_discharge_summary(
     summary_id: str,
     update_data: DischargeSummaryUpdate,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Update discharge summary.
@@ -667,7 +667,7 @@ async def update_discharge_summary(
 async def finalize_discharge_summary(
     summary_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Finalize discharge summary (makes it immutable).
@@ -782,7 +782,7 @@ async def get_patient_discharge_summaries(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get all discharge summaries for a patient (staff view - requires patient_ref).
@@ -938,7 +938,7 @@ async def get_discharge_statistics(
     end_date: Optional[str] = Query(None),
     department_name: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get discharge summary statistics.

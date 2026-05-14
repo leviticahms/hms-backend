@@ -8,7 +8,7 @@ import logging
 import asyncio
 from datetime import datetime
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 import os
@@ -81,7 +81,7 @@ async def send_email_safe(
 
 
 @router.post("/test-email", include_in_schema=True)
-async def test_email_sending(test_email: str = "kiranios456@gmail.com"):
+async def test_email_sending(test_email: str = Query(..., min_length=3, description="Recipient address for the test message")):
     """Test SendGrid email sending (for debugging)"""
     logger.info(f"Testing SendGrid email to {test_email}")
     
@@ -362,7 +362,12 @@ async def render_diagnostics():
             "start_tls": True,
         }
         
-        smtp = aiosmtplib.SMTP(hostname=settings.SMTP_HOST, port=port, timeout=10)
+        smtp = aiosmtplib.SMTP(
+            hostname=settings.SMTP_HOST,
+            port=port,
+            timeout=10,
+            validate_certs=not settings.SMTP_TLS_INSECURE,
+        )
         await smtp.connect()
         method["connect"] = "✅"
         
@@ -403,7 +408,8 @@ async def render_diagnostics():
             hostname=settings.SMTP_HOST,
             port=port,
             use_tls=True,
-            timeout=10
+            timeout=10,
+            validate_certs=not settings.SMTP_TLS_INSECURE,
         )
         await smtp.connect()
         method["connect"] = "✅"
@@ -436,7 +442,12 @@ async def render_diagnostics():
             "start_tls": False,
         }
         
-        smtp = aiosmtplib.SMTP(hostname=settings.SMTP_HOST, port=port, timeout=10)
+        smtp = aiosmtplib.SMTP(
+            hostname=settings.SMTP_HOST,
+            port=port,
+            timeout=10,
+            validate_certs=not settings.SMTP_TLS_INSECURE,
+        )
         await smtp.connect()
         method["connect"] = "✅"
         method["starttls"] = "⏭️ SKIPPED"

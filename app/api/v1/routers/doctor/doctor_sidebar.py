@@ -19,10 +19,15 @@ from app.api.deps import require_doctor, require_hospital_context
 from app.core.database import get_db_session
 from app.models.user import User
 from app.schemas.doctor_sidebar import (
+    DoctorAppointmentOut,
+    DoctorInpatientVitalsUpdate,
+    DoctorLabReviewRequest,
+    DoctorMessageCreateRequest,
     DoctorInpatientVisitOut,
     DoctorLabResultItemOut,
     DoctorMessageOut,
     DoctorMessageReadRequest,
+    DoctorPrescriptionCreateRequest,
     DoctorPrescriptionSummaryOut,
     DoctorProfileOut,
     DoctorProfileUpdate,
@@ -30,6 +35,21 @@ from app.schemas.doctor_sidebar import (
 import app.services.doctor_sidebar_service as sidebar_svc
 
 router = APIRouter(prefix="/doctor-sidebar", tags=["Doctor Portal - Sidebar"])
+
+
+@router.get(
+    "/appointments",
+    response_model=List[DoctorAppointmentOut],
+    summary="List my appointments (doctor portal)",
+)
+async def sidebar_appointments(
+    limit: int = Query(100, ge=1, le=200),
+    user: User = Depends(require_doctor()),
+    ctx: Dict = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_db_session),
+):
+    hid = uuid.UUID(ctx["hospital_id"])
+    return await sidebar_svc.list_appointments_for_doctor(db, user, hid, limit=limit)
 
 
 @router.get(
@@ -52,6 +72,25 @@ async def sidebar_prescriptions(
     )
 
 
+@router.post(
+    "/prescriptions",
+    response_model=DoctorPrescriptionSummaryOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create new prescription (doctor portal)",
+)
+async def sidebar_create_prescription(
+    body: DoctorPrescriptionCreateRequest,
+    user: User = Depends(require_doctor()),
+    ctx: Dict = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_db_session),
+):
+    hid = uuid.UUID(ctx["hospital_id"])
+    try:
+        return await sidebar_svc.create_prescription_for_doctor(db, user, hid, body)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 @router.get(
     "/lab-results",
     response_model=List[DoctorLabResultItemOut],
@@ -66,6 +105,30 @@ async def sidebar_lab_results(
     """Medical records authored by this doctor with non-empty `lab_orders`."""
     hid = uuid.UUID(ctx["hospital_id"])
     return await sidebar_svc.list_lab_results_for_doctor(db, user, hid, limit=limit)
+
+
+@router.put(
+    "/lab-results/{medical_record_id}/review",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Review lab result item(s) in a medical record",
+)
+async def sidebar_review_lab_result(
+    medical_record_id: str,
+    body: DoctorLabReviewRequest,
+    user: User = Depends(require_doctor()),
+    ctx: Dict = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_db_session),
+):
+    hid = uuid.UUID(ctx["hospital_id"])
+    ok = await sidebar_svc.review_lab_result_for_doctor(
+        db,
+        user,
+        hid,
+        uuid.UUID(medical_record_id),
+        body,
+    )
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medical record not found")
 
 
 @router.get(
@@ -85,6 +148,30 @@ async def sidebar_inpatient_visits(
     return await sidebar_svc.list_inpatient_visits_for_doctor(
         db, user, hid, active_only=active_only, limit=limit
     )
+
+
+@router.put(
+    "/inpatient-visits/{admission_id}/vitals",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Update IPD patient vitals",
+)
+async def sidebar_update_inpatient_vitals(
+    admission_id: str,
+    body: DoctorInpatientVitalsUpdate,
+    user: User = Depends(require_doctor()),
+    ctx: Dict = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_db_session),
+):
+    hid = uuid.UUID(ctx["hospital_id"])
+    ok = await sidebar_svc.update_inpatient_vitals_for_doctor(
+        db,
+        user,
+        hid,
+        uuid.UUID(admission_id),
+        body,
+    )
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admission not found")
 
 
 @router.get(
@@ -107,6 +194,22 @@ async def sidebar_messages(
 
 
 @router.post(
+    "/messages",
+    response_model=DoctorMessageOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Send in-app message/notification",
+)
+async def sidebar_send_message(
+    body: DoctorMessageCreateRequest,
+    user: User = Depends(require_doctor()),
+    ctx: Dict = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_db_session),
+):
+    hid = uuid.UUID(ctx["hospital_id"])
+    return await sidebar_svc.create_message_for_doctor(db, user, hid, body)
+
+
+@router.post(
     "/messages/read",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Mark one message as read",
@@ -118,7 +221,6 @@ async def sidebar_mark_message_read(
     db: AsyncSession = Depends(get_db_session),
 ):
     hid = uuid.UUID(ctx["hospital_id"])
-    ok = await sidebar_svc.mark_message_read(db, user, hid, body.source, body.message_id)
     mid = uuid.UUID(body.message_id)
     ok = await sidebar_svc.mark_message_read(db, user, hid, body.source, mid)
     if not ok:
@@ -143,9 +245,6 @@ async def sidebar_get_profile(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Doctor profile not found. Ensure the account is assigned to a department, or contact admin.",
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Doctor profile not found for this account.",
         )
     return out
 
@@ -169,8 +268,5 @@ async def sidebar_patch_profile(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Doctor profile not found. Ensure the account is assigned to a department, or contact admin.",
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Doctor profile not found for this account.",
         )
     return out

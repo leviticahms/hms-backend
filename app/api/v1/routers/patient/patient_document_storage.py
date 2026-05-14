@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, desc, func
 from sqlalchemy.orm import selectinload
 
-from app.core.database import get_db_session
+from app.core.database import get_platform_db_session
 from app.core.security import get_current_user
 from app.dependencies.auth import get_current_patient
 from app.core.config import settings
@@ -180,7 +180,7 @@ async def upload_my_document(
     is_sensitive: bool = Form(True),
     current_patient: PatientProfile = Depends(get_current_patient),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Upload a document for the logged-in patient.
@@ -268,7 +268,7 @@ async def upload_my_document(
 @router.get("/my/documents/statistics")
 async def get_my_document_statistics(
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get document statistics for the logged-in patient.
@@ -303,7 +303,7 @@ async def get_my_documents(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get paginated list of documents for the logged-in patient.
@@ -375,7 +375,7 @@ async def get_my_documents(
 async def get_my_document_details(
     document_id: str,
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get detailed information about a specific document for the logged-in patient.
@@ -424,7 +424,7 @@ async def get_my_document_details(
 async def download_my_document(
     document_id: str,
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Download a document for the logged-in patient.
@@ -470,7 +470,7 @@ async def update_my_document_metadata(
     update_data: DocumentUpdate,
     current_patient: PatientProfile = Depends(get_current_patient),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Update document metadata for the logged-in patient.
@@ -530,7 +530,7 @@ async def delete_my_document(
     document_id: str,
     current_patient: PatientProfile = Depends(get_current_patient),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Delete a document for the logged-in patient.
@@ -592,7 +592,7 @@ async def upload_patient_document(
     document_date: Optional[str] = Form(None),
     is_sensitive: bool = Form(True),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Upload a document for a patient (staff view - requires patient_ref).
@@ -643,6 +643,17 @@ async def upload_patient_document(
     elif user_context["role"] == UserRole.HOSPITAL_ADMIN:
         # Hospital admins can upload documents for any patient in their hospital
         pass
+    elif user_context["role"] == UserRole.RECEPTIONIST:
+        hid = user_context.get("hospital_id")
+        if (
+            hid
+            and patient.hospital_id
+            and str(patient.hospital_id) != str(hid)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - patient is not in your hospital",
+            )
     elif user_context["role"] == UserRole.DOCTOR:
         # Check if doctor has treated this patient
         doctor_result = await db.execute(
@@ -747,7 +758,7 @@ async def get_patient_documents(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get paginated list of patient documents (staff view - requires patient_ref).
@@ -785,6 +796,17 @@ async def get_patient_documents(
         # Hospital admins can view all patient documents in their hospital
         # Patient is already filtered by hospital_id in get_patient_by_ref
         pass
+    elif user_context["role"] == UserRole.RECEPTIONIST:
+        hid = user_context.get("hospital_id")
+        if (
+            hid
+            and patient.hospital_id
+            and str(patient.hospital_id) != str(hid)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - patient is not in your hospital",
+            )
     elif user_context["role"] == UserRole.DOCTOR:
         # Check if doctor has treated this patient
         has_access = await check_doctor_patient_access(user_context["user_id"], patient.id, db)
@@ -868,7 +890,7 @@ async def get_document_details(
     patient_ref: str,
     document_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get detailed information about a specific document (staff view - requires patient_ref).
@@ -935,6 +957,17 @@ async def get_document_details(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied - no treatment history"
                 )
+    elif user_context["role"] == UserRole.RECEPTIONIST:
+        hid = user_context.get("hospital_id")
+        if (
+            hid
+            and patient.hospital_id
+            and str(patient.hospital_id) != str(hid)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - patient is not in your hospital",
+            )
     
     return {
         "document_id": str(document.id),
@@ -958,7 +991,7 @@ async def download_document(
     patient_ref: str,
     document_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Download a patient document (staff view - requires patient_ref).
@@ -1024,6 +1057,17 @@ async def download_document(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied - no treatment history"
                 )
+    elif user_context["role"] == UserRole.RECEPTIONIST:
+        hid = user_context.get("hospital_id")
+        if (
+            hid
+            and patient.hospital_id
+            and str(patient.hospital_id) != str(hid)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - patient is not in your hospital",
+            )
     
     # Check if file exists
     if not os.path.exists(document.file_path):
@@ -1046,7 +1090,7 @@ async def update_document_metadata(
     document_id: str,
     update_data: DocumentUpdate,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Update document metadata (title, description, etc.).
@@ -1114,7 +1158,7 @@ async def delete_document(
     patient_ref: str,
     document_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Delete a patient document.
@@ -1178,7 +1222,7 @@ async def delete_document(
 async def get_document_statistics(
     patient_ref: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get document statistics for a patient (staff view - requires patient_ref).
@@ -1226,6 +1270,17 @@ async def get_document_statistics(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied - no treatment history"
                 )
+    elif user_context["role"] == UserRole.RECEPTIONIST:
+        hid = user_context.get("hospital_id")
+        if (
+            hid
+            and patient.hospital_id
+            and str(patient.hospital_id) != str(hid)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - patient is not in your hospital",
+            )
     
     # Get document statistics
     stats_result = await db.execute(

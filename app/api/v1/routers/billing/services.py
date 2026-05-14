@@ -11,8 +11,16 @@ from app.core.security import get_current_user
 from app.api.deps import require_hospital_context, require_roles
 from app.core.enums import UserRole
 from app.models.user import User
-from pydantic import BaseModel
-from app.schemas.billing import TaxProfileCreate, TaxProfileUpdate, TaxProfileResponse, ServiceItemCreate, ServiceItemUpdate, ServiceItemResponse
+from app.schemas.billing import (
+    TaxProfileCreate,
+    TaxProfileUpdate,
+    TaxProfileResponse,
+    TaxProfileStatusPatch,
+    ServiceItemStatusPatch,
+    ServiceItemCreate,
+    ServiceItemUpdate,
+    ServiceItemResponse,
+)
 from app.schemas.response import SuccessResponse
 from app.services.billing.billing_service import BillingService
 
@@ -80,14 +88,10 @@ async def update_tax_profile(
     return SuccessResponse(success=True, message="Tax profile updated", data=TaxProfileResponse.model_validate(t).model_dump()).dict()
 
 
-class StatusBody(BaseModel):
-    is_active: bool
-
-
 @router.patch("/tax-profiles/{tax_id}/status", response_model=dict)
 async def set_tax_profile_status(
     tax_id: UUID,
-    body: StatusBody,
+    body: TaxProfileStatusPatch,
     context: dict = Depends(require_hospital_context),
     user: User = Depends(require_billing),
     db: AsyncSession = Depends(get_db_session),
@@ -204,7 +208,7 @@ async def update_service(
 @router.patch("/services/{service_id}/status", response_model=dict)
 async def set_service_status(
     service_id: UUID,
-    body: StatusBody,
+    body: ServiceItemStatusPatch,
     context: dict = Depends(require_hospital_context),
     user: User = Depends(require_billing),
     db: AsyncSession = Depends(get_db_session),

@@ -40,6 +40,16 @@ class AppointmentCancellationCreate(BaseModel):
     cancellation_reason: str
 
 
+class PatientAppointmentUpdate(BaseModel):
+    """Patient portal: reschedule or update booking (send only fields to change)."""
+
+    department_name: Optional[str] = None
+    doctor_name: Optional[str] = None
+    appointment_date: Optional[str] = None
+    appointment_time: Optional[str] = None
+    chief_complaint: Optional[str] = None
+
+
 # ============================================================================
 # MEDICAL RECORD INPUT SCHEMAS (Create/Update/Filter)
 # ============================================================================

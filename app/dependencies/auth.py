@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any, Callable
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db_session, get_platform_db_session
@@ -18,6 +18,7 @@ from app.core.security import get_current_user
 from app.models.user import User
 from app.models.patient import PatientProfile
 from app.core.enums import UserRole
+from app.core.role_aliases import normalize_staff_role_name
 
 
 # ============================================================================
@@ -108,7 +109,7 @@ async def require_hospital_context(
     # Super admins skip subscription check
     if "SUPER_ADMIN" not in context.get("roles", []):
         from app.models.tenant import HospitalSubscription, Hospital
-        from sqlalchemy import select
+        from sqlalchemy import desc, select
         from datetime import datetime as _dt, timezone as _tz
         import uuid as _uuid
 
@@ -127,7 +128,10 @@ async def require_hospital_context(
 
         # Check subscription
         sub_result = await db.execute(
-            select(HospitalSubscription).where(HospitalSubscription.hospital_id == hospital_id)
+            select(HospitalSubscription)
+            .where(HospitalSubscription.hospital_id == hospital_id)
+            .order_by(desc(HospitalSubscription.created_at))
+            .limit(1)
         )
         sub = sub_result.scalar_one_or_none()
         if sub:
@@ -177,20 +181,23 @@ def require_roles(*required_roles: UserRole) -> Callable:
             # Hospital admins or doctors can access
     """
     def role_checker(current_user: User = Depends(get_current_user)) -> User:
-        user_roles = [role.name for role in current_user.roles] if current_user.roles else []
-        
+        raw = [getattr(role, "name", None) for role in (current_user.roles or [])]
+        raw = [str(r).strip() for r in raw if r]
+        # DB may store labels (e.g. "Pharmacists"); JWT normalizes elsewhere — align RBAC here.
+        user_roles_norm = {normalize_staff_role_name(r) for r in raw if r}
+
         # Convert required roles to strings for comparison
         required_role_names = [role.value for role in required_roles]
-        
+
         # Check if user has at least one required role
-        if not any(role in user_roles for role in required_role_names):
+        if not any(req in user_roles_norm for req in required_role_names):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied. Required roles: {', '.join(required_role_names)}"
+                detail=f"Access denied. Required roles: {', '.join(required_role_names)}",
             )
-        
+
         return current_user
-    
+
     return role_checker
 
 
@@ -267,7 +274,7 @@ def require_patient() -> Callable:
 
 async def get_current_patient(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session),
 ) -> PatientProfile:
     """
     Get current authenticated patient from JWT token.
@@ -283,18 +290,24 @@ async def get_current_patient(
     """
     from sqlalchemy.orm import selectinload
     
-    user_roles = [role.name for role in current_user.roles] if current_user.roles else []
+    user_roles = [getattr(role, "name", "") for role in (current_user.roles or [])]
     if UserRole.PATIENT.value not in user_roles:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only patients can access this endpoint. Please login with patient credentials."
         )
     
-    result = await db.execute(
+    stmt = (
         select(PatientProfile)
         .where(PatientProfile.user_id == current_user.id)
         .options(selectinload(PatientProfile.user))
     )
+    # When hospital_id is present on the token/user, enforce it for isolation.
+    # Receptionist registrations write to the platform DB, so patient portal must read from platform DB too.
+    if getattr(current_user, "hospital_id", None):
+        stmt = stmt.where(PatientProfile.hospital_id == current_user.hospital_id)
+
+    result = await db.execute(stmt)
     patient = result.scalar_one_or_none()
     
     if not patient:
@@ -557,9 +570,10 @@ async def enforce_subscription(
 
     # Check subscription
     sub_result = await db.execute(
-        select(HospitalSubscription).where(
-            HospitalSubscription.hospital_id == hospital_id
-        )
+        select(HospitalSubscription)
+        .where(HospitalSubscription.hospital_id == hospital_id)
+        .order_by(desc(HospitalSubscription.created_at))
+        .limit(1)
     )
     subscription = sub_result.scalar_one_or_none()
 

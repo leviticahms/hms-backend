@@ -7,7 +7,7 @@ Patient: view own surgery docs and videos (stream with token + audit).
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.database.session import get_db_session
@@ -140,29 +140,6 @@ async def upload_surgery_documentation(
         data=data,
         lead_surgeon_user_id=current_user.id,
     )
-
-
-# =============================================================================
-# STEP 4 — Upload Surgery Video (Head Nurse OT only)
-# =============================================================================
-
-@router.post("/nurse/cases/{surgery_id}/video", response_model=dict)
-async def upload_surgery_video(
-    surgery_id: uuid.UUID,
-    patient_ref: str = Query(..., description="Patient reference (e.g. PAT-XXX)"),
-    file: UploadFile = File(...),
-    current_user: User = Depends(require_roles(UserRole.NURSE)),
-    db: AsyncSession = Depends(get_db_session),
-):
-    """
-    Upload surgery video.
-    
-    Access Control:
-    - **Who can access:** Nurses only (Head Nurse OT department)
-    """
-    hospital_id = _hospital_id_from_user(current_user)
-    service = SurgeryService(db, hospital_id)
-    return await service.upload_surgery_video(surgery_id, patient_ref, file, current_user.id)
 
 
 # =============================================================================

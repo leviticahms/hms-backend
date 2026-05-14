@@ -4,25 +4,43 @@ Manages environment variables and application settings.
 """
 from pydantic_settings import BaseSettings
 from pydantic import Field, model_validator, field_validator
-from typing import Optional
+from typing import Literal, Optional
 import os
 import logging
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 from pathlib import Path
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-# Force load .env for local development
+
+def _ensure_minimal_logging() -> None:
+    """So import-time messages in this module are visible before main configures logging."""
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+
+
+_ensure_minimal_logging()
+
+# Force load env file for local development
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 ENV_FILE = BASE_DIR / ".env"
+ALT_ENV_FILE = BASE_DIR / "env"
 
 if os.getenv("RENDER", "").lower() not in {"true", "1"}:
     if ENV_FILE.exists():
         load_dotenv(dotenv_path=ENV_FILE, override=True)
         logger.info(f"✓ Loaded .env from {ENV_FILE}")
+    elif ALT_ENV_FILE.exists():
+        load_dotenv(dotenv_path=ALT_ENV_FILE, override=True)
+        logger.info(f"✓ Loaded env file from {ALT_ENV_FILE}")
     else:
-        logger.warning(f"✗ .env not found at {ENV_FILE}")
+        logger.warning(f"✗ .env not found at {ENV_FILE} (and no fallback env file)")
 else:
     logger.info("Running in Render - using environment variables")
 
@@ -46,12 +64,29 @@ class Settings(BaseSettings):
     # Database Pool Configuration
     DB_POOL_SIZE: int = Field(default=5, env="DB_POOL_SIZE")
     DB_MAX_OVERFLOW: int = Field(default=10, env="DB_MAX_OVERFLOW")
+    TENANT_DB_POOL_SIZE: int = Field(
+        default=5,
+        env="TENANT_DB_POOL_SIZE",
+        description="Async pool size per dedicated tenant PostgreSQL database.",
+    )
+    TENANT_DB_MAX_OVERFLOW: int = Field(
+        default=10,
+        env="TENANT_DB_MAX_OVERFLOW",
+        description="Max overflow connections per tenant database pool.",
+    )
     
     # Database URLs - Direct from environment
     DATABASE_URL: str = Field(default="", env="DATABASE_URL")
     DATABASE_URL_SYNC: str = Field(default="", env="DATABASE_URL_SYNC")
     DB_PRUNE_UNUSED_TABLES: bool = Field(default=False, env="DB_PRUNE_UNUSED_TABLES")
     DB_BOOTSTRAP_FROM_MODELS: bool = Field(default=True, env="DB_BOOTSTRAP_FROM_MODELS")
+    # Dev / private networks only: skip TLS certificate verification for Postgres (asyncpg + psycopg2)
+    DATABASE_SSL_INSECURE: bool = Field(default=False, env="DATABASE_SSL_INSECURE")
+    # When true, asyncpg/psycopg2 verify the Postgres server certificate (strict). On Render the default
+    # is false so TLS still encrypts but chain verification is skipped (avoids SSLCertVerificationError).
+    DATABASE_SSL_VERIFY: bool = Field(default=False, env="DATABASE_SSL_VERIFY")
+    # Corporate TLS proxies / misconfigured SMTP: skip cert verify for aiosmtplib
+    SMTP_TLS_INSECURE: bool = Field(default=False, env="SMTP_TLS_INSECURE")
 
     # Per-hospital PostgreSQL databases (same server as DATABASE_URL / pgAdmin)
     TENANT_DB_AUTO_PROVISION: bool = Field(
@@ -86,49 +121,85 @@ class Settings(BaseSettings):
     # Redis / Caching
     REDIS_URL: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")
     
-    # Super Admin Configuration
-    SUPERADMIN_EMAIL: str = Field(default="kiranios456@gmail.com", env="SUPERADMIN_EMAIL")
-    SUPERADMIN_PASSWORD: str = Field(default="Admin123", env="SUPERADMIN_PASSWORD")
-    SUPERADMIN_FIRST_NAME: str = Field(default="Super", env="SUPERADMIN_FIRST_NAME")
-    SUPERADMIN_LAST_NAME: str = Field(default="Admin", env="SUPERADMIN_LAST_NAME")
+    # Super Admin Configuration (seed skips user creation until email + password are set in env)
+    SUPERADMIN_EMAIL: str = Field(default="", env="SUPERADMIN_EMAIL")
+    SUPERADMIN_PASSWORD: str = Field(default="", env="SUPERADMIN_PASSWORD")
+    SUPERADMIN_FIRST_NAME: str = Field(default="", env="SUPERADMIN_FIRST_NAME")
+    SUPERADMIN_LAST_NAME: str = Field(default="", env="SUPERADMIN_LAST_NAME")
+
+    # Stable platform bootstrap hospital row (optional; derived from HOSPITAL_EMAIL if unset)
+    PLATFORM_REGISTRATION_NUMBER: str = Field(default="", env="PLATFORM_REGISTRATION_NUMBER")
     
     # Security
-    SECRET_KEY: str = Field(default="your-secret-key-change-in-production", env="SECRET_KEY")
+    SECRET_KEY: str = Field(default="", env="SECRET_KEY")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
-    # CORS
-    ALLOWED_ORIGINS: list[str] = Field(
-        default_factory=lambda: [
-            "http://localhost:3000",
-            "http://localhost:3001",
-            "http://localhost:8080",
-            "https://hospital-management-12.vercel.app",
-        ],
-        env="ALLOWED_ORIGINS",
+    # CORS — set ALLOWED_ORIGINS in env (comma-separated); empty means no browser origins allowed
+    ALLOWED_ORIGINS: list[str] = Field(default_factory=list, env="ALLOWED_ORIGINS")
+    # Optional frontend URL convenience (auto-added to ALLOWED_ORIGINS if set)
+    FRONTEND_URL: str = Field(default="", env="FRONTEND_URL")
+    VERCEL_URL: str = Field(
+        default="",
+        env="VERCEL_URL",
+        description="Optional Vercel hostname (without scheme). If set, will be converted to https://<host> for CORS.",
     )
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
     def _parse_allowed_origins(cls, v):
         if v is None:
-            return ["http://localhost:3000", "http://localhost:8080"]
+            return []
         if isinstance(v, str):
             raw = v.strip()
             if not raw:
-                return ["http://localhost:3000", "http://localhost:8080"]
+                return []
             if raw == "*":
                 return ["*"]
             return [item.strip() for item in raw.split(",") if item.strip()]
         return v
+
+    @model_validator(mode="after")
+    def _add_frontend_origin(self):
+        """
+        Convenience: allow setting FRONTEND_URL / VERCEL_URL without manually editing ALLOWED_ORIGINS.
+        - FRONTEND_URL can be a full origin (https://...) or a bare host.
+        - VERCEL_URL is usually a bare host like: hospital-management-12.vercel.app
+        """
+        origins = list(self.ALLOWED_ORIGINS or [])
+        if "*" in origins:
+            return self
+
+        def _norm_origin(raw: str) -> str:
+            r = (raw or "").strip()
+            if not r:
+                return ""
+            if r.startswith("http://") or r.startswith("https://"):
+                return r.rstrip("/")
+            return f"https://{r.rstrip('/')}"
+
+        fe = _norm_origin(self.FRONTEND_URL)
+        if fe and fe not in origins:
+            origins.append(fe)
+
+        vz = _norm_origin(self.VERCEL_URL)
+        if vz and vz not in origins:
+            origins.append(vz)
+
+        self.ALLOWED_ORIGINS = origins
+        return self
 
     # Public URL of this backend (used for absolute /uploads/... links in JSON; set to your API origin)
     APP_PUBLIC_URL: str = Field(default="http://localhost:8000", env="APP_PUBLIC_URL")
     
     # Email — optional SendGrid HTTP API (notifications module); app mail uses SMTP below
     SENDGRID_API_KEY: str = Field(default="", env="SENDGRID_API_KEY")
-    EMAIL_FROM: str = Field(default="kiranios456@gmail.com", env="EMAIL_FROM")
+    EMAIL_FROM: str = Field(
+        default="",
+        env="EMAIL_FROM",
+        description="Verified sender address (required by Brevo etc.). If empty, code falls back to SMTP_USER.",
+    )
     
     # SMTP (default: Brevo — smtp-relay.brevo.com, port 587 STARTTLS; SMTP_USER + SMTP key from Brevo dashboard)
     SMTP_HOST: str = Field(default="smtp-relay.brevo.com", env="SMTP_HOST")
@@ -148,14 +219,60 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 60
     
-    # Logging
+    # Logging — see app.core.logging_config.configure_logging
     LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")
+    LOG_FORMAT: Literal["text", "json"] = Field(default="text", env="LOG_FORMAT")
+    LOG_DATE_FORMAT: str = Field(
+        default="%Y-%m-%d %H:%M:%S",
+        env="LOG_DATE_FORMAT",
+        description="strftime format for the ts field (text and json).",
+    )
+    LOG_TEXT_FORMAT: str = Field(
+        default="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        env="LOG_TEXT_FORMAT",
+        description="Python logging format string when LOG_FORMAT=text.",
+    )
+    LOG_MODULE_LEVELS: str = Field(
+        default="",
+        env="LOG_MODULE_LEVELS",
+        description=(
+            "Comma-separated logger prefix=LEVEL overrides, e.g. "
+            "'app.middleware=DEBUG,app.api.v1.routers.auth=INFO'"
+        ),
+    )
+    LOG_UVICORN_ACCESS: bool = Field(default=True, env="LOG_UVICORN_ACCESS")
+    LOG_UVICORN_LEVEL: str = Field(default="INFO", env="LOG_UVICORN_LEVEL")
+    LOG_UVICORN_ACCESS_LEVEL: str = Field(
+        default="INFO",
+        env="LOG_UVICORN_ACCESS_LEVEL",
+        description="Level for uvicorn.access when LOG_UVICORN_ACCESS=true.",
+    )
+    LOG_SQLALCHEMY_LEVEL: str = Field(
+        default="WARNING",
+        env="LOG_SQLALCHEMY_LEVEL",
+        description="sqlalchemy.engine log level (set DEBUG for SQL text).",
+    )
+    LOG_SQLALCHEMY_POOL_LEVEL: str = Field(
+        default="WARNING",
+        env="LOG_SQLALCHEMY_POOL_LEVEL",
+    )
+    LOG_ASYNCPG_LEVEL: str = Field(
+        default="WARNING",
+        env="LOG_ASYNCPG_LEVEL",
+    )
     
-    # Hospital Information
-    HOSPITAL_NAME: str = Field(default="City General Hospital", env="HOSPITAL_NAME")
-    HOSPITAL_ADDRESS: str = Field(default="123 Medical Center Drive", env="HOSPITAL_ADDRESS")
-    HOSPITAL_PHONE: str = Field(default="(555) 123-4567", env="HOSPITAL_PHONE")
-    HOSPITAL_EMAIL: str = Field(default="billing@hospital.com", env="HOSPITAL_EMAIL")
+    # Hospital / platform bootstrap (required in env to create the SuperAdmin-linked platform hospital row)
+    HOSPITAL_NAME: str = Field(default="", env="HOSPITAL_NAME")
+    HOSPITAL_ADDRESS: str = Field(default="", env="HOSPITAL_ADDRESS")
+    HOSPITAL_PHONE: str = Field(default="", env="HOSPITAL_PHONE")
+    HOSPITAL_EMAIL: str = Field(default="", env="HOSPITAL_EMAIL")
+    HOSPITAL_CITY: str = Field(default="", env="HOSPITAL_CITY")
+    HOSPITAL_STATE: str = Field(default="", env="HOSPITAL_STATE")
+    HOSPITAL_COUNTRY: str = Field(default="", env="HOSPITAL_COUNTRY")
+    HOSPITAL_PINCODE: str = Field(default="", env="HOSPITAL_PINCODE")
+
+    # IPD scheduler: daily bed line item amount when ward-specific pricing is not resolved yet (0 = skip posting)
+    IPD_DEFAULT_BED_RATE_PER_DAY: float = Field(default=0.0, env="IPD_DEFAULT_BED_RATE_PER_DAY")
     
     # PDF Storage
     PDF_STORAGE_PATH: str = Field(default="./pdfs", env="PDF_STORAGE_PATH")
@@ -193,7 +310,14 @@ class Settings(BaseSettings):
         sync_url = (self.DATABASE_URL_SYNC or "").strip()
 
         if not async_url and not sync_url:
-            raise ValueError("Set DATABASE_URL and/or DATABASE_URL_SYNC in environment variables")
+            # Build from DB_* so local runs work without DATABASE_URL in .env (defaults match Field defaults).
+            u = quote_plus(self.DB_USER or "")
+            p = quote_plus(self.DB_PASSWORD or "")
+            host = self.DB_HOST or "localhost"
+            port = int(self.DB_PORT) if self.DB_PORT else 5432
+            dbn = (self.DB_NAME or "postgres").strip() or "postgres"
+            sync_url = f"postgresql://{u}:{p}@{host}:{port}/{dbn}"
+            async_url = f"postgresql+asyncpg://{u}:{p}@{host}:{port}/{dbn}"
 
         if async_url and not sync_url:
             sync_url = self._to_sync_url(async_url)
@@ -209,9 +333,57 @@ class Settings(BaseSettings):
             elif self._is_local_url(sync_url) and not self._is_local_url(async_url):
                 sync_url = self._to_sync_url(async_url)
 
-        self.DATABASE_URL = async_url
+        self.DATABASE_URL = Settings._strip_libpq_only_params_from_asyncpg_url(async_url)
         self.DATABASE_URL_SYNC = sync_url
         return self
+
+    @model_validator(mode="after")
+    def require_secret_outside_debug(self):
+        key = (self.SECRET_KEY or "").strip()
+        if not self.DEBUG and not key:
+            raise ValueError("SECRET_KEY must be set when DEBUG=False")
+        return self
+
+    @staticmethod
+    def _strip_libpq_only_params_from_asyncpg_url(url: str) -> str:
+        """
+        asyncpg.connect() does not accept libpq query keys (e.g. sslmode, sslrootcert).
+        Render's DATABASE_URL often includes ?sslmode=require — keep that on the sync URL
+        for psycopg2, but drop it from postgresql+asyncpg URLs (SSL is via connect_args / ssl).
+        """
+        value = (url or "").strip()
+        if not value or "postgresql+asyncpg://" not in value:
+            return value
+        try:
+            parsed = urlparse(value)
+            if not parsed.query:
+                return value
+            skip = frozenset(
+                name.lower()
+                for name in (
+                    "sslmode",
+                    "sslrootcert",
+                    "sslcert",
+                    "sslkey",
+                    "sslcrl",
+                    "sslcompression",
+                    "ssl_min_protocol_version",
+                    "ssl_max_protocol_version",
+                    "gssencmode",
+                    "krbsrvname",
+                    "channel_binding",
+                )
+            )
+            pairs = [
+                (k, v)
+                for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+                if k.lower() not in skip
+            ]
+            new_query = urlencode(pairs)
+            return urlunparse(parsed._replace(query=new_query))
+        except Exception:
+            logger.warning("Could not sanitize asyncpg URL query; using original", exc_info=True)
+            return value
 
     @staticmethod
     def _to_async_url(url: str) -> str:
@@ -224,7 +396,7 @@ class Settings(BaseSettings):
             value = value.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
         elif value.startswith("postgresql://"):
             value = value.replace("postgresql://", "postgresql+asyncpg://", 1)
-        return value
+        return Settings._strip_libpq_only_params_from_asyncpg_url(value)
 
     @staticmethod
     def _to_sync_url(url: str) -> str:
@@ -278,6 +450,15 @@ class Settings(BaseSettings):
         logger.info(f"  SendGrid API Key (optional): {'SET (' + self.SENDGRID_API_KEY[:20] + '...)' if self.SENDGRID_API_KEY else 'NOT SET'}")
         logger.info(f"  Email From: {self.EMAIL_FROM}")
         logger.info(f"  Contact Notify: {self.CONTACT_MESSAGE_NOTIFY_EMAIL or 'Using SUPERADMIN_EMAIL'}")
+        logger.info(
+            "  Logging: level=%s format=%s uvicorn_access=%s sqlalchemy_engine=%s",
+            self.LOG_LEVEL,
+            self.LOG_FORMAT,
+            self.LOG_UVICORN_ACCESS,
+            self.LOG_SQLALCHEMY_LEVEL,
+        )
+        if (self.LOG_MODULE_LEVELS or "").strip():
+            logger.info("  LOG_MODULE_LEVELS: %s", self.LOG_MODULE_LEVELS)
         logger.info("=" * 60)
     
     class Config:
@@ -289,6 +470,3 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
-
-# Log configuration on import
-settings.log_config()

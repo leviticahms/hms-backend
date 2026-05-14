@@ -189,12 +189,17 @@ async def operational_error_handler(request: Request, exc: OperationalError) -> 
     Handle database connectivity/operational errors.
     Returns 503 so clients know the service is temporarily unavailable.
     """
+    orig = getattr(exc, "orig", None)
+    detail = str(orig) if orig is not None else str(exc)
     logger.warning(
-        f"Database operational error: {type(exc).__name__}",
+        "Database operational error: %s | detail=%s",
+        type(exc).__name__,
+        detail,
         extra={
             "url": str(request.url),
             "method": request.method,
-        }
+            "db_error_detail": detail[:500],
+        },
     )
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

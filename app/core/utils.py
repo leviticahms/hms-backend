@@ -3,6 +3,7 @@ Utility functions for common operations across the application.
 """
 import secrets
 import string
+import uuid
 from datetime import datetime, time, timezone
 from typing import Optional, Union
 
@@ -264,39 +265,21 @@ def parse_time_string(time_str: str) -> time:
 def generate_lab_order_number() -> str:
     """
     Generate a unique lab order number.
-    
-    Format: LAB-YYYY-NNNNN (e.g., LAB-2026-00045)
-    
-    Returns:
-        str: Lab order number
+
+    Uses a year prefix plus a UUID fragment. Not sequential; avoid collisions via DB uniqueness.
     """
-    import random
-    
-    current_year = datetime.now().year
-    # Generate random 5-digit number for demo purposes
-    # In production, this would be sequential based on database
-    sequence = random.randint(1, 99999)
-    
-    return f"LAB-{current_year}-{sequence:05d}"
+    current_year = datetime.now(timezone.utc).year
+    return f"LAB-{current_year}-{uuid.uuid4().hex[:12].upper()}"
 
 
 def generate_sample_number() -> str:
     """
     Generate a unique sample number.
-    
-    Format: SMP-YYYY-NNNNN (e.g., SMP-2026-00023)
-    
-    Returns:
-        str: Sample number
+
+    Uses a year prefix plus a UUID fragment. Not sequential; avoid collisions via DB uniqueness.
     """
-    import random
-    
-    current_year = datetime.now().year
-    # Generate random 5-digit number for demo purposes
-    # In production, this would be sequential based on database
-    sequence = random.randint(1, 99999)
-    
-    return f"SMP-{current_year}-{sequence:05d}"
+    current_year = datetime.now(timezone.utc).year
+    return f"SMP-{current_year}-{uuid.uuid4().hex[:12].upper()}"
 
 
 def generate_sample_barcode(lab_order_no: str, sample_sequence: int) -> str:
@@ -311,41 +294,6 @@ def generate_sample_barcode(lab_order_no: str, sample_sequence: int) -> str:
         
     Returns:
         str: Unique barcode value
-    """
-    return f"LAB-ORD-{lab_order_no}-SMP-{sample_sequence}"
-
-
-def generate_sample_number() -> str:
-    """
-    Generate a unique sample number.
-    
-    Format: SMP-YYYY-NNNNN (e.g., SMP-2026-00023)
-    
-    Returns:
-        str: Sample number
-    """
-    import random
-    
-    current_year = datetime.now().year
-    # Generate random 5-digit number for demo purposes
-    # In production, this would be sequential based on database
-    sequence = random.randint(1, 99999)
-    
-    return f"SMP-{current_year}-{sequence:05d}"
-
-
-def generate_sample_barcode(lab_order_no: str, sample_sequence: int) -> str:
-    """
-    Generate a unique barcode for a sample.
-    
-    Format: LAB-ORD-{order_no}-SMP-{sequence} (e.g., LAB-ORD-LAB-2026-00045-SMP-1)
-    
-    Args:
-        lab_order_no: Lab order number
-        sample_sequence: Sequential number for this sample in the order
-        
-    Returns:
-        str: Barcode value
     """
     return f"LAB-ORD-{lab_order_no}-SMP-{sample_sequence}"
 

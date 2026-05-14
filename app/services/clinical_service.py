@@ -19,6 +19,10 @@ from app.models.tenant import Hospital
 from app.core.enums import UserRole, AppointmentStatus, UserStatus
 from app.core.utils import generate_patient_ref, generate_appointment_ref, parse_time_string
 from app.core.security import SecurityManager
+from app.utils.receptionist_serializers import (
+    build_receptionist_patient_full_payload,
+    serialize_opd_appointment_full,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,20 @@ def _appointment_time_to_db_hms(raw: Any) -> str:
         raise ValueError("appointment_time is required")
     t = parse_time_string(str(raw))
     return t.strftime("%H:%M:%S")
+
+
+def _normalize_opd_appointment_type(raw: Any) -> str:
+    """Map UI labels (e.g. Regular) to stored appointment_type values."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return "CONSULTATION"
+    s = str(raw).strip().upper()
+    if s in ("REGULAR", "ROUTINE", "CONSULT", "CONSULTATION", "OPD"):
+        return "CONSULTATION"
+    if s in ("FOLLOW_UP", "FOLLOWUP", "FOLLOW-UP", "REVIEW"):
+        return "FOLLOW_UP"
+    if s in ("EMERGENCY", "ER", "URGENT"):
+        return "EMERGENCY"
+    return s[:50]
 
 
 def _normalize_opd_blood_group(bg: Optional[str]) -> Optional[str]:
@@ -82,9 +100,11 @@ async def send_opd_portal_credentials_email_task(
             hospital_name=hospital_name,
         )
         if not sent:
+            err = getattr(es, "last_error", None) or "unknown SMTP error"
             logger.warning(
-                "Portal credentials email failed after retries (background) for %s",
+                "Portal credentials email failed after retries (background) for %s — %s",
                 email_norm,
+                err,
             )
     except Exception:
         logger.exception("Unexpected error sending portal credentials (background) to %s", email_norm)
@@ -266,6 +286,12 @@ class ClinicalService:
         
         hospital_id_str = user_context.get("hospital_id")
         if not hospital_id_str:
+            from app.utils.hospital_id_resolve import resolve_effective_hospital_id
+
+            resolved = await resolve_effective_hospital_id(self.db, current_user)
+            if resolved:
+                hospital_id_str = str(resolved)
+        if not hospital_id_str:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Hospital ID is required. Receptionist must be associated with a hospital.",
@@ -358,19 +384,28 @@ class ClinicalService:
         self.db.add(user)
         await self.db.flush()  # Flush to get the user ID
         
-        # Assign PATIENT role using the association table
-        patient_role = await self.db.execute(
-            select(Role).where(Role.name == UserRole.PATIENT)
+        # Assign PATIENT role (must succeed or patient portal login fails with AUTH_002).
+        role_result = await self.db.execute(
+            select(Role).where(Role.name == UserRole.PATIENT.value)
         )
-        role = patient_role.scalar_one_or_none()
-        if role:
-            # Use the association table directly instead of the relationship
-            await self.db.execute(
-                user_roles.insert().values(
-                    user_id=user.id,
-                    role_id=role.id
-                )
+        role = role_result.scalar_one_or_none()
+        if not role:
+            role = Role(
+                id=uuid.uuid4(),
+                name=UserRole.PATIENT.value,
+                display_name="Patient",
+                description="Patient Role",
+                level=10,
             )
+            self.db.add(role)
+            await self.db.flush()
+
+        await self.db.execute(
+            user_roles.insert().values(
+                user_id=user.id,
+                role_id=role.id,
+            )
+        )
         
         bg_raw = _normalize_opd_blood_group(patient_data.get("blood_group"))
         bg_val = (patient_data.get("blood_group_value") or "").strip() or None
@@ -460,45 +495,258 @@ class ClinicalService:
 
         return result
 
-    def _receptionist_patient_detail_dict(self, patient: PatientProfile) -> Dict[str, Any]:
-        """Serialize patient + user for receptionist schedule / lookup (excludes password)."""
-        u = patient.user
-        return {
-            "patient_ref": patient.patient_id,
-            "first_name": u.first_name,
-            "last_name": u.last_name,
-            "patient_name": f"{u.first_name} {u.last_name}",
-            "gender": patient.gender,
-            "date_of_birth": patient.date_of_birth,
-            "phone": u.phone,
-            "email": u.email,
-            "id_type": patient.id_type,
-            "id_number": patient.id_number,
-            "id_name": patient.id_name,
-            "address": patient.address,
-            "pincode": patient.pincode,
-            "city": patient.city,
-            "district": patient.district,
-            "state": patient.state,
-            "country": patient.country,
-            "emergency_contact_name": patient.emergency_contact_name,
-            "emergency_contact_relationship": patient.emergency_contact_relation,
-            "emergency_contact": patient.emergency_contact_phone,
-            "medical_history": patient.medical_history,
-            "blood_group": patient.blood_group,
-            "blood_group_value": patient.blood_group_value,
+    async def patch_opd_patient(
+        self,
+        patient_ref: str,
+        updates: Dict[str, Any],
+        *,
+        new_password_plain: Optional[str],
+        send_credentials_email: bool,
+        current_user: User,
+    ) -> Dict[str, Any]:
+        """Apply partial updates to an OPD patient in the receptionist's hospital."""
+        user_context = self.get_user_context(current_user)
+        await self.validate_receptionist_access(user_context)
+
+        hospital_id_str = user_context.get("hospital_id")
+        if not hospital_id_str:
+            from app.utils.hospital_id_resolve import resolve_effective_hospital_id
+
+            resolved = await resolve_effective_hospital_id(self.db, current_user)
+            if resolved:
+                hospital_id_str = str(resolved)
+        if not hospital_id_str:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Hospital ID is required. Receptionist must be associated with a hospital.",
+            )
+
+        try:
+            hospital_id_uuid = uuid.UUID(hospital_id_str) if isinstance(hospital_id_str, str) else hospital_id_str
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid hospital_id in user context.",
+            )
+
+        pr = (patient_ref or "").strip()
+        if not pr:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="patient_ref is required")
+
+        payload_keys = {k for k in updates.keys()}
+        if not payload_keys and not (new_password_plain and str(new_password_plain).strip()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No fields to update. Send at least one profile field or password.",
+            )
+
+        result = await self.db.execute(
+            select(PatientProfile)
+            .where(
+                and_(
+                    PatientProfile.patient_id == pr,
+                    PatientProfile.hospital_id == hospital_id_uuid,
+                )
+            )
+            .options(selectinload(PatientProfile.user).selectinload(User.roles))
+        )
+        profile = result.scalar_one_or_none()
+        if not profile or not profile.user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Patient '{pr}' not found for this hospital.",
+            )
+
+        pu = profile.user
+        role_names = [getattr(r, "name", "") for r in (pu.roles or [])]
+        if UserRole.PATIENT.value not in role_names:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This account is not a patient record.",
+            )
+
+        email_norm: Optional[str] = None
+
+        phone_norm = updates.get("phone", None)
+        if phone_norm is not None:
+            phone_norm = str(phone_norm).strip()
+            if not phone_norm:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="phone cannot be empty")
+            dup_phone = await self.db.execute(
+                select(User.id).where(
+                    and_(
+                        User.phone == phone_norm,
+                        User.hospital_id == hospital_id_uuid,
+                        User.id != pu.id,
+                    )
+                )
+            )
+            if dup_phone.first():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Another patient already uses this phone number at this hospital.",
+                )
+            pu.phone = phone_norm
+
+        if "email" in updates:
+            raw_em = updates.get("email")
+            if raw_em is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="email cannot be removed; omit the field to leave unchanged.",
+                )
+            email_norm = str(raw_em).strip().lower()
+            dup_em = await self.db.execute(
+                select(User.id).where(
+                    and_(
+                        User.email == email_norm,
+                        User.hospital_id == hospital_id_uuid,
+                        User.id != pu.id,
+                    )
+                )
+            )
+            if dup_em.first():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Another user already uses this email at this hospital.",
+                )
+            pu.email = email_norm
+
+        if "first_name" in updates:
+            fn = str(updates["first_name"] or "").strip()
+            if not fn:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="first_name cannot be empty")
+            pu.first_name = fn
+
+        if "last_name" in updates:
+            ln = str(updates["last_name"] or "").strip()
+            if not ln:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="last_name cannot be empty")
+            pu.last_name = ln
+
+        if new_password_plain and str(new_password_plain).strip():
+            pw = str(new_password_plain).strip()
+            eff_email = (
+                email_norm
+                if email_norm is not None
+                else (pu.email or "").strip().lower()
+            )
+            if not eff_email:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="email is required on the patient account before setting a portal password",
+                )
+            from app.services.auth_service import PasswordValidator
+
+            pwd_check = PasswordValidator.validate_password(pw, eff_email, pu.phone or "")
+            if not pwd_check["valid"]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "PWD_001",
+                        "message": "Password does not meet security requirements",
+                        "errors": pwd_check["errors"],
+                    },
+                )
+            pu.password_hash = self.security.hash_password(pw)
+            pu.email_verified = True
+
+        profile_field_map = {
+            "date_of_birth": "date_of_birth",
+            "gender": "gender",
+            "address": "address",
+            "pincode": "pincode",
+            "city": "city",
+            "district": "district",
+            "state": "state",
+            "country": "country",
+            "id_type": "id_type",
+            "id_number": "id_number",
+            "id_name": "id_name",
+            "emergency_contact_name": "emergency_contact_name",
+            "emergency_contact_phone": "emergency_contact_phone",
+            "emergency_contact_relation": "emergency_contact_relation",
+            "medical_history": "medical_history",
+            "blood_group": "blood_group",
+            "blood_group_value": "blood_group_value",
         }
+        for key, col in profile_field_map.items():
+            if key not in updates:
+                continue
+            val = updates[key]
+            if key == "gender":
+                setattr(profile, col, _normalize_opd_gender(val))
+            elif key == "blood_group":
+                setattr(profile, col, _normalize_opd_blood_group(val))
+            else:
+                setattr(profile, col, val)
+
+        eff_bg = profile.blood_group
+        eff_bg_val = profile.blood_group_value
+        if eff_bg == "OTHER" and not (eff_bg_val or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="blood_group_value is required when blood_group is OTHER",
+            )
+
+        eff_id_type = (profile.id_type or "").strip().upper()
+        if eff_id_type == "OTHER" and not (profile.id_name or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="id_name is required when id_type is Other",
+            )
+
+        hospital_name = None
+        try:
+            hops = await self.db.execute(select(Hospital).where(Hospital.id == hospital_id_uuid))
+            hrow = hops.scalar_one_or_none()
+            if hrow:
+                hospital_name = hrow.name
+        except Exception:
+            hospital_name = None
+
+        await self.db.commit()
+        await self.db.refresh(profile)
+        await self.db.refresh(pu)
+
+        out = self._receptionist_patient_detail_dict(profile)
+        out["patient_ref"] = profile.patient_id
+        out["hospital_id"] = hospital_id_str
+        out["hospital_name"] = hospital_name
+        out["portal_password_updated"] = bool(new_password_plain and str(new_password_plain).strip())
+        login_email_norm = (pu.email or "").strip().lower()
+        out["send_credentials_email_requested"] = bool(
+            send_credentials_email and out["portal_password_updated"] and bool(login_email_norm)
+        )
+        if out["portal_password_updated"] and login_email_norm:
+            out["credentials_email_hint"] = (
+                "If SMTP is configured, credentials email was queued from the API layer."
+                if send_credentials_email
+                else "Credential email skipped (send_credentials_email=false)."
+            )
+        return out
+
+    def _receptionist_patient_detail_dict(self, patient: PatientProfile) -> Dict[str, Any]:
+        """Serialize patient + user for receptionist GET (full DB fields; password_hash never returned)."""
+        return build_receptionist_patient_full_payload(patient)
 
     async def get_receptionist_patient_by_ref(self, patient_ref: str, current_user: User) -> Dict[str, Any]:
         """Return full OPD profile for autofill (receptionist)."""
         user_context = self.get_user_context(current_user)
         await self.get_receptionist_profile(user_context)
-        if not user_context.get("hospital_id"):
+        hospital_id_str = user_context.get("hospital_id")
+        if not hospital_id_str:
+            from app.utils.hospital_id_resolve import resolve_effective_hospital_id
+
+            resolved = await resolve_effective_hospital_id(self.db, current_user)
+            if resolved:
+                hospital_id_str = str(resolved)
+        if not hospital_id_str:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Hospital ID is required. Receptionist must be associated with a hospital.",
             )
-        hospital_id_uuid = uuid.UUID(user_context["hospital_id"])
+        hospital_id_uuid = uuid.UUID(hospital_id_str)
         pr = (patient_ref or "").strip()
         result = await self.db.execute(
             select(PatientProfile)
@@ -605,18 +853,25 @@ class ClinicalService:
     # ============================================================================
     
     async def schedule_opd_appointment(self, appointment_data: Dict[str, Any], current_user: User) -> Dict[str, Any]:
-        """Schedule appointment for OPD patient"""
+        """Schedule appointment for OPD patient (same slot rules as patient self-booking)."""
+        from app.models.doctor import DoctorProfile
+        from app.services.appointment_service import AppointmentService
+
         user_context = self.get_user_context(current_user)
-        receptionist = await self.get_receptionist_profile(user_context)
-        
+        await self.get_receptionist_profile(user_context)
+
         hospital_id_uuid = None
         if user_context.get("hospital_id"):
-            hospital_id_uuid = uuid.UUID(user_context["hospital_id"]) if isinstance(user_context["hospital_id"], str) else user_context["hospital_id"]
+            hospital_id_uuid = (
+                uuid.UUID(user_context["hospital_id"])
+                if isinstance(user_context["hospital_id"], str)
+                else user_context["hospital_id"]
+            )
 
         if not hospital_id_uuid:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Hospital ID is required. Receptionist must be associated with a hospital."
+                detail="Hospital ID is required. Receptionist must be associated with a hospital.",
             )
 
         patient = await self._resolve_patient_for_scheduling(
@@ -624,54 +879,115 @@ class ClinicalService:
             appointment_data.get("patient_name"),
             hospital_id_uuid,
         )
-        
-        # Get doctor and department
-        doctor = await self.get_doctor_by_name(appointment_data["doctor_name"], user_context.get("hospital_id"))
-        department = await self.get_department_by_name(appointment_data["department_name"], user_context.get("hospital_id"))
-        
-        # Validate appointment date and time
+
+        hid = user_context.get("hospital_id")
+        department = await self.get_department_by_id_or_name(
+            appointment_data.get("department_id"),
+            appointment_data.get("department_name"),
+            hid,
+        )
+        doctor = await self.get_doctor_by_name(
+            appointment_data["doctor_name"],
+            hid,
+            department_id=department.id if department else None,
+        )
+        if department is None:
+            department = await self.get_primary_department_for_doctor(doctor.id, hospital_id_uuid)
+
+        try:
+            time_hhmmss = _appointment_time_to_db_hms(appointment_data.get("appointment_time"))
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+        parts = time_hhmmss.split(":")
+        time_hhmm = f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+        appt_date = str(appointment_data["appointment_date"]).strip()[:10]
+
         try:
             appointment_datetime = datetime.strptime(
-                f"{appointment_data['appointment_date']} {appointment_data['appointment_time']}",
-                "%Y-%m-%d %H:%M"
+                f"{appt_date} {time_hhmmss}", "%Y-%m-%d %H:%M:%S"
             )
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid date or time format. Use YYYY-MM-DD for date and HH:MM for time"
+                detail="Invalid appointment_date; use YYYY-MM-DD",
             )
-        
-        # Check if appointment is in the future
+
         if appointment_datetime <= datetime.utcnow():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Appointment must be scheduled for future date and time"
+                detail="Appointment must be scheduled for a future date and time",
             )
-        
-        # Check for conflicting appointments (same doctor, same time)
+
+        svc = AppointmentService(self.db)
+        day_slots = await svc.get_available_time_slots_for_doctor_user(doctor.id, appt_date)
+        if not day_slots:
+            requested_weekday = appointment_datetime.strftime("%A").upper()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"This doctor has no published {requested_weekday} availability. "
+                    "Doctor schedules are weekly templates (day_of_week + time), not date-wise rows. "
+                    "Choose a date that matches one of the doctor's scheduled weekdays or add that weekday schedule."
+                ),
+            )
+        match = next((s for s in day_slots if s["time"] == time_hhmm), None)
+        if not match:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selected time is outside this doctor's schedule. Pick a slot from available-slots.",
+            )
+        if not match["is_available"]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Time slot is not available",
+            )
+
         conflict_check = await self.db.execute(
-            select(Appointment)
-            .where(
+            select(Appointment).where(
                 and_(
                     Appointment.doctor_id == doctor.id,
-                    Appointment.appointment_date == appointment_data["appointment_date"],
-                    Appointment.appointment_time == appointment_data["appointment_time"],
-                    Appointment.status.in_([AppointmentStatus.CONFIRMED, AppointmentStatus.REQUESTED])
+                    Appointment.appointment_date == appt_date,
+                    Appointment.appointment_time == time_hhmmss,
+                    Appointment.status.in_(
+                        [AppointmentStatus.CONFIRMED, AppointmentStatus.REQUESTED]
+                    ),
                 )
             )
         )
-        
         if conflict_check.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Doctor is not available at this time. Please choose a different time slot."
+                detail="Doctor is not available at this time. Please choose a different time slot.",
             )
-        
-        # Generate appointment reference
-        from app.core.utils import generate_appointment_ref
+
+        dp_result = await self.db.execute(
+            select(DoctorProfile).where(
+                and_(
+                    DoctorProfile.user_id == doctor.id,
+                    DoctorProfile.hospital_id == hospital_id_uuid,
+                )
+            )
+        )
+        dp = dp_result.scalar_one_or_none()
+        consultation_fee = (
+            float(dp.consultation_fee) if dp and dp.consultation_fee is not None else 500.0
+        )
+
         appointment_ref = generate_appointment_ref()
-        
-        # Create appointment
+        while True:
+            existing_ref = await self.db.execute(
+                select(Appointment).where(Appointment.appointment_ref == appointment_ref)
+            )
+            if not existing_ref.scalar_one_or_none():
+                break
+            appointment_ref = generate_appointment_ref()
+
+        appt_type = _normalize_opd_appointment_type(appointment_data.get("appointment_type"))
+
         appointment = Appointment(
             id=uuid.uuid4(),
             hospital_id=hospital_id_uuid,
@@ -679,31 +995,34 @@ class ClinicalService:
             patient_id=patient.id,
             doctor_id=doctor.id,
             department_id=department.id,
-            appointment_date=appointment_data["appointment_date"],
-            appointment_time=appointment_data["appointment_time"],
-            appointment_type=appointment_data["appointment_type"],
+            appointment_date=appt_date,
+            appointment_time=time_hhmmss,
+            duration_minutes=int(match["duration_minutes"]),
+            appointment_type=appt_type,
             chief_complaint=appointment_data.get("chief_complaint"),
             notes=appointment_data.get("notes"),
-            status=AppointmentStatus.CONFIRMED,  # Receptionist can directly confirm
+            consultation_fee=consultation_fee,
+            status=AppointmentStatus.CONFIRMED,
             created_by_role=UserRole.RECEPTIONIST,
-            created_by_user=user_context["user_id"]  # Already UUID from get_user_context
+            created_by_user=user_context["user_id"],
         )
-        
+
         self.db.add(appointment)
-        await self.db.commit()  # This will also commit patient and user hospital_id changes
-        
+        await self.db.commit()
+
         return {
             "appointment_ref": appointment_ref,
             "patient_ref": patient.patient_id,
             "patient_name": f"{patient.user.first_name} {patient.user.last_name}",
             "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}",
             "department_name": department.name,
-            "appointment_date": appointment_data["appointment_date"],
-            "appointment_time": appointment_data["appointment_time"],
-            "appointment_type": appointment_data["appointment_type"],
+            "appointment_date": appt_date,
+            "appointment_time": time_hhmm,
+            "appointment_type": appt_type,
             "status": AppointmentStatus.CONFIRMED,
+            "consultation_fee": consultation_fee,
             "scheduled_by": f"{current_user.first_name} {current_user.last_name} (Receptionist)",
-            "message": "Appointment scheduled successfully"
+            "message": "Appointment scheduled successfully",
         }
     
     async def get_todays_opd_appointments(self, filters: Dict[str, Any], current_user: User) -> Dict[str, Any]:
@@ -770,25 +1089,7 @@ class ClinicalService:
         appointments_result = await self.db.execute(query.offset(offset).limit(limit))
         appointments = appointments_result.scalars().all()
         
-        # Format response
-        from app.schemas.clinical import OPDAppointmentOut
-        appointment_list = []
-        for appointment in appointments:
-            appointment_list.append(OPDAppointmentOut(
-                appointment_ref=appointment.appointment_ref,
-                patient_ref=appointment.patient.patient_id,
-                patient_name=f"{appointment.patient.user.first_name} {appointment.patient.user.last_name}",
-                doctor_name=f"Dr. {appointment.doctor.first_name} {appointment.doctor.last_name}",
-                department_name=appointment.department.name,
-                appointment_date=appointment.appointment_date,
-                appointment_time=appointment.appointment_time,
-                appointment_type=appointment.appointment_type,
-                status=appointment.status,
-                chief_complaint=appointment.chief_complaint,
-                is_checked_in=appointment.checked_in_at is not None,
-                checked_in_at=appointment.checked_in_at.isoformat() if appointment.checked_in_at else None,
-                created_at=appointment.created_at.isoformat()
-            ))
+        appointment_list = [serialize_opd_appointment_full(a) for a in appointments]
         
         return {
             "date": today,
@@ -804,6 +1105,34 @@ class ClinicalService:
             }
         }
     
+    async def get_opd_appointment_by_ref(
+        self, appointment_ref: str, current_user: User
+    ) -> Dict[str, Any]:
+        """Return one appointment by ref for the receptionist's hospital."""
+        user_context = self.get_user_context(current_user)
+        await self.validate_receptionist_access(user_context)
+        appointment_result = await self.db.execute(
+            select(Appointment)
+            .where(
+                and_(
+                    Appointment.appointment_ref == appointment_ref,
+                    Appointment.hospital_id == user_context["hospital_id"],
+                )
+            )
+            .options(
+                selectinload(Appointment.patient).selectinload(PatientProfile.user),
+                selectinload(Appointment.doctor),
+                selectinload(Appointment.department),
+            )
+        )
+        appointment = appointment_result.scalar_one_or_none()
+        if not appointment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Appointment {appointment_ref} not found",
+            )
+        return serialize_opd_appointment_full(appointment)
+
     async def modify_opd_appointment(self, appointment_ref: str, modification_data: Dict[str, Any], current_user: User) -> Dict[str, Any]:
         """Modify existing OPD appointment"""
         user_context = self.get_user_context(current_user)
@@ -839,32 +1168,187 @@ class ClinicalService:
                 detail="Cannot modify completed appointment"
             )
         
-        # Update fields
-        for field, value in modification_data.items():
-            if field == "doctor_name" and value:
-                # Update doctor
-                doctor = await self.get_doctor_by_name(value, user_context["hospital_id"])
-                appointment.doctor_id = doctor.id
-            elif field == "department_name" and value:
-                # Update department
-                department = await self.get_department_by_name(value, user_context["hospital_id"])
-                appointment.department_id = department.id
-            elif field == "appointment_date" and value is not None:
-                s = str(value).strip()
-                appointment.appointment_date = s[:10] if len(s) >= 10 else s
-            elif field == "appointment_time" and value is not None:
+        # Update patient by patient_ref (frontend alias: patientId)
+        if modification_data.get("patient_ref"):
+            p_ref = str(modification_data["patient_ref"]).strip()
+            patient_result = await self.db.execute(
+                select(PatientProfile).where(
+                    and_(
+                        PatientProfile.hospital_id == user_context["hospital_id"],
+                        PatientProfile.patient_id == p_ref,
+                    )
+                )
+            )
+            patient = patient_result.scalar_one_or_none()
+            if not patient:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Patient '{p_ref}' not found in your hospital",
+                )
+            appointment.patient_id = patient.id
+
+        # Apply department before doctor so name-based doctor resolution stays in the right department
+        if modification_data.get("department_id"):
+            try:
+                dep_id = uuid.UUID(str(modification_data["department_id"]).strip())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="department_id must be a valid UUID",
+                )
+            dep_result = await self.db.execute(
+                select(Department).where(
+                    and_(
+                        Department.id == dep_id,
+                        Department.hospital_id == user_context["hospital_id"],
+                        Department.is_active == True,
+                    )
+                )
+            )
+            dep = dep_result.scalar_one_or_none()
+            if not dep:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Department not found for provided department_id",
+                )
+            appointment.department_id = dep.id
+        elif modification_data.get("department_name"):
+            department = await self.get_department_by_name(
+                modification_data["department_name"], user_context["hospital_id"]
+            )
+            appointment.department_id = department.id
+
+        if modification_data.get("doctor_id"):
+            try:
+                doctor_user_id = uuid.UUID(str(modification_data["doctor_id"]).strip())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="doctorId must be a valid UUID",
+                )
+            doctor_result = await self.db.execute(
+                select(User)
+                .join(user_roles, User.id == user_roles.c.user_id)
+                .join(Role, user_roles.c.role_id == Role.id)
+                .where(
+                    and_(
+                        User.id == doctor_user_id,
+                        User.hospital_id == user_context["hospital_id"],
+                        Role.name == UserRole.DOCTOR,
+                    )
+                )
+            )
+            doctor = doctor_result.scalar_one_or_none()
+            if not doctor:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Doctor not found for provided doctorId",
+                )
+            appointment.doctor_id = doctor.id
+        elif modification_data.get("doctor_name"):
+            doctor = await self.get_doctor_by_name(
+                modification_data["doctor_name"],
+                user_context["hospital_id"],
+                department_id=appointment.department_id,
+            )
+            appointment.doctor_id = doctor.id
+
+        if "appointment_date" in modification_data and modification_data.get("appointment_date") is not None:
+            s = str(modification_data["appointment_date"]).strip()
+            appointment.appointment_date = s[:10] if len(s) >= 10 else s
+        if "appointment_time" in modification_data and modification_data.get("appointment_time") is not None:
+            try:
+                appointment.appointment_time = _appointment_time_to_db_hms(modification_data["appointment_time"])
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "INVALID_APPOINTMENT_TIME",
+                        "message": str(e),
+                    },
+                )
+        if "appointment_type" in modification_data and modification_data.get("appointment_type") is not None:
+            appointment.appointment_type = _normalize_opd_appointment_type(
+                modification_data.get("appointment_type")
+            )
+        if "chief_complaint" in modification_data:
+            appointment.chief_complaint = modification_data.get("chief_complaint")
+        if "notes" in modification_data:
+            appointment.notes = modification_data.get("notes")
+        if "status" in modification_data and modification_data.get("status") is not None:
+            appointment.status = str(modification_data["status"]).strip().upper()
+
+        need_slot_check = any(
+            modification_data.get(k) is not None
+            for k in (
+                "appointment_date",
+                "appointment_time",
+                "doctor_name",
+                "doctor_id",
+                "department_name",
+                "department_id",
+            )
+        )
+        st_upper = (appointment.status or "").strip().upper()
+        if st_upper not in ("CANCELLED", "COMPLETED"):
+            in_dept = await self.db.execute(
+                select(StaffDepartmentAssignment.id).where(
+                    and_(
+                        StaffDepartmentAssignment.staff_id == appointment.doctor_id,
+                        StaffDepartmentAssignment.department_id == appointment.department_id,
+                        StaffDepartmentAssignment.is_active == True,
+                    )
+                )
+            )
+            if not in_dept.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Selected doctor is not assigned to this department",
+                )
+            if need_slot_check:
+                from app.services.appointment_service import AppointmentService
+
                 try:
-                    appointment.appointment_time = _appointment_time_to_db_hms(value)
-                except ValueError as e:
+                    appt_dt = datetime.strptime(
+                        f"{appointment.appointment_date} {appointment.appointment_time}",
+                        "%Y-%m-%d %H:%M:%S",
+                    )
+                except ValueError:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail={
-                            "code": "INVALID_APPOINTMENT_TIME",
-                            "message": str(e),
-                        },
+                        detail="Invalid stored appointment date/time",
                     )
-            elif field in ["chief_complaint", "notes", "status"]:
-                setattr(appointment, field, value)
+                if appt_dt <= datetime.utcnow():
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Appointment must be rescheduled to a future date and time",
+                    )
+                svc = AppointmentService(self.db)
+                day_slots = await svc.get_available_time_slots_for_doctor_user(
+                    appointment.doctor_id,
+                    appointment.appointment_date,
+                    exclude_appointment_id=appointment.id,
+                )
+                if not day_slots:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="This doctor has no published availability on that day",
+                    )
+                pt_parts = appointment.appointment_time.split(":")
+                th = f"{int(pt_parts[0]):02d}:{int(pt_parts[1]):02d}"
+                match = next((s for s in day_slots if s["time"] == th), None)
+                if not match:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Selected time is outside this doctor's schedule",
+                    )
+                if not match["is_available"]:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Time slot is not available",
+                    )
+                if "duration_minutes" in match:
+                    appointment.duration_minutes = int(match["duration_minutes"])
 
         await self.db.commit()
         
@@ -2152,10 +2636,20 @@ class ClinicalService:
     # HELPER METHODS
     # ============================================================================
     
-    async def get_doctor_by_name(self, doctor_name: str, hospital_id: str) -> User:
-        """Get doctor by name within hospital"""
-        # Query users with DOCTOR role in the specified hospital
-        result = await self.db.execute(
+    async def get_doctor_by_name(
+        self,
+        doctor_name: str,
+        hospital_id: str,
+        department_id: Optional[uuid.UUID] = None,
+    ) -> User:
+        """Resolve a doctor by display name (partial, case-insensitive). Optionally scope to a department."""
+        dn = (doctor_name or "").strip()
+        if not dn:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="doctor_name is required",
+            )
+        q = (
             select(User)
             .join(user_roles, User.id == user_roles.c.user_id)
             .join(Role, user_roles.c.role_id == Role.id)
@@ -2164,40 +2658,290 @@ class ClinicalService:
                     User.hospital_id == hospital_id,
                     Role.name == UserRole.DOCTOR,
                     or_(
-                        func.concat(User.first_name, ' ', User.last_name) == doctor_name,
-                        func.concat('Dr. ', User.first_name, ' ', User.last_name) == doctor_name
-                    )
+                        func.concat("Dr. ", User.first_name, " ", User.last_name).ilike(f"%{dn}%"),
+                        func.concat(User.first_name, " ", User.last_name).ilike(f"%{dn}%"),
+                    ),
                 )
             )
         )
-        
-        doctor = result.scalar_one_or_none()
-        if not doctor:
+        if department_id is not None:
+            q = q.join(
+                StaffDepartmentAssignment,
+                and_(
+                    StaffDepartmentAssignment.staff_id == User.id,
+                    StaffDepartmentAssignment.department_id == department_id,
+                    StaffDepartmentAssignment.is_active == True,
+                ),
+            )
+        result = await self.db.execute(q.limit(2))
+        rows = result.scalars().all()
+        if len(rows) == 1:
+            return rows[0]
+        if not rows:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Doctor '{doctor_name}' not found"
+                detail=f"Doctor '{doctor_name}' not found",
             )
-        
-        return doctor
-    
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "AMBIGUOUS_DOCTOR",
+                "message": f"Multiple doctors match '{doctor_name}'. Refine the name or use doctor_id.",
+            },
+        )
+
+    async def get_department_by_id_or_name(
+        self,
+        department_id: Optional[Any],
+        department_name: Optional[str],
+        hospital_id: str,
+    ) -> Optional[Department]:
+        """Resolve an optional department from UUID/name; return None so caller can derive from doctor."""
+        raw_id = str(department_id or "").strip()
+        if raw_id:
+            try:
+                dept_uuid = uuid.UUID(raw_id)
+            except (TypeError, ValueError):
+                dept_uuid = None
+            if dept_uuid is not None:
+                result = await self.db.execute(
+                    select(Department).where(
+                        and_(
+                            Department.id == dept_uuid,
+                            Department.hospital_id == hospital_id,
+                            Department.is_active == True,
+                        )
+                    )
+                )
+                department = result.scalar_one_or_none()
+                if department:
+                    return department
+
+        dname = (department_name or "").strip()
+        if dname:
+            try:
+                return await self.get_department_by_name(dname, hospital_id)
+            except HTTPException as exc:
+                # A stale/free-text UI value should not block scheduling if the doctor has a department.
+                if exc.status_code != status.HTTP_404_NOT_FOUND:
+                    raise
+
+        return None
+
+    async def get_primary_department_for_doctor(
+        self,
+        doctor_id: uuid.UUID,
+        hospital_id: uuid.UUID,
+    ) -> Department:
+        """Resolve the doctor's active department from assignment first, then doctor profile."""
+        from app.models.doctor import DoctorProfile
+
+        result = await self.db.execute(
+            select(Department)
+            .join(
+                StaffDepartmentAssignment,
+                StaffDepartmentAssignment.department_id == Department.id,
+            )
+            .where(
+                and_(
+                    StaffDepartmentAssignment.staff_id == doctor_id,
+                    StaffDepartmentAssignment.hospital_id == hospital_id,
+                    StaffDepartmentAssignment.is_active == True,
+                    Department.is_active == True,
+                )
+            )
+            .order_by(desc(StaffDepartmentAssignment.is_primary))
+            .limit(1)
+        )
+        department = result.scalar_one_or_none()
+        if department:
+            return department
+
+        result = await self.db.execute(
+            select(Department)
+            .join(DoctorProfile, DoctorProfile.department_id == Department.id)
+            .where(
+                and_(
+                    DoctorProfile.user_id == doctor_id,
+                    DoctorProfile.hospital_id == hospital_id,
+                    Department.is_active == True,
+                )
+            )
+            .limit(1)
+        )
+        department = result.scalar_one_or_none()
+        if department:
+            return department
+
+        department = await self._sync_doctor_department_from_tenant(doctor_id, hospital_id)
+        if department:
+            return department
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Selected doctor has no active department assignment. "
+                "Assign the doctor to a department in Hospital Admin first."
+            ),
+        )
+
+    async def _sync_doctor_department_from_tenant(
+        self,
+        doctor_id: uuid.UUID,
+        hospital_id: uuid.UUID,
+    ) -> Optional[Department]:
+        """
+        Receptionist OPD routes use the platform DB because OPD patients log in there.
+        Hospital Admin writes departments/assignments to tenant DBs, so lazily copy the
+        selected doctor's active department into the current session when needed.
+        """
+        try:
+            from app.database.session import get_tenant_session_factory
+            from app.database.tenant_context import resolve_tenant_database_name_for_hospital
+            from app.models.doctor import DoctorProfile
+
+            tenant_db = await resolve_tenant_database_name_for_hospital(hospital_id)
+            if not tenant_db:
+                return None
+
+            fac = get_tenant_session_factory(tenant_db)
+            tenant_department: Optional[Department] = None
+            tenant_assignment: Optional[StaffDepartmentAssignment] = None
+
+            async with fac() as tdb:
+                result = await tdb.execute(
+                    select(StaffDepartmentAssignment, Department)
+                    .join(Department, StaffDepartmentAssignment.department_id == Department.id)
+                    .where(
+                        and_(
+                            StaffDepartmentAssignment.staff_id == doctor_id,
+                            StaffDepartmentAssignment.hospital_id == hospital_id,
+                            StaffDepartmentAssignment.is_active == True,
+                            Department.is_active == True,
+                        )
+                    )
+                    .order_by(desc(StaffDepartmentAssignment.is_primary))
+                    .limit(1)
+                )
+                row = result.first()
+                if row:
+                    tenant_assignment, tenant_department = row
+                else:
+                    result = await tdb.execute(
+                        select(Department)
+                        .join(DoctorProfile, DoctorProfile.department_id == Department.id)
+                        .where(
+                            and_(
+                                DoctorProfile.user_id == doctor_id,
+                                DoctorProfile.hospital_id == hospital_id,
+                                Department.is_active == True,
+                            )
+                        )
+                        .limit(1)
+                    )
+                    tenant_department = result.scalar_one_or_none()
+
+                if not tenant_department:
+                    return None
+
+                department_data = {
+                    col.name: getattr(tenant_department, col.name)
+                    for col in Department.__table__.columns
+                }
+                assignment_data = (
+                    {
+                        col.name: getattr(tenant_assignment, col.name)
+                        for col in StaffDepartmentAssignment.__table__.columns
+                    }
+                    if tenant_assignment
+                    else None
+                )
+
+            head_doctor_id = department_data.get("head_doctor_id")
+            if head_doctor_id and not await self.db.get(User, head_doctor_id):
+                # Keep the department row insertable even when only the selected doctor was mirrored.
+                department_data["head_doctor_id"] = None
+
+            existing_department = await self.db.get(Department, department_data["id"])
+            if existing_department:
+                for key, value in department_data.items():
+                    if key != "id":
+                        setattr(existing_department, key, value)
+                department = existing_department
+            else:
+                department = Department(**department_data)
+                self.db.add(department)
+            await self.db.flush()
+
+            if assignment_data:
+                existing_assignment = await self.db.get(
+                    StaffDepartmentAssignment,
+                    assignment_data["id"],
+                )
+                if existing_assignment:
+                    for key, value in assignment_data.items():
+                        if key != "id":
+                            setattr(existing_assignment, key, value)
+                else:
+                    self.db.add(StaffDepartmentAssignment(**assignment_data))
+                await self.db.flush()
+
+            return department
+        except Exception:
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            logger.exception(
+                "Failed to sync doctor department from tenant hospital_id=%s doctor_id=%s",
+                hospital_id,
+                doctor_id,
+            )
+            return None
+
     async def get_department_by_name(self, department_name: str, hospital_id: str) -> Department:
-        """Get department by name within hospital"""
+        """Resolve department by name (exact case-insensitive, then partial match if unique)."""
+        dname = (department_name or "").strip()
+        if not dname:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="department_name is required",
+            )
+        result = await self.db.execute(
+            select(Department).where(
+                and_(
+                    Department.hospital_id == hospital_id,
+                    Department.name.ilike(dname),
+                    Department.is_active == True,
+                )
+            )
+        )
+        department = result.scalar_one_or_none()
+        if department:
+            return department
         result = await self.db.execute(
             select(Department)
             .where(
                 and_(
                     Department.hospital_id == hospital_id,
-                    Department.name == department_name,
-                    Department.is_active == True
+                    Department.name.ilike(f"%{dname}%"),
+                    Department.is_active == True,
                 )
             )
+            .limit(2)
         )
-        
-        department = result.scalar_one_or_none()
-        if not department:
+        rows = result.scalars().all()
+        if len(rows) == 1:
+            return rows[0]
+        if not rows:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Department '{department_name}' not found"
+                detail=f"Department '{department_name}' not found",
             )
-        
-        return department
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "AMBIGUOUS_DEPARTMENT",
+                "message": f"Multiple departments match '{department_name}'. Use the exact department name.",
+            },
+        )

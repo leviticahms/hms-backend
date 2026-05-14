@@ -2,7 +2,7 @@
 Pharmacy Service - Business logic for pharmacy operations
 """
 from decimal import Decimal
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, or_, func, cast, Date
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Any
 from uuid import UUID, uuid4
@@ -11,7 +11,9 @@ from datetime import datetime, date, timezone
 from sqlalchemy.exc import IntegrityError
 
 from app.repositories.pharmacy_repository import PharmacyRepository
-from app.models.pharmacy import Medicine, Supplier, StockBatch
+from app.models.pharmacy import Medicine, Supplier, StockBatch, PurchaseOrder, Sale
+from app.models.tenant import Hospital
+from app.core.enums import PurchaseOrderStatus, SupplierStatus, StockTransactionType
 from app.core.exceptions import BusinessLogicError
 
 
@@ -140,6 +142,71 @@ class PharmacyService:
             skip=skip,
             limit=limit
         )
+
+    async def create_stock_adjustment(
+        self,
+        hospital_id: UUID,
+        performed_by: UUID,
+        medicine_id: UUID,
+        qty_change,
+        reason,
+        batch_id: Optional[UUID] = None,
+        notes: Optional[str] = None,
+        **kwargs,
+    ):
+        """Adjust stock for a batch and write an audit ledger row."""
+        from app.models.pharmacy import StockLedger
+
+        qty_delta = Decimal(str(qty_change))
+        if qty_delta == 0:
+            raise BusinessLogicError("qty_change cannot be zero")
+
+        medicine = await self.get_medicine(medicine_id, hospital_id)
+
+        if not batch_id:
+            raise BusinessLogicError("batch_id is required for stock adjustment")
+
+        batch = await self.repo.get_stock_batch_by_id(batch_id, hospital_id)
+        if not batch or batch.medicine_id != medicine_id:
+            raise BusinessLogicError("Stock batch not found for this medicine")
+
+        current_qty = Decimal(str(batch.qty_on_hand or 0))
+        new_qty = current_qty + qty_delta
+        if new_qty < 0:
+            raise BusinessLogicError("Adjustment would make stock negative")
+
+        batch.qty_on_hand = new_qty
+        batch.updated_at = datetime.utcnow()
+
+        reason_value = reason.value if hasattr(reason, "value") else str(reason)
+        reason_text = reason_value
+        if notes:
+            reason_text = f"{reason_value}: {notes}"
+
+        ledger = StockLedger(
+            id=uuid4(),
+            hospital_id=hospital_id,
+            medicine_id=medicine.id,
+            batch_id=batch.id,
+            txn_type=StockTransactionType.ADJUSTMENT.value,
+            qty_change=qty_delta,
+            unit_cost=batch.purchase_rate or Decimal("0"),
+            reference_type="ADJUSTMENT",
+            reference_id=None,
+            performed_by=performed_by,
+            reason=reason_text,
+        )
+        self.db.add(ledger)
+        await self.db.flush()
+
+        return {
+            "medicine_id": str(medicine_id),
+            "batch_id": str(batch_id),
+            "qty_change": float(qty_delta),
+            "qty_on_hand": float(new_qty),
+            "ledger_id": str(ledger.id),
+            "reason": reason_value,
+        }
     
     # ============================================================================
     # SUPPLIER OPERATIONS
@@ -177,6 +244,40 @@ class PharmacyService:
         )
         return await self.repo.create_supplier(supplier)
 
+    async def update_supplier(
+        self,
+        supplier_id: UUID,
+        hospital_id: UUID,
+        **updates
+    ) -> Supplier:
+        """Update supplier details."""
+        supplier = await self.get_supplier(supplier_id, hospital_id)
+        allowed_fields = {
+            "name",
+            "contact_person",
+            "phone",
+            "email",
+            "address_line1",
+            "address_line2",
+            "city",
+            "state",
+            "pincode",
+            "country",
+            "gstin",
+            "drug_license_no",
+            "payment_terms",
+            "credit_limit",
+            "rating",
+            "status",
+            "notes",
+        }
+        for field, value in updates.items():
+            if field in allowed_fields:
+                setattr(supplier, field, value)
+        await self.db.flush()
+        await self.db.refresh(supplier)
+        return supplier
+
 
 
     # ============================================================================
@@ -201,6 +302,19 @@ class PharmacyService:
         # Drop keys that are not on the model so **kwargs does not break
         kwargs.pop("items", None)
         kwargs.pop("received_at", None)
+
+        supplier = await self.repo.get_supplier_by_id(supplier_id, hospital_id)
+        if not supplier:
+            raise BusinessLogicError(
+                "Supplier not found for this hospital. Refresh suppliers and select a valid supplier before creating GRN."
+            )
+
+        if po_id:
+            po = await self.repo.get_purchase_order_by_id(po_id, hospital_id)
+            if not po:
+                raise BusinessLogicError("Purchase order not found for this hospital.")
+            if po.supplier_id != supplier_id:
+                raise BusinessLogicError("Purchase order supplier does not match selected supplier.")
 
         # Generate grn_number (GRN-YYYYMMDD-0001)
         today_str = date.today().strftime("%Y%m%d")
@@ -943,6 +1057,220 @@ class PharmacyService:
     # RETURNS
     # ============================================================================
 
+    @staticmethod
+    def _return_item_value(item: Any, key: str, default: Any = None) -> Any:
+        return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
+
+    async def _next_return_number(self, hospital_id: UUID) -> str:
+        """Generate a hospital-scoped return number with a random suffix for concurrency safety."""
+        from app.models.pharmacy import Return
+
+        today_str = date.today().strftime("%Y%m%d")
+        count_result = await self.db.execute(
+            select(func.count(Return.id)).where(
+                and_(
+                    Return.hospital_id == hospital_id,
+                    Return.return_number.like(f"RET-{today_str}%"),
+                )
+            )
+        )
+        n = (count_result.scalar() or 0) + 1
+        return f"RET-{today_str}-{n:04d}-{uuid4().hex[:8].upper()}"
+
+    async def create_patient_return(
+        self,
+        hospital_id: UUID,
+        returned_by: UUID,
+        sale_id: UUID,
+        return_reason: str,
+        items: List[Any],
+        **kwargs,
+    ):
+        """Create a patient return and increment returned stock into the original/specified batches."""
+        from app.models.pharmacy import Return, ReturnItem, StockLedger
+
+        sale = await self.repo.get_sale_by_id(sale_id, hospital_id)
+        if not sale:
+            raise BusinessLogicError("Sale not found for patient return")
+
+        return_record = Return(
+            id=uuid4(),
+            hospital_id=hospital_id,
+            return_number=await self._next_return_number(hospital_id),
+            return_type="PATIENT_RETURN",
+            sale_id=sale.id,
+            patient_id=sale.patient_id,
+            total_amount=Decimal("0"),
+            returned_by=returned_by,
+            return_reason=return_reason,
+            returned_at=datetime.utcnow(),
+        )
+        self.db.add(return_record)
+        await self.db.flush()
+
+        sale_items = await self.repo.get_sale_items(sale.id, hospital_id)
+        sale_item_by_key = {(item.medicine_id, item.batch_id): item for item in sale_items}
+        sale_items_by_medicine = {}
+        for sale_item in sale_items:
+            sale_items_by_medicine.setdefault(sale_item.medicine_id, []).append(sale_item)
+
+        total_amount = Decimal("0")
+        for item in items:
+            medicine_id = self._return_item_value(item, "medicine_id")
+            batch_id = self._return_item_value(item, "batch_id")
+            qty = Decimal(str(self._return_item_value(item, "qty", 0) or 0))
+            unit_price = Decimal(str(self._return_item_value(item, "unit_price", 0) or 0))
+            if qty <= 0:
+                raise BusinessLogicError("Return item quantity must be greater than zero")
+
+            sale_item = None
+            if batch_id:
+                sale_item = sale_item_by_key.get((medicine_id, batch_id))
+            elif medicine_id in sale_items_by_medicine and len(sale_items_by_medicine[medicine_id]) == 1:
+                sale_item = sale_items_by_medicine[medicine_id][0]
+                batch_id = sale_item.batch_id
+
+            if not sale_item:
+                raise BusinessLogicError("Return item must match an item from the sale")
+            if qty > Decimal(str(sale_item.qty or 0)):
+                raise BusinessLogicError("Return quantity cannot exceed sold quantity")
+
+            batch = await self.repo.get_stock_batch_by_id(batch_id, hospital_id)
+            if not batch or batch.medicine_id != medicine_id:
+                raise BusinessLogicError("Stock batch not found for return item")
+
+            if unit_price <= 0:
+                unit_price = Decimal(str(sale_item.unit_price or batch.selling_price or 0))
+            line_total = (qty * unit_price).quantize(Decimal("0.01"))
+            total_amount += line_total
+
+            return_item = ReturnItem(
+                id=uuid4(),
+                hospital_id=hospital_id,
+                return_id=return_record.id,
+                medicine_id=medicine_id,
+                batch_id=batch.id,
+                qty=qty,
+                unit_price=unit_price,
+                line_total=line_total,
+            )
+            self.db.add(return_item)
+
+            batch.qty_on_hand = Decimal(str(batch.qty_on_hand or 0)) + qty
+            batch.updated_at = datetime.utcnow()
+
+            self.db.add(
+                StockLedger(
+                    id=uuid4(),
+                    hospital_id=hospital_id,
+                    medicine_id=medicine_id,
+                    batch_id=batch.id,
+                    txn_type="RETURN_IN",
+                    qty_change=qty,
+                    unit_cost=batch.purchase_rate or Decimal("0"),
+                    reference_type="PATIENT_RETURN",
+                    reference_id=return_record.id,
+                    performed_by=returned_by,
+                    reason=return_reason,
+                )
+            )
+
+        return_record.total_amount = total_amount
+        await self.db.flush()
+        return return_record
+
+    async def create_supplier_return(
+        self,
+        hospital_id: UUID,
+        returned_by: UUID,
+        supplier_id: UUID,
+        return_reason: str,
+        items: List[Any],
+        grn_id: Optional[UUID] = None,
+        **kwargs,
+    ):
+        """Create a supplier return and decrement stock from specified batches."""
+        from app.models.pharmacy import Return, ReturnItem, StockLedger
+
+        supplier = await self.repo.get_supplier_by_id(supplier_id, hospital_id)
+        if not supplier:
+            raise BusinessLogicError("Supplier not found")
+
+        return_record = Return(
+            id=uuid4(),
+            hospital_id=hospital_id,
+            return_number=await self._next_return_number(hospital_id),
+            return_type="SUPPLIER_RETURN",
+            supplier_id=supplier_id,
+            grn_id=grn_id,
+            total_amount=Decimal("0"),
+            returned_by=returned_by,
+            return_reason=return_reason,
+            returned_at=datetime.utcnow(),
+        )
+        self.db.add(return_record)
+        await self.db.flush()
+
+        total_amount = Decimal("0")
+        for item in items:
+            medicine_id = self._return_item_value(item, "medicine_id")
+            batch_id = self._return_item_value(item, "batch_id")
+            qty = Decimal(str(self._return_item_value(item, "qty", 0) or 0))
+            unit_price = Decimal(str(self._return_item_value(item, "unit_price", 0) or 0))
+            if qty <= 0:
+                raise BusinessLogicError("Return item quantity must be greater than zero")
+            if not batch_id:
+                raise BusinessLogicError("batch_id is required for supplier returns")
+
+            batch = await self.repo.get_stock_batch_by_id(batch_id, hospital_id)
+            if not batch or batch.medicine_id != medicine_id:
+                raise BusinessLogicError("Stock batch not found for supplier return item")
+
+            current_qty = Decimal(str(batch.qty_on_hand or 0))
+            if current_qty < qty:
+                raise BusinessLogicError("Supplier return quantity exceeds stock on hand")
+
+            if unit_price <= 0:
+                unit_price = Decimal(str(batch.purchase_rate or 0))
+            line_total = (qty * unit_price).quantize(Decimal("0.01"))
+            total_amount += line_total
+
+            self.db.add(
+                ReturnItem(
+                    id=uuid4(),
+                    hospital_id=hospital_id,
+                    return_id=return_record.id,
+                    medicine_id=medicine_id,
+                    batch_id=batch.id,
+                    qty=qty,
+                    unit_price=unit_price,
+                    line_total=line_total,
+                )
+            )
+
+            batch.qty_on_hand = current_qty - qty
+            batch.updated_at = datetime.utcnow()
+
+            self.db.add(
+                StockLedger(
+                    id=uuid4(),
+                    hospital_id=hospital_id,
+                    medicine_id=medicine_id,
+                    batch_id=batch.id,
+                    txn_type="RETURN_TO_SUPPLIER_OUT",
+                    qty_change=-qty,
+                    unit_cost=batch.purchase_rate or Decimal("0"),
+                    reference_type="SUPPLIER_RETURN",
+                    reference_id=return_record.id,
+                    performed_by=returned_by,
+                    reason=return_reason,
+                )
+            )
+
+        return_record.total_amount = total_amount
+        await self.db.flush()
+        return return_record
+
     async def get_returns(
         self,
         hospital_id: UUID,
@@ -1021,4 +1349,207 @@ class PharmacyService:
     ):
         """Profit margin report by medicine (revenue - cost from sale items)."""
         return await self.repo.report_profit_margins(hospital_id, from_date, to_date)
+
+    # ============================================================================
+    # DASHBOARD / INVENTORY / UI SETTINGS (tenant DB)
+    # ============================================================================
+
+    async def get_dashboard_overview(self, hospital_id: UUID) -> dict[str, Any]:
+        """Aggregate KPIs for pharmacist dashboard (reads only tenant tables)."""
+        med_cnt = (
+            await self.db.execute(
+                select(func.count()).select_from(Medicine).where(
+                    and_(Medicine.hospital_id == hospital_id, Medicine.is_active == True)
+                )
+            )
+        ).scalar_one()
+        sup_cnt = (
+            await self.db.execute(
+                select(func.count()).select_from(Supplier).where(
+                    and_(
+                        Supplier.hospital_id == hospital_id,
+                        Supplier.status == SupplierStatus.ACTIVE.value,
+                    )
+                )
+            )
+        ).scalar_one()
+        pending_po_statuses = (
+            PurchaseOrderStatus.DRAFT.value,
+            PurchaseOrderStatus.PENDING.value,
+            PurchaseOrderStatus.APPROVED.value,
+            PurchaseOrderStatus.SENT.value,
+            PurchaseOrderStatus.PARTIALLY_RECEIVED.value,
+        )
+        pending_pos = (
+            await self.db.execute(
+                select(func.count()).select_from(PurchaseOrder).where(
+                    and_(
+                        PurchaseOrder.hospital_id == hospital_id,
+                        PurchaseOrder.status.in_(pending_po_statuses),
+                    )
+                )
+            )
+        ).scalar_one()
+        today = date.today()
+        sales_today = (
+            await self.db.execute(
+                select(func.count()).select_from(Sale).where(
+                    and_(
+                        Sale.hospital_id == hospital_id,
+                        cast(Sale.created_at, Date) == today,
+                    )
+                )
+            )
+        ).scalar_one()
+        return {
+            "medicines_count": int(med_cnt or 0),
+            "active_suppliers_count": int(sup_cnt or 0),
+            "pending_purchase_orders_count": int(pending_pos or 0),
+            "sales_today_count": int(sales_today or 0),
+        }
+
+    async def list_inventory_summary(
+        self,
+        hospital_id: UUID,
+        *,
+        search: Optional[str] = None,
+        category: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """
+        One row per medicine with aggregated on-hand qty and nearest expiry (inventory screen).
+        """
+        filters = [
+            Medicine.hospital_id == hospital_id,
+            Medicine.is_active == True,
+        ]
+        if search and str(search).strip():
+            term = f"%{search.strip()}%"
+            filters.append(
+                or_(
+                    Medicine.generic_name.ilike(term),
+                    Medicine.brand_name.ilike(term),
+                    Medicine.sku.ilike(term),
+                )
+            )
+        if category and str(category).strip():
+            filters.append(Medicine.category == category.strip())
+
+        total = (
+            await self.db.execute(select(func.count()).select_from(Medicine).where(and_(*filters)))
+        ).scalar_one()
+
+        total_qty = func.coalesce(func.sum(StockBatch.qty_on_hand), 0).label("total_qty")
+        nearest_exp = func.min(StockBatch.expiry_date).label("nearest_expiry")
+        unit_price = func.min(StockBatch.selling_price).label("unit_price")
+
+        q = (
+            select(
+                Medicine.id,
+                Medicine.generic_name,
+                Medicine.brand_name,
+                Medicine.strength,
+                Medicine.category,
+                Medicine.reorder_level,
+                Medicine.sku,
+                total_qty,
+                nearest_exp,
+                unit_price,
+            )
+            .select_from(Medicine)
+            .outerjoin(
+                StockBatch,
+                and_(
+                    StockBatch.medicine_id == Medicine.id,
+                    StockBatch.hospital_id == hospital_id,
+                    StockBatch.is_active == True,
+                ),
+            )
+            .where(and_(*filters))
+            .group_by(
+                Medicine.id,
+                Medicine.generic_name,
+                Medicine.brand_name,
+                Medicine.strength,
+                Medicine.category,
+                Medicine.reorder_level,
+                Medicine.sku,
+            )
+            .order_by(Medicine.generic_name.asc())
+            .offset(skip)
+            .limit(limit)
+        )
+        rows = (await self.db.execute(q)).all()
+
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            tid, gname, bname, strength, cat, reorder, sku, tqty, nexp, uprice = r
+            qty = float(tqty or 0)
+            reorder_i = int(reorder or 0)
+            if qty <= 0:
+                st = "OUT_OF_STOCK"
+            elif reorder_i > 0 and qty <= float(reorder_i):
+                st = "LOW_STOCK"
+            else:
+                st = "IN_STOCK"
+            items.append(
+                {
+                    "medicine_id": str(tid),
+                    "display_name": f"{gname or ''} {strength or ''}".strip(),
+                    "generic_name": gname,
+                    "brand_name": bname,
+                    "strength": strength,
+                    "category": cat,
+                    "sku": sku,
+                    "stock_units": qty,
+                    "unit_price": float(uprice) if uprice is not None else None,
+                    "nearest_expiry": nexp.isoformat() if nexp else None,
+                    "reorder_level": reorder_i,
+                    "status": st,
+                }
+            )
+        return {"total": int(total or 0), "items": items}
+
+    async def get_pharmacy_ui_settings(self, hospital_id: UUID) -> dict[str, Any]:
+        """Pharmacy UI settings stored under hospitals.settings['pharmacy_ui'] (tenant row)."""
+        h = await self.db.get(Hospital, hospital_id)
+        root = dict(h.settings or {}) if h else {}
+        cur = dict(root.get("pharmacy_ui") or {})
+        defaults = {
+            "general": {
+                "pharmacy_name": "",
+                "pharmacy_address": "",
+                "phone": "",
+                "email": "",
+            },
+            "notifications": {
+                "low_stock_alerts": True,
+                "expiry_alerts": True,
+                "purchase_order_updates": True,
+                "sales_reports_email": False,
+            },
+        }
+        merged = {
+            "general": {**defaults["general"], **dict(cur.get("general") or {})},
+            "notifications": {**defaults["notifications"], **dict(cur.get("notifications") or {})},
+        }
+        return merged
+
+    async def update_pharmacy_ui_settings(self, hospital_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+        h = await self.db.get(Hospital, hospital_id)
+        if not h:
+            raise BusinessLogicError("Hospital not found in tenant database")
+        root = dict(h.settings or {})
+        cur = dict(root.get("pharmacy_ui") or {})
+        if "general" in payload and isinstance(payload["general"], dict):
+            cur["general"] = {**dict(cur.get("general") or {}), **payload["general"]}
+        if "notifications" in payload and isinstance(payload["notifications"], dict):
+            cur["notifications"] = {**dict(cur.get("notifications") or {}), **payload["notifications"]}
+        root["pharmacy_ui"] = cur
+        h.settings = root
+        h.updated_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        await self.db.refresh(h)
+        return await self.get_pharmacy_ui_settings(hospital_id)
 

@@ -13,7 +13,8 @@ from app.api.v1.routers.pharmacy import (
     sales,
     returns,
     alerts,
-    reports
+    reports,
+    pharmacy_portal,
 )
 
 # Create main pharmacy router
@@ -29,6 +30,7 @@ pharmacy_router.include_router(sales.router)
 pharmacy_router.include_router(returns.router)
 pharmacy_router.include_router(alerts.router)
 pharmacy_router.include_router(reports.router)
+pharmacy_router.include_router(pharmacy_portal.router)
 
 __all__ = ["pharmacy_router"]
 

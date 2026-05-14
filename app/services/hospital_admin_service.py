@@ -3,6 +3,7 @@ Hospital Admin service for hospital-level administrative operations.
 Handles department management, staff management, and hospital operations.
 CRITICAL: All operations are scoped to the hospital_id from JWT token.
 """
+import logging
 import re
 import uuid
 import random
@@ -21,6 +22,8 @@ from app.models.patient import PatientProfile
 from app.models.doctor import DoctorProfile
 from app.core.enums import UserRole, UserStatus
 from app.core.security import SecurityManager
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_doctor_lookup_string(ref: str) -> str:
@@ -156,14 +159,17 @@ def _safe_decimal(val: Any) -> Decimal:
         return Decimal("0")
 
 
-# Role.name in DB is VARCHAR; SQLAlchemy must compare to string literals, not Enum instances (avoids DB errors).
-_STAFF_ROLE_VALUES_ORDERED: List[str] = [
-    UserRole.DOCTOR.value,
-    UserRole.NURSE.value,
-    UserRole.RECEPTIONIST.value,
-    UserRole.LAB_TECH.value,
-    UserRole.PHARMACIST.value,
-]
+from app.core.role_aliases import (
+    STAFF_ROLE_ORDER,
+    all_sql_role_names_for_staff_directory,
+    normalize_staff_role_name,
+    primary_staff_role_for_display,
+    role_name_variants_for_sql_filter,
+    user_can_use_staff_login,
+)
+
+# Back-compat: ordered canonical staff role strings for queries / UI.
+_STAFF_ROLE_VALUES_ORDERED: List[str] = list(STAFF_ROLE_ORDER)
 
 # Same definitions as main.py seed_superadmin(); tenant DBs get schema via Alembic but often have no role rows.
 _CANONICAL_ROLE_BY_NAME: Dict[str, Dict[str, Any]] = {
@@ -231,12 +237,143 @@ _CANONICAL_ROLE_BY_NAME: Dict[str, Dict[str, Any]] = {
 
 
 class HospitalAdminService:
-    """Service class for Hospital Admin operations"""
+    """
+    Hospital Admin operations: departments, staff profiles, wards/beds, admissions, appointments,
+    patients (non-clinical), schedules. All business writes use ``self.db`` — the tenant sub-database
+    whenever routing + ``tenant_database_name`` apply. Mutations to ``users`` also sync to the
+    platform DB (via ``platform_db``) because authentication resolves users there.
+    """
     
-    def __init__(self, db: AsyncSession, hospital_id: uuid.UUID):
+    def __init__(
+        self,
+        db: AsyncSession,
+        hospital_id: uuid.UUID,
+        platform_db: Optional[AsyncSession] = None,
+    ):
         self.db = db
         self.hospital_id = hospital_id
+        self.platform_db = platform_db
         self.security = SecurityManager()
+
+    async def _safe_platform_mirror(self, coro) -> bool:
+        """
+        Best-effort platform mirror.
+
+        Tenant (sub-DB) persistence is the source of truth for hospital-scoped operations.
+        Mirror errors must never fail the primary request after tenant commit.
+        """
+        try:
+            await coro
+            return True
+        except HTTPException:
+            # Preserve tenant success even if mirror branch raises HTTPException.
+            try:
+                if self.platform_db is not None:
+                    await self.platform_db.rollback()
+            except Exception:
+                pass
+            logger.exception("Platform DB mirror HTTPException (ignored to preserve tenant write)")
+            return False
+        except Exception as e:
+            logger.exception("Platform DB mirror failed: %s", e)
+            # Best-effort rollback in case the platform session is left in failed state.
+            try:
+                if self.platform_db is not None:
+                    await self.platform_db.rollback()
+            except Exception:
+                pass
+
+            cause = (str(e) or type(e).__name__).strip()
+            if len(cause) > 900:
+                cause = cause[:900] + "…"
+            logger.error(
+                "Ignoring platform mirror failure to preserve tenant data flow. cause=%s: %s",
+                type(e).__name__,
+                cause,
+            )
+            return False
+
+    async def _get_or_create_role_on_platform(self, role_name: Any) -> Role:
+        """Return Role on platform DB for staff assignment (IDs differ from tenant roles)."""
+        if self.platform_db is None:
+            raise RuntimeError("platform_db is required for _get_or_create_role_on_platform")
+        rn = (role_name.value if isinstance(role_name, UserRole) else str(role_name or "")).strip()
+        result = await self.platform_db.execute(select(Role).where(Role.name == rn))
+        role = result.scalar_one_or_none()
+        if role:
+            return role
+        spec = _CANONICAL_ROLE_BY_NAME.get(rn)
+        if not spec:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "ROLE_NOT_FOUND", "message": f"Role {rn} not found"},
+            )
+        role = Role(
+            id=uuid.uuid4(),
+            name=rn,
+            display_name=spec["display_name"],
+            description=spec["description"],
+            level=spec["level"],
+        )
+        self.platform_db.add(role)
+        await self.platform_db.flush()
+        return role
+
+    async def _upsert_platform_user_from_tenant_row(self, tu: User) -> None:
+        """Copy tenant User row into the platform session (no commit)."""
+        if self.platform_db is None:
+            return
+        pu = await self.platform_db.get(User, tu.id)
+        data = {col.name: getattr(tu, col.name) for col in User.__table__.columns}
+        if pu:
+            for k, v in data.items():
+                if k != "id":
+                    setattr(pu, k, v)
+        else:
+            self.platform_db.add(User(**data))
+
+    async def _mirror_staff_auth_to_platform(self, user_id: uuid.UUID, role_name: Any) -> None:
+        """Mirror User + user_roles to platform so staff can authenticate."""
+        if self.platform_db is None:
+            return
+        from app.models.user import user_roles
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        tu = await self.db.get(User, user_id)
+        if not tu:
+            logger.warning("mirror staff auth: user %s missing from primary DB after commit", user_id)
+            return
+
+        await self._upsert_platform_user_from_tenant_row(tu)
+        # FK user_roles.user_id -> users.id: row must exist before role link insert.
+        await self.platform_db.flush()
+
+        plat_role = await self._get_or_create_role_on_platform(role_name)
+
+        # Idempotent link insert (no-op if already exists).
+        await self.platform_db.execute(
+            pg_insert(user_roles)
+            .values(user_id=user_id, role_id=plat_role.id)
+            .on_conflict_do_nothing(index_elements=["user_id", "role_id"])
+        )
+
+        await self.platform_db.commit()
+
+    async def _sync_user_row_to_platform_after_mutation(self, user_id: uuid.UUID) -> None:
+        """Mirror User row only (e.g. password reset, activation)."""
+        if self.platform_db is None:
+            return
+        tu = await self.db.get(User, user_id)
+        if not tu:
+            return
+        await self._upsert_platform_user_from_tenant_row(tu)
+        await self.platform_db.commit()
+
+    async def _mirror_platform_user_if_configured(self, user_id: uuid.UUID) -> None:
+        """After tenant ``users`` mutations, upsert the same row on platform (login resolves there)."""
+        if self.platform_db is None:
+            return
+        await self._safe_platform_mirror(self._sync_user_row_to_platform_after_mutation(user_id))
 
     async def _get_or_create_role_for_staff(self, role_name: Any) -> Role:
         """
@@ -386,6 +523,7 @@ class HospitalAdminService:
         if active_only:
             count_query = count_query.where(Department.is_active == True)
         
+        count_query = count_query.with_only_columns(func.count(func.distinct(Department.id)))
         total_result = await self.db.execute(count_query)
         total = total_result.scalar()
         
@@ -682,7 +820,7 @@ class HospitalAdminService:
         """Create staff user and role-specific profile (doctor / nurse / receptionist) when department is set."""
         from app.models.user import User, Role
         from app.models.tenant import Hospital
-        from app.models.hospital import Department
+        from app.models.hospital import Department, StaffDepartmentAssignment, StaffProfile
         from app.models.doctor import DoctorProfile
         from app.models.nurse import NurseProfile
         from app.models.receptionist import ReceptionistProfile
@@ -691,7 +829,7 @@ class HospitalAdminService:
         from app.models.user import user_roles
         from sqlalchemy import insert
 
-        role_name = (staff_data.get("role") or "").strip()
+        role_name = (staff_data.get("role") or "").strip().upper()
         if role_name not in [
             UserRole.DOCTOR,
             UserRole.NURSE,
@@ -761,17 +899,25 @@ class HospitalAdminService:
         department_for_create = None
         dept_label = "GENERAL"
         dn = (staff_data.get("department_name") or "").strip()
-        if role_name == UserRole.DOCTOR and dn:
-            department_for_create = await self._get_department_by_name(dn)
-            if not department_for_create:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={
-                        "code": "DEPARTMENT_NOT_FOUND",
-                        "message": f"Department '{dn}' not found in this hospital",
-                    },
-                )
-            dept_label = department_for_create.name
+        if role_name == UserRole.DOCTOR:
+            if dn:
+                department_for_create = await self._get_department_by_name(dn)
+                if not department_for_create:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "code": "DEPARTMENT_NOT_FOUND",
+                            "message": f"Department '{dn}' not found in this hospital",
+                        },
+                    )
+            else:
+                # If caller omits department_name, fallback to first active department.
+                # If none exists, still allow doctor account creation and assign later.
+                department_for_create = await self._get_first_department()
+            if department_for_create:
+                dept_label = department_for_create.name
+            else:
+                dept_label = "GENERAL"
         elif role_name in (UserRole.NURSE, UserRole.RECEPTIONIST):
             if dn:
                 department_for_create = await self._get_department_by_name(dn)
@@ -788,16 +934,30 @@ class HospitalAdminService:
                 department_for_create = await self._get_first_department()
                 if department_for_create:
                     dept_label = department_for_create.name
-        elif role_name in (UserRole.LAB_TECH, UserRole.PHARMACIST) and dn:
-            department_for_create = await self._get_department_by_name(dn)
-            if not department_for_create:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={
-                        "code": "DEPARTMENT_NOT_FOUND",
-                        "message": f"Department '{dn}' not found in this hospital",
-                    },
-                )
+        elif role_name in (UserRole.LAB_TECH, UserRole.PHARMACIST):
+            if dn:
+                department_for_create = await self._get_department_by_name(dn)
+                if not department_for_create:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "code": "DEPARTMENT_NOT_FOUND",
+                            "message": f"Department '{dn}' not found in this hospital",
+                        },
+                    )
+            else:
+                department_for_create = await self._get_first_department()
+                if not department_for_create:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "code": "DEPARTMENT_REQUIRED",
+                            "message": (
+                                f"{role_name.replace('_', ' ').title()} creation requires a department. "
+                                "Create at least one department or pass department_name."
+                            ),
+                        },
+                    )
             dept_label = department_for_create.name
 
         department = department_for_create
@@ -840,6 +1000,8 @@ class HospitalAdminService:
             extra_md["specialization"] = spec
             extra_md.setdefault("doctor_experience_years", 0)
             extra_md.setdefault("consultation_fee", 0)
+            if not department_for_create:
+                extra_md["department_assignment_pending"] = True
 
         password_hash = self.security.hash_password(staff_data["password"])
         recv_profile_photo = None
@@ -887,7 +1049,6 @@ class HospitalAdminService:
         profiles_created: list[str] = []
 
         if role_name == UserRole.DOCTOR and department_for_create:
-            from app.models.hospital import StaffDepartmentAssignment, StaffProfile
             from app.core.utils import parse_date_string
 
             effective_from = parse_date_string(staff_data.get("joining_date")) or datetime.utcnow()
@@ -945,7 +1106,8 @@ class HospitalAdminService:
                 self.db.add(assignment)
 
                 doc_ref = user.staff_id or f"DOC{str(uuid.uuid4())[:8].upper()}"
-                lic = f"AUTO-ML-{self.hospital_id.hex[:8]}-{uuid.uuid4().hex[:10]}".upper()
+                hosp_ref = str(self.hospital_id or "").replace("-", "").upper()[:8] or "HOSPITAL"
+                lic = f"AUTO-ML-{hosp_ref}-{uuid.uuid4().hex[:10]}".upper()
                 doc_designation = (
                     (extra_md.get("designation") or "").strip() or "Staff Physician"
                 )
@@ -1015,6 +1177,84 @@ class HospitalAdminService:
                 )
                 profiles_created.append("nurse_profile")
 
+        if role_name in (UserRole.NURSE, UserRole.RECEPTIONIST, UserRole.LAB_TECH, UserRole.PHARMACIST) and department:
+            has_staff_profile = await self.db.execute(
+                select(StaffProfile.id).where(
+                    and_(
+                        StaffProfile.user_id == user.id,
+                        StaffProfile.hospital_id == self.hospital_id,
+                    )
+                )
+            )
+            if not has_staff_profile.scalar_one_or_none():
+                designation_map = {
+                    UserRole.NURSE: (extra_md.get("nurse_designation") or "Staff Nurse"),
+                    UserRole.RECEPTIONIST: (extra_md.get("receptionist_designation") or "Front Desk Receptionist"),
+                    UserRole.LAB_TECH: "Lab Technician",
+                    UserRole.PHARMACIST: "Pharmacist",
+                }
+                experience_map = {
+                    UserRole.NURSE: _safe_int(extra_md.get("nurse_experience_years"), 0),
+                    UserRole.RECEPTIONIST: _safe_int(extra_md.get("receptionist_experience_years"), 0),
+                    UserRole.LAB_TECH: _safe_int(extra_md.get("lab_experience_years"), 0),
+                    UserRole.PHARMACIST: _safe_int(extra_md.get("pharmacist_experience_years"), 0),
+                }
+                profile_specialization = None
+                if role_name == UserRole.NURSE:
+                    profile_specialization = (extra_md.get("nurse_specialization") or "").strip() or None
+                elif role_name == UserRole.LAB_TECH:
+                    profile_specialization = "Laboratory"
+                elif role_name == UserRole.PHARMACIST:
+                    profile_specialization = "Pharmacy"
+
+                sp_join = joining_iso or datetime.utcnow().date().isoformat()
+                self.db.add(
+                    StaffProfile(
+                        id=uuid.uuid4(),
+                        hospital_id=self.hospital_id,
+                        user_id=user.id,
+                        department_id=department.id,
+                        employee_id=user.staff_id or user.email,
+                        designation=str(designation_map.get(role_name) or "Staff").strip(),
+                        joining_date=sp_join,
+                        qualification=None,
+                        experience_years=max(0, experience_map.get(role_name, 0) or 0),
+                        specialization=profile_specialization,
+                        emergency_contact_name=None,
+                        emergency_contact_phone=None,
+                        emergency_contact_relation=None,
+                        is_full_time=True,
+                        salary=None,
+                        skills=[],
+                        certifications=[],
+                    )
+                )
+                profiles_created.append("staff_profile")
+
+            has_assignment = await self.db.execute(
+                select(StaffDepartmentAssignment.id).where(
+                    and_(
+                        StaffDepartmentAssignment.staff_id == user.id,
+                        StaffDepartmentAssignment.department_id == department.id,
+                        StaffDepartmentAssignment.hospital_id == self.hospital_id,
+                    )
+                )
+            )
+            if not has_assignment.scalar_one_or_none():
+                self.db.add(
+                    StaffDepartmentAssignment(
+                        id=uuid.uuid4(),
+                        hospital_id=self.hospital_id,
+                        staff_id=user.id,
+                        department_id=department.id,
+                        is_primary=True,
+                        effective_from=datetime.utcnow(),
+                        notes=None,
+                        is_active=True,
+                    )
+                )
+                profiles_created.append("department_assignment")
+
         if role_name == UserRole.RECEPTIONIST and department:
             has_rc = await self.db.execute(
                 select(ReceptionistProfile.id).where(
@@ -1058,6 +1298,10 @@ class HospitalAdminService:
         resp_first = user.first_name
         resp_last = user.last_name
         await self.db.commit()
+        if self.platform_db is not None:
+            await self._safe_platform_mirror(
+                self._mirror_staff_auth_to_platform(user.id, role_name)
+            )
 
         staff_name = f"{resp_first} {resp_last}"
         if role_name == UserRole.DOCTOR:
@@ -1118,34 +1362,47 @@ class HospitalAdminService:
         
         offset = (page - 1) * limit
 
-        # Build query with hospital filter
-        query = select(User).options(
-            selectinload(User.roles)
-        ).where(User.hospital_id == self.hospital_id)
-        
         # Filter by role if specified
-        if role_filter:
-            query = query.join(User.roles).where(Role.name == role_filter)
+        normalized_role_filter = (role_filter or "").strip().upper() if role_filter else None
+        if normalized_role_filter:
+            role_names = role_name_variants_for_sql_filter(normalized_role_filter)
+            if not role_names:
+                return {
+                    "staff": [],
+                    "pagination": {
+                        "page": page,
+                        "limit": limit,
+                        "total": 0,
+                        "pages": 0,
+                    },
+                }
         else:
-            query = query.join(User.roles).where(Role.name.in_(_STAFF_ROLE_VALUES_ORDERED))
-        
+            role_names = all_sql_role_names_for_staff_directory()
+
+        # Distinct user ids: join on roles can duplicate rows; count must be per-user, not per-role row.
+        staff_id_select = (
+            select(User.id)
+            .where(User.hospital_id == self.hospital_id)
+            .join(User.roles)
+            .where(Role.name.in_(role_names))
+        )
         if active_only:
-            query = query.where(User.is_active == True)
-        
-        # Get total count (same role filter as list query)
-        count_query = select(func.count(User.id)).where(User.hospital_id == self.hospital_id)
-        if role_filter:
-            count_query = count_query.join(User.roles).where(Role.name == role_filter)
-        else:
-            count_query = count_query.join(User.roles).where(Role.name.in_(_STAFF_ROLE_VALUES_ORDERED))
-        if active_only:
-            count_query = count_query.where(User.is_active == True)
-        
+            staff_id_select = staff_id_select.where(User.is_active == True)
+        staff_id_select = staff_id_select.distinct()
+        id_subq = staff_id_select.subquery()
+
+        count_query = select(func.count()).select_from(id_subq)
         total_result = await self.db.execute(count_query)
-        total = total_result.scalar()
-        
-        # Get paginated results
-        query = query.offset(offset).limit(limit).order_by(User.first_name.asc(), User.last_name.asc())
+        total = int(total_result.scalar() or 0)
+
+        query = (
+            select(User)
+            .options(selectinload(User.roles))
+            .where(User.hospital_id == self.hospital_id, User.id.in_(select(id_subq.c.id)))
+            .order_by(User.first_name.asc(), User.last_name.asc())
+            .offset(offset)
+            .limit(limit)
+        )
         result = await self.db.execute(query)
         users = result.scalars().all()
         
@@ -1153,10 +1410,7 @@ class HospitalAdminService:
         staff_list = []
         for user in users:
             user_roles = [role.name for role in user.roles]
-            primary_role = next(
-                (r for r in _STAFF_ROLE_VALUES_ORDERED if r in user_roles),
-                None,
-            )
+            primary_role = primary_staff_role_for_display(user_roles)
             md = user.user_metadata or {}
             joining = md.get("joining_date")
             specialization = None
@@ -1246,16 +1500,13 @@ class HospitalAdminService:
             )
         
         user_roles = [role.name for role in user.roles]
-        if not any(r in _STAFF_ROLE_VALUES_ORDERED for r in user_roles):
+        primary_role = primary_staff_role_for_display(user_roles)
+        if not primary_role:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "NOT_STAFF_USER", "message": "User is not a staff member"}
             )
 
-        primary_role = next(
-            (r for r in _STAFF_ROLE_VALUES_ORDERED if r in user_roles),
-            None,
-        )
         md = user.user_metadata or {}
         joining = md.get("joining_date")
         shift_timing = md.get("shift_timing")
@@ -1545,6 +1796,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.DOCTOR.value,
@@ -1640,6 +1892,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.NURSE.value,
@@ -1745,6 +1998,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.RECEPTIONIST.value,
@@ -1776,6 +2030,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.LAB_TECH.value,
@@ -1807,6 +2062,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.PHARMACIST.value,
@@ -1837,7 +2093,7 @@ class HospitalAdminService:
         
         # Check if user has staff role
         user_roles = [role.name for role in user.roles]
-        if not any(r in _STAFF_ROLE_VALUES_ORDERED for r in user_roles):
+        if primary_staff_role_for_display(user_roles) is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "NOT_STAFF_USER", "message": "User is not a staff member"}
@@ -1855,6 +2111,7 @@ class HospitalAdminService:
             user.status = UserStatus.ACTIVE.value
         
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         
         status_text = "activated" if is_active else "deactivated"
         status_str = (
@@ -1895,7 +2152,7 @@ class HospitalAdminService:
             )
         
         user_roles = [role.name for role in user.roles]
-        if not any(r in _STAFF_ROLE_VALUES_ORDERED for r in user_roles):
+        if primary_staff_role_for_display(user_roles) is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "NOT_STAFF_USER", "message": "User is not a staff member"}
@@ -1913,6 +2170,7 @@ class HospitalAdminService:
         user.updated_at = datetime.utcnow()
         
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(user.id)
         
         return {
             "user_id": str(user.id),
@@ -2234,8 +2492,8 @@ class HospitalAdminService:
         existing_schedule = await self.db.execute(
             select(DoctorSchedule).where(
                 and_(
-                    DoctorSchedule.doctor_id == doctor_id,
-                    DoctorSchedule.day_of_week == schedule_data['day_of_week'],
+                    DoctorSchedule.doctor_id.in_([doctor.user_id, doctor_id]),
+                    func.upper(func.trim(DoctorSchedule.day_of_week)) == str(schedule_data['day_of_week']).strip().upper(),
                     DoctorSchedule.is_active == True
                 )
             )
@@ -2294,8 +2552,8 @@ class HospitalAdminService:
         schedule = DoctorSchedule(
             id=uuid.uuid4(),
             hospital_id=self.hospital_id,
-            doctor_id=doctor_id,
-            day_of_week=schedule_data['day_of_week'],
+            doctor_id=doctor.user_id,
+            day_of_week=str(schedule_data['day_of_week']).strip().upper(),
             start_time=start_time,
             end_time=end_time,
             slot_duration_minutes=slot_mins,
@@ -2343,13 +2601,20 @@ class HospitalAdminService:
         # Get schedules
         schedules_result = await self.db.execute(
             select(DoctorSchedule).where(
-                DoctorSchedule.doctor_id == doctor_id
+                DoctorSchedule.doctor_id.in_([doctor.user_id, doctor_id])
             ).order_by(
                 DoctorSchedule.day_of_week.asc(),
                 DoctorSchedule.start_time.asc()
             )
         )
         schedules = schedules_result.scalars().all()
+        repaired = False
+        for schedule in schedules:
+            if schedule.doctor_id != doctor.user_id:
+                schedule.doctor_id = doctor.user_id
+                repaired = True
+        if repaired:
+            await self.db.flush()
         
         # Format response
         schedule_list = []
@@ -2874,6 +3139,7 @@ class HospitalAdminService:
             patient.user.status = UserStatus.ACTIVE.value
         
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(patient.user.id)
         
         status_text = "activated" if is_active else "deactivated"
         
@@ -2971,12 +3237,14 @@ class HospitalAdminService:
 
         # Check if ward code already exists in this hospital
         existing_ward = await self.db.execute(
-            select(Ward).where(
+            select(Ward.id)
+            .where(
                 and_(
                     Ward.hospital_id == self.hospital_id,
                     Ward.code == ward_data['code']
                 )
             )
+            .limit(1)
         )
         if existing_ward.scalar_one_or_none():
             raise HTTPException(
@@ -3058,15 +3326,12 @@ class HospitalAdminService:
         active_only: bool = False
     ) -> Dict[str, Any]:
         """Get paginated list of wards"""
-        from app.models.hospital import Ward
+        from app.models.hospital import Bed, Ward
         
         offset = (page - 1) * limit
         
         # Build query with hospital filter
-        query = select(Ward).options(
-            selectinload(Ward.head_nurse),
-            selectinload(Ward.beds)
-        ).where(Ward.hospital_id == self.hospital_id)
+        query = select(Ward).where(Ward.hospital_id == self.hospital_id)
         
         # Filter by ward type
         if ward_type:
@@ -3089,19 +3354,64 @@ class HospitalAdminService:
         query = query.offset(offset).limit(limit).order_by(Ward.name.asc())
         result = await self.db.execute(query)
         wards = result.scalars().all()
+
+        ward_ids = [ward.id for ward in wards]
+        bed_stats: Dict[uuid.UUID, Dict[str, int]] = {
+            ward_id: {"total": 0, "available": 0, "occupied": 0, "maintenance": 0}
+            for ward_id in ward_ids
+        }
+        if ward_ids:
+            bed_result = await self.db.execute(
+                select(Bed.ward_id, Bed.status).where(
+                    and_(
+                        Bed.hospital_id == self.hospital_id,
+                        Bed.ward_id.in_(ward_ids),
+                    )
+                )
+            )
+            for ward_id, bed_status in bed_result.all():
+                stats = bed_stats.setdefault(
+                    ward_id,
+                    {"total": 0, "available": 0, "occupied": 0, "maintenance": 0},
+                )
+                status_label = (
+                    bed_status.value if hasattr(bed_status, "value") else str(bed_status or "")
+                ).upper()
+                stats["total"] += 1
+                if status_label == "AVAILABLE":
+                    stats["available"] += 1
+                elif status_label == "OCCUPIED":
+                    stats["occupied"] += 1
+                elif status_label == "MAINTENANCE":
+                    stats["maintenance"] += 1
+
+        nurse_ids = {ward.head_nurse_id for ward in wards if ward.head_nurse_id}
+        head_nurse_names: Dict[uuid.UUID, str] = {}
+        if nurse_ids:
+            nurse_result = await self.db.execute(
+                select(User.id, User.first_name, User.last_name).where(
+                    and_(
+                        User.hospital_id == self.hospital_id,
+                        User.id.in_(nurse_ids),
+                    )
+                )
+            )
+            for nurse_id, first_name, last_name in nurse_result.all():
+                head_nurse_names[nurse_id] = f"{first_name or ''} {last_name or ''}".strip()
         
         # Format response
         ward_list = []
         for ward in wards:
             # Calculate bed statistics
-            total_beds = len(ward.beds)
-            available_beds = len([bed for bed in ward.beds if bed.status == "AVAILABLE"])
-            occupied_beds = len([bed for bed in ward.beds if bed.status == "OCCUPIED"])
-            maintenance_beds = len([bed for bed in ward.beds if bed.status == "MAINTENANCE"])
-            
-            head_nurse_name = None
-            if ward.head_nurse:
-                head_nurse_name = f"{ward.head_nurse.first_name} {ward.head_nurse.last_name}"
+            stats = bed_stats.get(
+                ward.id,
+                {"total": 0, "available": 0, "occupied": 0, "maintenance": 0},
+            )
+            total_beds = stats["total"]
+            available_beds = stats["available"]
+            occupied_beds = stats["occupied"]
+            maintenance_beds = stats["maintenance"]
+            head_nurse_name = head_nurse_names.get(ward.head_nurse_id)
             
             ward_list.append({
                 "id": str(ward.id),
@@ -3177,13 +3487,15 @@ class HospitalAdminService:
 
         if "code" in data and data["code"] is not None and data["code"] != ward.code:
             existing_ward = await self.db.execute(
-                select(Ward).where(
+                select(Ward.id)
+                .where(
                     and_(
                         Ward.hospital_id == self.hospital_id,
                         Ward.code == data["code"],
                         Ward.id != ward_id,
                     )
                 )
+                .limit(1)
             )
             if existing_ward.scalar_one_or_none():
                 raise HTTPException(
@@ -5727,6 +6039,7 @@ class HospitalAdminService:
                 receptionist_profile_created = True
 
         await self.db.commit()
+        await self._mirror_platform_user_if_configured(staff_member.id)
         
         return {
             "staff_name": staff_name,
@@ -5911,23 +6224,29 @@ class HospitalAdminService:
         last_name = " ".join(name_parts[1:])  # Handle multiple last names
         
         # Try exact match first
-        query = select(User).options(selectinload(User.roles)).where(
-            and_(
-                User.hospital_id == self.hospital_id,
-                User.roles.any(
-                    Role.name.in_(
-                        [
-                            UserRole.DOCTOR.value,
-                            UserRole.NURSE.value,
-                            UserRole.RECEPTIONIST.value,
-                            UserRole.PHARMACIST.value,
-                            UserRole.LAB_TECH.value,
-                        ]
-                    )
-                ),
-                User.first_name.ilike(first_name),
-                User.last_name.ilike(last_name)
+        query = (
+            select(User)
+            .options(selectinload(User.roles))
+            .where(
+                and_(
+                    User.hospital_id == self.hospital_id,
+                    User.roles.any(
+                        Role.name.in_(
+                            [
+                                UserRole.DOCTOR.value,
+                                UserRole.NURSE.value,
+                                UserRole.RECEPTIONIST.value,
+                                UserRole.PHARMACIST.value,
+                                UserRole.LAB_TECH.value,
+                            ]
+                        )
+                    ),
+                    User.first_name.ilike(first_name),
+                    User.last_name.ilike(last_name)
+                )
             )
+            .order_by(User.created_at.desc(), User.id.asc())
+            .limit(1)
         )
         result = await self.db.execute(query)
         staff = result.scalar_one_or_none()
@@ -5936,23 +6255,29 @@ class HospitalAdminService:
             return staff
         
         # If exact match fails, try partial match
-        query = select(User).options(selectinload(User.roles)).where(
-            and_(
-                User.hospital_id == self.hospital_id,
-                User.roles.any(
-                    Role.name.in_(
-                        [
-                            UserRole.DOCTOR.value,
-                            UserRole.NURSE.value,
-                            UserRole.RECEPTIONIST.value,
-                            UserRole.PHARMACIST.value,
-                            UserRole.LAB_TECH.value,
-                        ]
-                    )
-                ),
-                User.first_name.ilike(f"%{first_name}%"),
-                User.last_name.ilike(f"%{last_name}%")
+        query = (
+            select(User)
+            .options(selectinload(User.roles))
+            .where(
+                and_(
+                    User.hospital_id == self.hospital_id,
+                    User.roles.any(
+                        Role.name.in_(
+                            [
+                                UserRole.DOCTOR.value,
+                                UserRole.NURSE.value,
+                                UserRole.RECEPTIONIST.value,
+                                UserRole.PHARMACIST.value,
+                                UserRole.LAB_TECH.value,
+                            ]
+                        )
+                    ),
+                    User.first_name.ilike(f"%{first_name}%"),
+                    User.last_name.ilike(f"%{last_name}%")
+                )
             )
+            .order_by(User.created_at.desc(), User.id.asc())
+            .limit(1)
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
@@ -5970,11 +6295,16 @@ class HospitalAdminService:
 
     async def _get_department_by_name(self, department_name: str) -> Optional[Department]:
         """Get department by name within this hospital"""
-        query = select(Department).where(
-            and_(
-                Department.hospital_id == self.hospital_id,
-                Department.name.ilike(f"%{department_name}%")
+        query = (
+            select(Department)
+            .where(
+                and_(
+                    Department.hospital_id == self.hospital_id,
+                    Department.name.ilike(f"%{department_name}%")
+                )
             )
+            .order_by(Department.name.asc(), Department.id.asc())
+            .limit(1)
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
@@ -5982,11 +6312,16 @@ class HospitalAdminService:
     async def _get_ward_by_name(self, ward_name: str) -> Optional['Ward']:
         """Get ward by name within this hospital"""
         from app.models.hospital import Ward
-        query = select(Ward).where(
-            and_(
-                Ward.hospital_id == self.hospital_id,
-                Ward.name.ilike(f"%{ward_name}%")
+        query = (
+            select(Ward)
+            .where(
+                and_(
+                    Ward.hospital_id == self.hospital_id,
+                    Ward.name.ilike(f"%{ward_name}%")
+                )
             )
+            .order_by(Ward.name.asc(), Ward.id.asc())
+            .limit(1)
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()

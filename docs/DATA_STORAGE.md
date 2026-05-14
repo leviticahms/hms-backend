@@ -1,0 +1,2554 @@
+# Complete Endpoint Mapping (All Endpoints Listed)
+
+Total endpoints: **536**
+
+This file lists all endpoints with visible status and table mapping.
+- `CONFIRMED`: verified mapping
+- `INFERRED`: best-effort mapping from route/service naming (review recommended)
+
+## 0) Portion 1 - EXACT Reviewed Mapping
+
+Scope reviewed in code: Auth + 2FA + Super Admin plan/subscription core + Hospital Admin department/staff core + Billing tax/services + Pharmacy suppliers/medicines + public contact/demo.
+
+### POST (Exact)
+
+- `POST /api/v1/auth/login`
+  - status: `CONFIRMED`
+  - tables: `users` (read/auth), `roles`+`user_roles` (read/auth), `users` (update `last_login`)
+- `POST /api/v1/auth/patient/register`
+  - status: `CONFIRMED`
+  - tables: `users`, `patient_profiles`
+- `POST /api/v1/auth/patient/login`
+  - status: `CONFIRMED`
+  - tables: `users` (read/auth/update `last_login`), `roles`+`user_roles` (read/auth)
+- `POST /api/v1/auth/patient/verify-otp`
+  - status: `CONFIRMED`
+  - tables: `users` (update `status`, `email_verified`)
+- `POST /api/v1/auth/patient/forgot-password`
+  - status: `CONFIRMED`
+  - tables: `users` (read only)
+- `POST /api/v1/auth/patient/reset-password`
+  - status: `CONFIRMED`
+  - tables: `users` (update `password_hash`, `password_changed_at`)
+- `POST /api/v1/auth/patient/change-password`
+  - status: `CONFIRMED`
+  - tables: `users` (update password fields)
+- `POST /api/v1/auth/hospital-admin/change-password`
+  - status: `CONFIRMED`
+  - tables: `users` (update password fields)
+- `POST /api/v1/auth/staff/change-password`
+  - status: `CONFIRMED`
+  - tables: `users` (update password fields)
+- `POST /api/v1/auth/2fa/setup`
+  - status: `CONFIRMED`
+  - tables: `users` (update `totp_secret`, `totp_enabled`)
+- `POST /api/v1/auth/2fa/verify`
+  - status: `CONFIRMED`
+  - tables: `users` (update `totp_enabled`, `totp_verified_at`)
+- `POST /api/v1/auth/2fa/validate`
+  - status: `CONFIRMED`
+  - tables: `users` (read)
+- `POST /api/v1/super-admin/plans`
+  - status: `CONFIRMED`
+  - tables: `subscription_plans`
+- `POST /api/v1/super-admin/hospitals/{hospital_name}/assign-plan`
+  - status: `CONFIRMED`
+  - tables: `hospitals` (read), `subscription_plans` (read), `hospital_subscriptions` (insert/update), `users` (may update blocked users to active)
+- `POST /api/v1/hospital-admin/departments`
+  - status: `CONFIRMED`
+  - tables: `departments`
+- `POST /api/v1/hospital-admin/staff`
+  - status: `CONFIRMED`
+  - tables: `users`, `user_roles`, `roles` (create if missing), and role profiles:
+    - doctor: `doctor_profiles`, `staff_profiles`, `staff_department_assignments`
+    - receptionist: `receptionist_profiles`, `staff_profiles`, `staff_department_assignments`
+    - lab-tech/pharmacist: `staff_profiles`, `staff_department_assignments`
+- `POST /api/v1/billing/tax-profiles`
+  - status: `CONFIRMED`
+  - tables: `tax_profiles`
+- `POST /api/v1/billing/services`
+  - status: `CONFIRMED`
+  - tables: `service_items`
+- `POST /api/v1/pharmacy/suppliers`
+  - status: `CONFIRMED`
+  - tables: `pharmacy_suppliers`
+- `POST /api/v1/pharmacy/medicines`
+  - status: `CONFIRMED`
+  - tables: `pharmacy_medicines`
+- `POST /demo/request`
+  - status: `CONFIRMED`
+  - tables: `demo_requests`
+- `POST /contact/send`
+  - status: `CONFIRMED`
+  - tables: `contact_messages`
+
+### GET (Exact)
+
+- `GET /admin/verify` -> `users`
+- `GET /api/v1/auth/hospitals` -> `hospitals`
+- `GET /api/v1/auth/me` -> `users`, `roles`+`user_roles`
+- `GET /api/v1/super-admin/plans` -> `subscription_plans`
+- `GET /api/v1/super-admin/hospitals/{hospital_name}/subscription` -> `hospitals`, `hospital_subscriptions`, `subscription_plans`
+- `GET /api/v1/hospital-admin/departments` -> `departments`
+- `GET /api/v1/hospital-admin/departments/{department_id}` -> `departments`, `users` (head doctor), `staff_profiles` (count)
+- `GET /api/v1/hospital-admin/staff` -> `users`, `roles`+`user_roles`
+- `GET /api/v1/hospital-admin/staff/{staff_id}` -> `users`, `roles`+`user_roles`, `doctor_profiles`/`nurse_profiles`/`receptionist_profiles` (based on role)
+- `GET /api/v1/billing/tax-profiles` -> `tax_profiles`
+- `GET /api/v1/billing/services` -> `service_items`
+- `GET /api/v1/billing/services/{service_id}` -> `service_items`
+- `GET /api/v1/pharmacy/suppliers` -> `pharmacy_suppliers`
+- `GET /api/v1/pharmacy/suppliers/{supplier_id}` -> `pharmacy_suppliers`
+- `GET /api/v1/pharmacy/medicines` -> `pharmacy_medicines`
+- `GET /api/v1/pharmacy/medicines/{medicine_id}` -> `pharmacy_medicines`
+
+### PUT/PATCH (Exact)
+
+- `PUT /api/v1/super-admin/plans/{plan_id}` -> `subscription_plans`
+- `PUT /api/v1/hospital-admin/departments/{department_id}` -> `departments`
+- `PATCH /api/v1/hospital-admin/departments/{department_id}/status` -> `departments`
+- `PATCH /api/v1/hospital-admin/staff/doctors/{staff_id}` -> `users`, `doctor_profiles`
+- `PATCH /api/v1/hospital-admin/staff/receptionists/{staff_id}` -> `users`, `receptionist_profiles`
+- `PATCH /api/v1/hospital-admin/staff/lab-techs/{staff_id}` -> `users` (metadata update)
+- `PATCH /api/v1/hospital-admin/staff/pharmacists/{staff_id}` -> `users` (metadata update)
+- `PATCH /api/v1/hospital-admin/staff/{staff_id}/status` -> `users`
+- `PUT /api/v1/billing/tax-profiles/{tax_id}` -> `tax_profiles`
+- `PATCH /api/v1/billing/tax-profiles/{tax_id}/status` -> `tax_profiles`
+- `PUT /api/v1/billing/services/{service_id}` -> `service_items`
+- `PATCH /api/v1/billing/services/{service_id}/status` -> `service_items`
+- `PUT /api/v1/pharmacy/suppliers/{supplier_id}` -> `pharmacy_suppliers`
+- `PUT /api/v1/pharmacy/medicines/{medicine_id}` -> `pharmacy_medicines`
+
+### DELETE (Exact)
+
+- `DELETE /api/v1/super-admin/plans/{plan_id}` -> `subscription_plans`
+- `DELETE /api/v1/billing/services/{service_id}` -> `service_items` (soft delete: sets `is_active=false`)
+- `DELETE /api/v1/pharmacy/suppliers/{supplier_id}` -> `pharmacy_suppliers`
+- `DELETE /api/v1/pharmacy/medicines/{medicine_id}` -> `pharmacy_medicines`
+- `DELETE /api/v1/auth/2fa/disable` -> `users` (clears TOTP fields)
+
+## 0.1) Portion 2 - EXACT Reviewed Mapping (OPD + Patient Appointment Booking)
+
+### POST (Exact)
+
+- `POST /api/v1/opd/patient`
+  - tables: `opd_visits`, `opd_token_logs` (and reads `patient_profiles`, `users`)
+- `POST /api/v1/opd/tokens`
+  - tables: `opd_visits`, `opd_token_logs`
+- `POST /api/v1/doctors`
+  - tables: `users`, `doctor_profiles` (reads `departments`, `roles`)
+- `POST /api/v1/opd/doctor`
+  - tables: `users` (`user_metadata` update for OPD config)
+- `POST /api/v1/patient-appointment-booking/book-appointment`
+  - tables: `appointments` (reads `patient_profiles`, `users`, `departments`, staff assignment links)
+
+### GET (Exact)
+
+- `GET /api/v1/opd/tokens` -> `opd_visits`
+- `GET /api/v1/opd/tokens/{id}` -> `opd_visits`
+- `GET /api/v1/opd/patients` -> `opd_visits`
+- `GET /api/v1/opd/doctors` -> `users`, `doctor_profiles`, `opd_visits`
+- `GET /api/v1/doctors` -> `users`, `doctor_profiles`, `opd_visits`
+- `GET /api/v1/patient-appointment-booking/departments` -> `departments`, `hospitals`
+- `GET /api/v1/patient-appointment-booking/departments/{department_name}/doctors` -> `staff_department_assignments`, `users`, `roles`
+- `GET /api/v1/patient-appointment-booking/doctors/{doctor_name}/available-slots` -> `users`, `staff_department_assignments`, `roles`, `appointments`
+- `GET /api/v1/patient-appointment-booking/appointment/{appointment_ref}` -> `appointments`
+- `GET /api/v1/patient-appointment-booking/my-appointments` -> `appointments`
+
+### PUT/PATCH (Exact)
+
+- `PUT /api/v1/opd/patient/{visit_id}/status` -> `opd_visits`
+- `PUT /api/v1/doctors/{id}` -> `users` (doctor basic fields and metadata)
+- `PATCH /api/v1/doctors/{id}/status` -> `users`
+- `PUT /api/v1/opd/doctor/{doctor_user_id}/toggle-status` -> `users`
+- `PATCH /api/v1/patient-appointment-booking/appointment/{appointment_ref}/cancel` -> `appointments`
+
+### DELETE (Exact)
+
+- `DELETE /api/v1/opd/patient/{visit_id}` -> `opd_visits` (status set to cancelled) and `opd_token_logs` (status set to cancelled)
+- `DELETE /api/v1/opd/tokens/{id}` -> `opd_visits` + `opd_token_logs` (same cancel flow)
+
+## 0.1) Portion 3 - EXACT Reviewed Mapping (Doctor + Lab + Telemed)
+
+### POST (Exact)
+
+- `POST /api/v1/doctor-management/schedule/create`
+  - tables: `doctor_schedules` (and reads `users`, `staff_department_assignments`)
+- `POST /api/v1/doctor-management/appointments/{appointment_ref}/complete`
+  - tables: `appointments`
+- `POST /api/v1/doctor-management/appointments/{appointment_ref}/cancel`
+  - tables: `appointments`
+- `POST /api/v1/doctor-management/consultation/medical-record`
+  - tables: `medical_records` (and updates/reads `appointments`)
+- `POST /api/v1/lab/test-registration`
+  - tables: `lab_test_registrations`
+- `POST /api/v1/lab/sample-tracking/action`
+  - tables: `lab_sample_tracking`
+- `POST /api/v1/lab/report-generation/generate`
+  - tables: `lab_report_records` (reads `lab_report_ready_tests`)
+- `POST /api/v1/lab/report-generation/{report_id}/print`
+  - tables: `none` (service-only print queue response; no DB read/write in current implementation)
+- `POST /api/v1/lab/result-access/grant`
+  - tables: `lab_result_access_grants`
+- `POST /api/v1/lab/test-catalogue/category`
+  - tables: `lab_test_categories`
+- `POST /api/v1/lab/test-catalogue/test`
+  - tables: `lab_catalogue_tests`
+- `POST /api/v1/lab/quality-control/run`
+  - tables: `lab_qc_runs`
+- `POST /api/v1/lab/critical-results/{alert_id}/notify`
+  - tables: `lab_critical_alerts`
+- `POST /api/v1/lab/profile/edit`
+  - tables: `lab_profile_configs`
+- `POST /api/v1/lab/equipment-qc/equipment`
+  - tables: `lab_equipment`
+- `POST /api/v1/lab/equipment-qc/equipment/{equipment_id}/logs`
+  - tables: `equipment_maintenance_logs`
+- `POST /api/v1/telemed/tele-appointments`
+  - tables: `tele_appointments` (reads `patient_profiles`, `doctor_profiles`, `users`, `appointments`, `doctor_schedules`)
+- `POST /api/v1/telemed/sessions`
+  - tables: `telemed_sessions` (reads `tele_appointments`, `telemed_provider_config`)
+- `POST /api/v1/telemed/sessions/{session_id}/start`
+  - tables: `telemed_sessions`, `tele_appointments`
+- `POST /api/v1/telemed/sessions/{session_id}/end`
+  - tables: `telemed_sessions`, `tele_appointments`, `telemed_notifications`
+- `POST /api/v1/telemed/sessions/{session_id}/join-token`
+  - tables: `telemed_participants` (reads `telemed_sessions`, `tele_appointments`)
+- `POST /api/v1/telemed/sessions/{session_id}/refresh-token`
+  - tables: `telemed_participants` (same flow as join-token)
+- `POST /api/v1/telemed/sessions/{session_id}/messages`
+  - tables: `telemed_messages`, `telemed_notifications`
+- `POST /api/v1/telemed/sessions/{session_id}/files`
+  - tables: `telemed_files`
+- `POST /api/v1/telemed/sessions/{session_id}/notes`
+  - tables: `telemed_consultation_notes`
+- `POST /api/v1/telemed/sessions/{session_id}/prescriptions`
+  - tables: `tele_prescriptions`, `prescription_medicines`
+- `POST /api/v1/telemed/prescriptions/session/{session_id}`
+  - tables: `tele_prescriptions`, `prescription_medicines`
+- `POST /api/v1/telemed/prescriptions/{prescription_id}/sign`
+  - tables: `tele_prescriptions`, `telemed_notifications`
+- `POST /api/v1/telemed/patients/{patient_id}/vitals`
+  - tables: `telemed_vitals` (reads `patient_profiles`)
+
+### GET (Exact)
+
+- `GET /api/v1/doctor-management/schedule/weekly` -> `doctor_schedules`, `appointments`, `patient_profiles`, `users`
+- `GET /api/v1/doctor-management/schedule/slots` -> `doctor_schedules` (and reads `users`, `staff_department_assignments`, `departments`)
+- `GET /api/v1/doctor-management/appointments` -> `appointments`, `patient_profiles`, `users`
+- `GET /api/v1/doctor-management/appointments/{appointment_ref}` -> `appointments`, `patient_profiles`, `users`
+- `GET /api/v1/doctor-management/consultation/{patient_ref}` -> `patient_profiles`, `appointments`, `medical_records`
+- `GET /api/v1/doctor-management/patients/search` -> `patient_profiles`, `users`, `appointments`
+- `GET /api/v1/doctor-management/statistics/summary` -> `appointments`, `prescriptions`, `medical_records`
+- `GET /api/v1/lab/test-registration` -> `lab_test_registrations`
+- `GET /api/v1/lab/sample-tracking` -> `lab_sample_tracking`
+- `GET /api/v1/lab/sample-tracking/lookup` -> `lab_sample_tracking`
+- `GET /api/v1/lab/report-generation` -> `lab_report_records`
+- `GET /api/v1/lab/report-generation/ready-tests` -> `lab_report_ready_tests`
+- `GET /api/v1/lab/report-generation/{report_id}/preview` -> `lab_report_records`
+- `GET /api/v1/lab/result-access` -> `lab_result_access_grants`, `lab_result_access_logs`
+- `GET /api/v1/lab/test-catalogue` -> `lab_catalogue_tests`
+- `GET /api/v1/lab/quality-control` -> `lab_qc_runs`, `lab_qc_materials`, `lab_qc_rules`
+- `GET /api/v1/lab/critical-results` -> `lab_critical_alerts`
+- `GET /api/v1/lab/tech-dashboard` -> `lab_equipment`
+- `GET /api/v1/lab/profile` -> `lab_profile_configs`
+- `GET /api/v1/lab/equipment-qc/equipment` -> `lab_equipment`
+- `GET /api/v1/lab/equipment-qc/equipment/{equipment_id}` -> `lab_equipment`
+- `GET /api/v1/lab/equipment-qc/equipment/{equipment_id}/logs` -> `equipment_maintenance_logs`, `lab_equipment`
+- `GET /api/v1/lab/equipment-qc/equipment/logs` -> `equipment_maintenance_logs`, `lab_equipment`
+- `GET /api/v1/lab/equipment-qc/equipment/logs/{log_id}` -> `equipment_maintenance_logs`, `lab_equipment`
+- `GET /api/v1/telemed/tele-appointments` -> `tele_appointments`, `patient_profiles`, `users`
+- `GET /api/v1/telemed/tele-appointments/{tele_appointment_id}` -> `tele_appointments`, `patient_profiles`, `users`
+- `GET /api/v1/telemed/sessions` -> `telemed_sessions`, `tele_appointments`, `patient_profiles`
+- `GET /api/v1/telemed/sessions/{session_id}` -> `telemed_sessions`, `tele_appointments`, `patient_profiles`
+- `GET /api/v1/telemed/sessions/{session_id}/messages` -> `telemed_messages`
+- `GET /api/v1/telemed/sessions/{session_id}/files` -> `telemed_files`
+- `GET /api/v1/telemed/sessions/{session_id}/notes` -> `telemed_consultation_notes`
+- `GET /api/v1/telemed/notifications/me` -> `telemed_notifications`
+- `GET /api/v1/telemed/config` -> `telemed_provider_config`
+- `GET /api/v1/telemed/prescriptions/me` -> `tele_prescriptions`, `prescription_medicines`, `prescription_lab_orders`, `patient_profiles`
+- `GET /api/v1/telemed/prescriptions/{prescription_id}/pdf` -> `tele_prescriptions`, `prescription_medicines`, `patient_profiles`, `users`, `hospitals`
+- `GET /api/v1/telemed/patients/me/prescriptions` -> `tele_prescriptions`, `patient_profiles`
+- `GET /api/v1/telemed/patients/me/vitals` -> `telemed_vitals`, `patient_profiles`
+- `GET /api/v1/telemed/patients/{patient_id}/vitals` -> `telemed_vitals`, `patient_profiles`
+
+### PUT/PATCH (Exact)
+
+- `PUT /api/v1/doctor-management/schedule/{schedule_id}` -> `doctor_schedules`
+- `PUT /api/v1/doctor-management/appointments/{appointment_ref}` -> `appointments`
+- `PATCH /api/v1/lab/equipment-qc/equipment/{equipment_id}/status` -> `lab_equipment`
+- `PATCH /api/v1/telemed/config` -> `telemed_provider_config`
+- `PATCH /api/v1/telemed/notifications/me/{notification_id}/read` -> `telemed_notifications`
+
+### DELETE (Exact)
+
+- `DELETE /api/v1/doctor-management/schedule/{schedule_id}` -> `doctor_schedules`
+
+## 0.1) Portion 4 - EXACT Reviewed Mapping (Payments + Notifications + Finance/Audit)
+
+### POST (Exact)
+
+- `POST /api/v1/payments/initiate`
+  - tables: `bills` (read-only validation; gateway order created outside DB)
+- `POST /api/v1/payments/verify`
+  - tables: `gateway_payments` (read-only verify response)
+- `POST /api/v1/payments/collect`
+  - tables: `gateway_payments`, `bills`, `payment_ledger`, `payment_receipts`, `finance_audit_logs`
+- `POST /api/v1/payments/advance`
+  - tables: `admissions`, `bills`, `gateway_payments`, `payment_ledger`, `payment_receipts`, `finance_audit_logs`
+- `POST /api/v1/payments/{payment_id}/refund`
+  - tables: `payment_refunds`, `gateway_payments`, `bills`, `payment_ledger`, `finance_audit_logs`
+- `POST /api/v1/payments/webhooks/{provider}`
+  - tables: `gateway_payments`, `bills`, `payment_ledger`, `payment_receipts`, `finance_audit_logs`
+- `POST /api/v1/payments/{payment_id}/receipt/email`
+  - tables: `gateway_payments`, `payment_receipts`, `bills`, `hospitals` (reads; sends email)
+- `POST /api/v1/payments/{payment_id}/receipt/duplicate`
+  - tables: `gateway_payments`, `payment_receipts`, `finance_audit_logs`
+- `POST /api/v1/notifications/ticket-email`
+  - tables: `users`, `roles` (recipient discovery read-only; sends via SMTP)
+- `POST /api/v1/notifications/providers/{provider_id}/test`
+  - tables: `notification_providers`, `notification_jobs`
+- `POST /api/v1/notifications/otp/send`
+  - tables: `notification_jobs` (rate-limit checks and OTP job enqueue)
+- `POST /api/v1/notifications/otp/verify`
+  - tables: `none` (OTP verification service flow; no DB write in this endpoint)
+- `POST /api/v1/notifications/sms/bulk`
+  - tables: `notification_jobs`
+- `POST /api/v1/notifications/send`
+  - tables: `notification_templates` (optional read), `notification_jobs`
+- `POST /api/v1/notifications/schedule`
+  - tables: `notification_templates` (optional read), `notification_jobs`
+- `POST /api/v1/notifications/jobs/{job_id}/cancel`
+  - tables: `notification_jobs`
+- `POST /api/v1/notifications/jobs/{job_id}/retry`
+  - tables: `notification_jobs`
+- `POST /api/v1/finance/reconciliation/run`
+  - tables: `reconciliations`
+
+### GET (Exact)
+
+- `GET /api/v1/payments/providers` -> `none` (env/config-driven response)
+- `GET /api/v1/payments/providers/{provider}/status` -> `none` (env/config-driven response)
+- `GET /api/v1/payments` -> `gateway_payments`, `payment_receipts`
+- `GET /api/v1/payments/{payment_id}` -> `gateway_payments`, `payment_receipts`
+- `GET /api/v1/payments/{payment_id}/receipt/pdf` -> `gateway_payments`, `payment_receipts`, `bills`, `hospitals`
+- `GET /api/v1/payments/ledger` -> `payment_ledger`
+- `GET /api/v1/payments/outstanding` -> `bills`
+- `GET /api/v1/payments/reports/reconciliation` -> `gateway_payments`
+- `GET /api/v1/payments/reports/daily-summary` -> `gateway_payments`, `bills`
+- `GET /api/v1/payments/{payment_id}/refunds` -> `payment_refunds`
+- `GET /api/v1/payments/webhooks/{provider}/events` -> `none` (stub response, no event store table)
+- `GET /api/v1/notifications/providers` -> `notification_providers`
+- `GET /api/v1/notifications/preferences/me` -> `notification_preferences`
+- `GET /api/v1/notifications/preferences/{owner_type}/{owner_id}` -> `notification_preferences`
+- `GET /api/v1/notifications/history` -> `notification_jobs`
+- `GET /api/v1/notifications/jobs/{job_id}` -> `notification_jobs`, `notification_delivery_logs`
+- `GET /api/v1/notifications/queue` -> `notification_jobs`
+- `GET /api/v1/finance/reports/revenue` -> `payments`
+- `GET /api/v1/finance/reports/outstanding` -> `bills`
+- `GET /api/v1/finance/reports/department-revenue` -> `bills`
+- `GET /api/v1/finance/reports/doctor-revenue` -> `bills`, `appointments`
+- `GET /api/v1/finance/reports/tax-gst` -> `bills`
+- `GET /api/v1/finance/reconciliation/daily` -> `payments`, `reconciliations`
+- `GET /api/v1/finance/reconciliation/discrepancies` -> `reconciliations`
+- `GET /api/v1/finance/reconciliation/{recon_id}` -> `reconciliations`
+- `GET /api/v1/finance/audit` -> `finance_audit_logs`
+- `GET /api/v1/finance/audit/{audit_id}` -> `finance_audit_logs`
+
+### PUT/PATCH (Exact)
+
+- `PATCH /api/v1/payments/providers/{provider}/config` -> `none` (read-only config status response; no DB update)
+- `PATCH /api/v1/notifications/providers/{provider_id}/status` -> `notification_providers`
+- `PUT /api/v1/notifications/providers/{provider_id}/config` -> `notification_providers`
+- `PUT /api/v1/notifications/preferences/me` -> `notification_preferences`
+
+### DELETE (Exact)
+
+- No delete endpoint in this portion.
+
+## 0.1) Portion 5 - EXACT Reviewed Mapping (Nurse + Receptionist + IPD + Surgery + Support + Patient History/Docs/Discharge)
+
+### POST (Exact)
+
+- `POST /api/v1/receptionist/patients/register`
+  - tables: `users`, `patient_profiles`, `roles`, `user_roles`
+- `POST /api/v1/receptionist/appointments/schedule`
+  - tables: `appointments` (reads `patient_profiles`, `doctor_profiles`, `doctor_schedules`, `departments`)
+- `POST /api/v1/receptionist/appointments/{appointment_ref}/check-in`
+  - tables: `appointments`
+- `POST /api/v1/ipd-management/admissions`
+  - tables: `admissions` (reads `patient_profiles`, `users`, `departments`)
+- `POST /api/v1/ipd-management/doctor-rounds`
+  - tables: `medical_records`, `admissions`
+- `POST /api/v1/surgery/doctor/cases`
+  - tables: `surgery_cases` (reads `patient_profiles`, `admissions`)
+- `POST /api/v1/surgery/doctor/cases/{surgery_id}/team`
+  - tables: `surgery_team_members` (reads `surgery_cases`, `users`)
+- `POST /api/v1/surgery/doctor/documentation`
+  - tables: `surgery_documentation` (reads `surgery_cases`, `patient_profiles`)
+- `POST /api/v1/support/staff/tickets`
+  - tables: `support_tickets` (reads `users`, `roles`)
+- `POST /api/v1/support/hospital-admin/tickets`
+  - tables: `support_tickets`
+- `POST /api/v1/patient-document-storage/my/documents/upload`
+  - tables: `patient_documents`
+- `POST /api/v1/patient-document-storage/patients/{patient_ref}/documents/upload`
+  - tables: `patient_documents` (reads `doctor_profiles`, `medical_records`)
+- `POST /api/v1/patient-discharge-summary/discharge-summaries`
+  - tables: `discharge_summaries` (reads `admissions`, `medical_records`)
+- `POST /api/v1/patient-discharge-summary/discharge-summaries/{summary_id}/finalize`
+  - tables: `discharge_summaries` (reads `bills`)
+
+### GET (Exact)
+
+- `GET /api/v1/receptionist/dashboard` -> `appointments`, `patient_profiles`
+- `GET /api/v1/receptionist/appointments/today` -> `appointments`, `patient_profiles`, `users`
+- `GET /api/v1/receptionist/patients` -> `patient_profiles`, `users`
+- `GET /api/v1/receptionist/patients/search` -> `patient_profiles`, `users`
+- `GET /api/v1/receptionist/patients/{patient_ref}/profile` -> `patient_profiles`, `users`, `appointments`
+- `GET /api/v1/receptionist/appointments/statistics` -> `appointments`
+- `GET /api/v1/receptionist/quick-actions` -> `appointments`, `patient_profiles`
+- `GET /api/v1/receptionist/profile` -> `users`, `receptionist_profiles`, `departments`
+- `GET /api/v1/ipd-management/available-patients` -> `patient_profiles`, `admissions`, `users`
+- `GET /api/v1/ipd-management/patients` -> `admissions`, `patient_profiles`, `users`, `departments`
+- `GET /api/v1/ipd-management/admissions/{admission_number}` -> `admissions`, `patient_profiles`, `medical_records`, `users`, `departments`
+- `GET /api/v1/ipd-management/dashboard` -> `admissions`, `patient_profiles`, `medical_records`
+- `GET /api/v1/ipd-management/debug/all-patients` -> `patient_profiles`, `users`
+- `GET /api/v1/surgery/patient/cases` -> `surgery_cases`, `patient_profiles`
+- `GET /api/v1/surgery/patient/cases/{surgery_id}/documentation` -> `surgery_documentation`, `surgery_cases`, `patient_profiles`
+- `GET /api/v1/surgery/patient/cases/{surgery_id}/videos` -> `surgery_videos`, `surgery_cases`, `patient_profiles`
+- `GET /api/v1/surgery/patient/videos/{video_id}/stream-token` -> `surgery_videos`, `surgery_cases`, `patient_profiles`
+- `GET /api/v1/surgery/patient/videos/{video_id}/stream` -> `surgery_videos`, `surgery_video_view_audits`
+- `GET /api/v1/support/staff/tickets` -> `support_tickets`
+- `GET /api/v1/support/hospital-admin/tickets` -> `support_tickets`
+- `GET /api/v1/support/hospital-admin/tickets/completed` -> `support_tickets`
+- `GET /api/v1/patient-medical-history/my/summary` -> `patient_profiles`, `medical_records`
+- `GET /api/v1/patient-medical-history/my/medical-records` -> `medical_records`, `departments`
+- `GET /api/v1/patient-medical-history/my/medical-records/{record_id}` -> `medical_records`, `departments`
+- `GET /api/v1/patient-medical-history/my/timeline` -> `appointments`, `medical_records`, `departments`
+- `GET /api/v1/patient-medical-history/patients/{patient_ref}/summary` -> `patient_profiles`, `medical_records`, `doctor_profiles`
+- `GET /api/v1/patient-medical-history/patients/{patient_ref}/medical-records` -> `medical_records`, `departments`, `doctor_profiles`
+- `GET /api/v1/patient-medical-history/patients/{patient_ref}/medical-records/{record_id}` -> `medical_records`, `departments`, `doctor_profiles`
+- `GET /api/v1/patient-medical-history/patients/{patient_ref}/timeline` -> `appointments`, `medical_records`, `departments`, `doctor_profiles`
+- `GET /api/v1/patient-document-storage/my/documents/statistics` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/my/documents` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/my/documents/{document_id}` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/my/documents/{document_id}/download` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/patients/{patient_ref}/documents` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}/download` -> `patient_documents`
+- `GET /api/v1/patient-document-storage/patients/{patient_ref}/documents/statistics` -> `patient_documents`
+- `GET /api/v1/patient-discharge-summary/my/discharge-summaries` -> `discharge_summaries`, `admissions`
+- `GET /api/v1/patient-discharge-summary/admissions/ready-for-discharge` -> `admissions`, `medical_records`, `doctor_profiles`
+- `GET /api/v1/patient-discharge-summary/admissions/{admission_number}/discharge-template` -> `admissions`, `medical_records`, `doctor_profiles`
+- `GET /api/v1/patient-discharge-summary/discharge-summaries/{summary_id}` -> `discharge_summaries`, `doctor_profiles`
+- `GET /api/v1/patient-discharge-summary/patients/{patient_ref}/discharge-summaries` -> `discharge_summaries`, `patient_profiles`, `doctor_profiles`
+- `GET /api/v1/patient-discharge-summary/discharge-summaries/statistics` -> `discharge_summaries`, `doctor_profiles`
+
+### PUT/PATCH (Exact)
+
+- `PATCH /api/v1/receptionist/patients/{patient_ref}` -> `patient_profiles`, `users`
+- `PATCH /api/v1/receptionist/appointments/{appointment_ref}` -> `appointments`
+- `PATCH /api/v1/receptionist/profile` -> `users`, `receptionist_profiles`
+- `PATCH /api/v1/ipd-management/debug/all-patients/{patient_ref}` -> `patient_profiles`, `users`
+- `PATCH /api/v1/surgery/doctor/cases/{surgery_id}/status` -> `surgery_cases`
+- `PATCH /api/v1/support/hospital-admin/tickets/{ticket_id}/status` -> `support_tickets`
+- `PATCH /api/v1/patient-document-storage/my/documents/{document_id}` -> `patient_documents`
+- `PATCH /api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}` -> `patient_documents`
+- `PATCH /api/v1/patient-discharge-summary/discharge-summaries/{summary_id}` -> `discharge_summaries`
+
+### DELETE (Exact)
+
+- `DELETE /api/v1/patient-document-storage/my/documents/{document_id}` -> `patient_documents`
+- `DELETE /api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}` -> `patient_documents`
+
+## 1) All POST endpoints
+
+- `POST /api/v1/auth/2fa/setup`
+  - endpoint: `app.api.v1.routers.auth_2fa.setup_totp`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/2fa/validate`
+  - endpoint: `app.api.v1.routers.auth_2fa.validate_totp_on_login`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/2fa/verify`
+  - endpoint: `app.api.v1.routers.auth_2fa.verify_and_enable_totp`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/hospital-admin/change-password`
+  - endpoint: `app.api.v1.auth.hospital_admin_change_password`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/login`
+  - endpoint: `app.api.v1.auth.login`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/logout`
+  - endpoint: `app.api.v1.auth.logout`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/patient/change-password`
+  - endpoint: `app.api.v1.auth.patient_change_password`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/patient/forgot-password`
+  - endpoint: `app.api.v1.auth.patient_forgot_password`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/patient/login`
+  - endpoint: `app.api.v1.auth.patient_login`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/patient/register`
+  - endpoint: `app.api.v1.auth.patient_register`
+  - status: `CONFIRMED`
+  - tables: `users, patient_profiles`
+- `POST /api/v1/auth/patient/reset-password`
+  - endpoint: `app.api.v1.auth.patient_reset_password`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/patient/verify-otp`
+  - endpoint: `app.api.v1.auth.patient_verify_otp`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/staff/change-password`
+  - endpoint: `app.api.v1.auth.staff_change_password`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/super-admin/hospitals`
+  - endpoint: `app.api.v1.auth.create_hospital`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/auth/super-admin/hospitals/{hospital_id}/admins`
+  - endpoint: `app.api.v1.auth.create_hospital_admin`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/billing/bills/{bill_id}/discount/approve`
+  - endpoint: `app.api.v1.routers.billing.bills.approve_discount`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/billing/bills/{bill_id}/items`
+  - endpoint: `app.api.v1.routers.billing.bills.add_bill_items`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/billing/bills/{bill_id}/payments`
+  - endpoint: `app.api.v1.routers.billing.bills.collect_bill_payment`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `POST /api/v1/billing/ipd/bills`
+  - endpoint: `app.api.v1.routers.billing.bills.create_ipd_bill`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/billing/ipd/bills/{bill_id}/run-daily-bed-charges`
+  - endpoint: `app.api.v1.routers.billing.bills.run_daily_bed_charges`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/billing/opd/bills`
+  - endpoint: `app.api.v1.routers.billing.bills.create_opd_bill`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/billing/services`
+  - endpoint: `app.api.v1.routers.billing.services.create_service`
+  - status: `CONFIRMED`
+  - tables: `service_items`
+- `POST /api/v1/billing/tax-profiles`
+  - endpoint: `app.api.v1.routers.billing.services.create_tax_profile`
+  - status: `CONFIRMED`
+  - tables: `tax_profiles`
+- `POST /api/v1/doctor-appointment-tracking/appointments/{appointment_ref}/delay`
+  - endpoint: `app.api.v1.routers.doctor.doctor_appointment_tracking.update_appointment_delay`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `POST /api/v1/doctor-appointment-tracking/communication/log`
+  - endpoint: `app.api.v1.routers.doctor.doctor_appointment_tracking.create_communication_log_entry`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/doctor-appointment-tracking/notifications/bulk-send`
+  - endpoint: `app.api.v1.routers.doctor.doctor_appointment_tracking.send_bulk_notifications`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `POST /api/v1/doctor-appointment-tracking/notifications/send`
+  - endpoint: `app.api.v1.routers.doctor.doctor_appointment_tracking.send_appointment_notification`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `POST /api/v1/doctor-management/appointments/{appointment_ref}/cancel`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.cancel_appointment`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `POST /api/v1/doctor-management/appointments/{appointment_ref}/complete`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.complete_appointment`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `POST /api/v1/doctor-management/consultation/medical-record`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.create_medical_record`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/doctor-management/schedule/create`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.create_schedule_slot`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/doctor-patient-records/medical-records`
+  - endpoint: `app.api.v1.routers.doctor.doctor_patient_records.create_medical_record`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/doctor-patient-records/patients/advanced-search`
+  - endpoint: `app.api.v1.routers.doctor.doctor_patient_records.advanced_patient_search`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `POST /api/v1/doctor-reports-analytics/generate-custom-report`
+  - endpoint: `app.api.v1.routers.doctor.doctor_reports_analytics.generate_custom_report`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/doctor-sidebar/messages`
+  - endpoint: `app.api.v1.routers.doctor.doctor_sidebar.sidebar_send_message`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/doctor-sidebar/messages/read`
+  - endpoint: `app.api.v1.routers.doctor.doctor_sidebar.sidebar_mark_message_read`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/doctor-sidebar/prescriptions`
+  - endpoint: `app.api.v1.routers.doctor.doctor_sidebar.sidebar_create_prescription`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/doctor-treatment-plans/maintenance/cleanup-dates`
+  - endpoint: `app.api.v1.routers.doctor.doctor_treatment_plans.cleanup_invalid_dates`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/doctor-treatment-plans/plans`
+  - endpoint: `app.api.v1.routers.doctor.doctor_treatment_plans.create_treatment_plan`
+  - status: `INFERRED`
+  - tables: `subscription_plans`
+- `POST /api/v1/doctor-treatment-plans/plans/from-template`
+  - endpoint: `app.api.v1.routers.doctor.doctor_treatment_plans.create_plan_from_template`
+  - status: `INFERRED`
+  - tables: `subscription_plans`
+- `POST /api/v1/doctor-treatment-plans/plans/{plan_id}/outcome`
+  - endpoint: `app.api.v1.routers.doctor.doctor_treatment_plans.record_treatment_outcome`
+  - status: `INFERRED`
+  - tables: `subscription_plans`
+- `POST /api/v1/doctor-treatment-plans/plans/{plan_id}/progress`
+  - endpoint: `app.api.v1.routers.doctor.doctor_treatment_plans.update_treatment_progress`
+  - status: `INFERRED`
+  - tables: `subscription_plans`
+- `POST /api/v1/doctors`
+  - endpoint: `app.api.v1.routers.management.opd_management.create_doctor`
+  - status: `INFERRED`
+  - tables: `users, doctor_profiles`
+- `POST /api/v1/doctors/{id}/deactivate`
+  - endpoint: `app.api.v1.routers.management.opd_management.deactivate_doctor`
+  - status: `INFERRED`
+  - tables: `users, doctor_profiles`
+- `POST /api/v1/finance/documents/{doc_id}/duplicate`
+  - endpoint: `app.api.v1.routers.billing.documents.duplicate_document`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/finance/documents/{doc_id}/email`
+  - endpoint: `app.api.v1.routers.billing.documents.email_document`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/finance/reconciliation/run`
+  - endpoint: `app.api.v1.routers.reports_finance.reconciliation.run_reconciliation`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/hospital-admin/admissions`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.create_admission`
+  - status: `INFERRED`
+  - tables: `admissions`
+- `POST /api/v1/hospital-admin/beds`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.create_bed`
+  - status: `INFERRED`
+  - tables: `beds`
+- `POST /api/v1/hospital-admin/departments`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.create_department`
+  - status: `CONFIRMED`
+  - tables: `departments`
+- `POST /api/v1/hospital-admin/departments/assign-staff`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.assign_staff_to_department`
+  - status: `INFERRED`
+  - tables: `departments`
+- `POST /api/v1/hospital-admin/departments/unassign-staff`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.unassign_staff_from_department`
+  - status: `INFERRED`
+  - tables: `departments`
+- `POST /api/v1/hospital-admin/staff`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.create_staff_user`
+  - status: `CONFIRMED`
+  - tables: `users, user_roles, and role profiles: doctor_profiles/nurse_profiles/receptionist_profiles + staff_profiles + staff_department_assignments`
+- `POST /api/v1/hospital-admin/staff/{staff_id}/reset-password`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.reset_staff_password`
+  - status: `INFERRED`
+  - tables: `users, user_roles, staff_profiles`
+- `POST /api/v1/hospital-admin/wards`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.create_ward`
+  - status: `INFERRED`
+  - tables: `wards`
+- `POST /api/v1/insurance/claims`
+  - endpoint: `app.api.v1.routers.insurance.claims.create_claim`
+  - status: `INFERRED`
+  - tables: `insurance_claims`
+- `POST /api/v1/insurance/claims/{claim_id}/record-settlement`
+  - endpoint: `app.api.v1.routers.insurance.claims.record_settlement`
+  - status: `INFERRED`
+  - tables: `insurance_claims`
+- `POST /api/v1/ipd-management/admissions`
+  - endpoint: `app.api.v1.routers.patient.ipd_management.admit_patient_to_ipd`
+  - status: `INFERRED`
+  - tables: `admissions`
+- `POST /api/v1/ipd-management/doctor-rounds`
+  - endpoint: `app.api.v1.routers.patient.ipd_management.create_doctor_rounds`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/lab/critical-results/{alert_id}/notify`
+  - endpoint: `app.api.v1.routers.lab.lab_critical_results.start_notification_protocol`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/lab/equipment-qc/equipment`
+  - endpoint: `app.api.v1.routers.lab.lab_equipment.create_equipment`
+  - status: `INFERRED`
+  - tables: `lab_equipment, equipment_maintenance_logs`
+- `POST /api/v1/lab/equipment-qc/equipment/{equipment_id}/logs`
+  - endpoint: `app.api.v1.routers.lab.lab_equipment.create_maintenance_log`
+  - status: `INFERRED`
+  - tables: `lab_equipment, equipment_maintenance_logs`
+- `POST /api/v1/lab/equipment-tracking/equipment`
+  - endpoint: `app.api.v1.routers.lab.lab_equipment_tracking.add_equipment_tracking`
+  - status: `INFERRED`
+  - tables: `lab_equipment, equipment_maintenance_logs`
+- `POST /api/v1/lab/equipment-tracking/quick-action/{action}`
+  - endpoint: `app.api.v1.routers.lab.lab_equipment_tracking.run_equipment_quick_action`
+  - status: `INFERRED`
+  - tables: `lab_equipment, equipment_maintenance_logs`
+- `POST /api/v1/lab/profile/action/{action}`
+  - endpoint: `app.api.v1.routers.lab.lab_profile.run_lab_profile_action`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/lab/profile/change-password`
+  - endpoint: `app.api.v1.routers.lab.lab_profile.change_lab_profile_password`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/lab/profile/configure-settings`
+  - endpoint: `app.api.v1.routers.lab.lab_profile.configure_lab_settings`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/lab/profile/edit`
+  - endpoint: `app.api.v1.routers.lab.lab_profile.edit_lab_profile`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/lab/quality-control/run`
+  - endpoint: `app.api.v1.routers.lab.lab_quality_control.record_qc_run`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/lab/quality-control/workflow/{action}`
+  - endpoint: `app.api.v1.routers.lab.lab_quality_control.trigger_qc_workflow_action`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/lab/report-generation/generate`
+  - endpoint: `app.api.v1.routers.lab.lab_report_generation.generate_report`
+  - status: `INFERRED`
+  - tables: `lab_report_records`
+- `POST /api/v1/lab/report-generation/{report_id}/print`
+  - endpoint: `app.api.v1.routers.lab.lab_report_generation.print_report`
+  - status: `INFERRED`
+  - tables: `lab_report_records`
+- `POST /api/v1/lab/result-access/grant`
+  - endpoint: `app.api.v1.routers.lab.lab_result_access.grant_result_access`
+  - status: `INFERRED`
+  - tables: `lab_result_access_grants, lab_result_access_logs`
+- `POST /api/v1/lab/sample-tracking/action`
+  - endpoint: `app.api.v1.routers.lab.lab_sample_tracking.apply_sample_status_action`
+  - status: `INFERRED`
+  - tables: `lab_sample_tracking`
+- `POST /api/v1/lab/sample-tracking/simulate-scan`
+  - endpoint: `app.api.v1.routers.lab.lab_sample_tracking.simulate_scan`
+  - status: `INFERRED`
+  - tables: `lab_sample_tracking`
+- `POST /api/v1/lab/test-catalogue/bulk/{action}`
+  - endpoint: `app.api.v1.routers.lab.lab_test_catalogue.run_catalogue_bulk_action`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/lab/test-catalogue/category`
+  - endpoint: `app.api.v1.routers.lab.lab_test_catalogue.add_test_category`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/lab/test-catalogue/test`
+  - endpoint: `app.api.v1.routers.lab.lab_test_catalogue.add_catalogue_test`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/lab/test-registration`
+  - endpoint: `app.api.v1.routers.lab.lab_test_registration.register_new_test`
+  - status: `INFERRED`
+  - tables: `lab_test_registrations`
+- `POST /api/v1/notifications/jobs/{job_id}/cancel`
+  - endpoint: `app.api.v1.routers.notifications.notifications.cancel_job`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `POST /api/v1/notifications/jobs/{job_id}/retry`
+  - endpoint: `app.api.v1.routers.notifications.notifications.retry_job`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `POST /api/v1/notifications/otp/send`
+  - endpoint: `app.api.v1.routers.notifications.notifications.otp_send`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `POST /api/v1/notifications/otp/verify`
+  - endpoint: `app.api.v1.routers.notifications.notifications.otp_verify`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `POST /api/v1/notifications/providers/{provider_id}/test`
+  - endpoint: `app.api.v1.routers.notifications.notifications.test_provider`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `POST /api/v1/notifications/schedule`
+  - endpoint: `app.api.v1.routers.notifications.notifications.schedule`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `POST /api/v1/notifications/send`
+  - endpoint: `app.api.v1.routers.notifications.notifications.send`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `POST /api/v1/notifications/sms/bulk`
+  - endpoint: `app.api.v1.routers.notifications.notifications.bulk_sms`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `POST /api/v1/notifications/ticket-email`
+  - endpoint: `app.api.v1.routers.notifications.notifications.ticket_email`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `POST /api/v1/opd/consultation`
+  - endpoint: `app.api.v1.routers.management.opd_management.create_opd_consultation`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/opd/consultations/start`
+  - endpoint: `app.api.v1.routers.management.opd_management.start_consultation`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/opd/consultations/{id}/complete`
+  - endpoint: `app.api.v1.routers.management.opd_management.complete_consultation`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/opd/doctor`
+  - endpoint: `app.api.v1.routers.management.opd_management.configure_opd_doctor_route`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/opd/patient`
+  - endpoint: `app.api.v1.routers.management.opd_management.create_opd_patient`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/opd/tokens`
+  - endpoint: `app.api.v1.routers.management.opd_management.create_token`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/opd/transfer`
+  - endpoint: `app.api.v1.routers.management.opd_management.transfer_opd_patient`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/opd/transfer-patient`
+  - endpoint: `app.api.v1.routers.management.opd_management.transfer_patient_modal`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/patient-appointment-booking/book-appointment`
+  - endpoint: `app.api.v1.routers.patient.patient_appointment_booking.book_appointment`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/patient-discharge-summary/discharge-summaries`
+  - endpoint: `app.api.v1.routers.patient.patient_discharge_summary.create_discharge_summary`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/patient-discharge-summary/discharge-summaries/{summary_id}/finalize`
+  - endpoint: `app.api.v1.routers.patient.patient_discharge_summary.finalize_discharge_summary`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/patient-document-storage/my/documents/upload`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.upload_my_document`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/patient-document-storage/patients/{patient_ref}/documents/upload`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.upload_patient_document`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `POST /api/v1/payments/advance`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.advance_payment`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `POST /api/v1/payments/collect`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.collect_payment`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `POST /api/v1/payments/initiate`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.initiate_payment`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `POST /api/v1/payments/verify`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.verify_payment`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `POST /api/v1/payments/webhooks/{provider}`
+  - endpoint: `app.api.v1.routers.payment_webhooks.webhook_receive.webhook_receive`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `POST /api/v1/payments/{payment_id}/receipt/duplicate`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.duplicate_receipt`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `POST /api/v1/payments/{payment_id}/receipt/email`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.email_receipt`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `POST /api/v1/payments/{payment_id}/refund`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.refund_payment`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `POST /api/v1/pharmacy/alerts/run-expiry-scan`
+  - endpoint: `app.api.v1.routers.pharmacy.alerts.run_expiry_scan`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/alerts/{alert_id}/ack`
+  - endpoint: `app.api.v1.routers.pharmacy.alerts.acknowledge_alert`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/grn`
+  - endpoint: `app.api.v1.routers.pharmacy.grn.create_grn`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/grn/{grn_id}/finalize`
+  - endpoint: `app.api.v1.routers.pharmacy.grn.finalize_grn`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/grn/{grn_id}/items`
+  - endpoint: `app.api.v1.routers.pharmacy.grn.add_grn_item`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/medicines`
+  - endpoint: `app.api.v1.routers.pharmacy.medicines.create_medicine`
+  - status: `CONFIRMED`
+  - tables: `pharmacy_medicines`
+- `POST /api/v1/pharmacy/purchase-orders`
+  - endpoint: `app.api.v1.routers.pharmacy.purchase_orders.create_purchase_order`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/purchase-orders/{po_id}/approve`
+  - endpoint: `app.api.v1.routers.pharmacy.purchase_orders.approve_purchase_order`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/purchase-orders/{po_id}/cancel`
+  - endpoint: `app.api.v1.routers.pharmacy.purchase_orders.cancel_purchase_order`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/purchase-orders/{po_id}/send`
+  - endpoint: `app.api.v1.routers.pharmacy.purchase_orders.send_purchase_order`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/purchase-orders/{po_id}/submit`
+  - endpoint: `app.api.v1.routers.pharmacy.purchase_orders.submit_purchase_order`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/returns/patient`
+  - endpoint: `app.api.v1.routers.pharmacy.returns.create_patient_return`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/returns/supplier`
+  - endpoint: `app.api.v1.routers.pharmacy.returns.create_supplier_return`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/sales`
+  - endpoint: `app.api.v1.routers.pharmacy.sales.create_sale`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/sales/{sale_id}/complete`
+  - endpoint: `app.api.v1.routers.pharmacy.sales.complete_sale`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/sales/{sale_id}/items`
+  - endpoint: `app.api.v1.routers.pharmacy.sales.add_sale_item`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/sales/{sale_id}/void`
+  - endpoint: `app.api.v1.routers.pharmacy.sales.void_sale`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/stock/adjustments`
+  - endpoint: `app.api.v1.routers.pharmacy.stock.create_stock_adjustment`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/pharmacy/suppliers`
+  - endpoint: `app.api.v1.routers.pharmacy.suppliers.create_supplier`
+  - status: `CONFIRMED`
+  - tables: `pharmacy_suppliers`
+- `POST /api/v1/receptionist/appointments/schedule`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.schedule_appointment`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `POST /api/v1/receptionist/appointments/{appointment_ref}/check-in`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.check_in_patient`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `POST /api/v1/receptionist/patients/register`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.register_patient`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `POST /api/v1/simple-prescription/doctor/prescriptions/create`
+  - endpoint: `app.api.v1.routers.doctor.simple_prescription.create_simple_prescription`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/simple-prescription/pharmacist/prescriptions/{prescription_id}/dispense`
+  - endpoint: `app.api.v1.routers.doctor.simple_prescription.dispense_prescription`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/staff/doctor-schedules/{doctor_name:path}`
+  - endpoint: `app.api.v1.routers.management.staff_doctor_schedules.staff_create_doctor_schedule_slot`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/super-admin/financial-analytics`
+  - endpoint: `app.api.v1.routers.admin.super_admin.get_financial_analytics_filtered`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/super-admin/hospital-admins/{admin_id}/reset-password`
+  - endpoint: `app.api.v1.routers.admin.super_admin.reset_admin_password`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/super-admin/hospitals/{hospital_id}/admins`
+  - endpoint: `app.api.v1.routers.admin.super_admin.create_hospital_admin`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/super-admin/hospitals/{hospital_id}/deactivate`
+  - endpoint: `app.api.v1.routers.admin.super_admin.deactivate_hospital_post`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/super-admin/hospitals/{hospital_name}/assign-plan`
+  - endpoint: `app.api.v1.routers.admin.super_admin.assign_subscription_plan`
+  - status: `CONFIRMED`
+  - tables: `hospital_subscriptions`
+- `POST /api/v1/super-admin/me/avatar`
+  - endpoint: `app.api.v1.routers.admin.super_admin.upload_super_admin_avatar`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/super-admin/me/change-password`
+  - endpoint: `app.api.v1.routers.admin.super_admin.super_admin_change_password`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/super-admin/me/change_password`
+  - endpoint: `app.api.v1.routers.admin.super_admin.super_admin_change_password`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/super-admin/notifications/send-to-hospital-admins`
+  - endpoint: `app.api.v1.routers.admin.super_admin.notify_hospital_admins`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `POST /api/v1/super-admin/plans`
+  - endpoint: `app.api.v1.routers.admin.super_admin.create_subscription_plan`
+  - status: `CONFIRMED`
+  - tables: `subscription_plans`
+- `POST /api/v1/super-admin/profile`
+  - endpoint: `app.api.v1.routers.admin.super_admin.update_super_admin_profile_post_compat`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/super-admin/subscription-analytics`
+  - endpoint: `app.api.v1.routers.admin.super_admin.get_subscription_analytics_filtered`
+  - status: `INFERRED`
+  - tables: `subscription_plans, hospital_subscriptions`
+- `POST /api/v1/super_admin/me/change-password`
+  - endpoint: `app.api.v1.routers.admin.super_admin.super_admin_change_password_legacy_prefix`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/super_admin/me/change_password`
+  - endpoint: `app.api.v1.routers.admin.super_admin.super_admin_change_password_legacy_prefix`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/support/hospital-admin/tickets`
+  - endpoint: `app.api.v1.routers.support.tickets.create_ticket_as_hospital_admin`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/support/staff/tickets`
+  - endpoint: `app.api.v1.routers.support.tickets.create_ticket_as_staff`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/surgery/doctor/cases`
+  - endpoint: `app.api.v1.routers.surgery.routes.create_surgery_case`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/surgery/doctor/cases/{surgery_id}/team`
+  - endpoint: `app.api.v1.routers.surgery.routes.assign_surgical_team`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/surgery/doctor/documentation`
+  - endpoint: `app.api.v1.routers.surgery.routes.upload_surgery_documentation`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /api/v1/telemed/patients/{patient_id}/vitals`
+  - endpoint: `app.api.v1.routers.telemed.vitals.create_vital`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `POST /api/v1/telemed/prescriptions/session/{session_id}`
+  - endpoint: `app.api.v1.routers.telemed.prescriptions.create_prescription_for_session`
+  - status: `INFERRED`
+  - tables: `tele_prescriptions`
+- `POST /api/v1/telemed/prescriptions/{prescription_id}/sign`
+  - endpoint: `app.api.v1.routers.telemed.prescriptions.sign_prescription`
+  - status: `INFERRED`
+  - tables: `tele_prescriptions`
+- `POST /api/v1/telemed/sessions`
+  - endpoint: `app.api.v1.routers.telemed.sessions.create_session`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `POST /api/v1/telemed/sessions/{session_id}/end`
+  - endpoint: `app.api.v1.routers.telemed.sessions.end_session`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `POST /api/v1/telemed/sessions/{session_id}/files`
+  - endpoint: `app.api.v1.routers.telemed.sessions.register_file`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `POST /api/v1/telemed/sessions/{session_id}/join-token`
+  - endpoint: `app.api.v1.routers.telemed.sessions.get_join_token`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `POST /api/v1/telemed/sessions/{session_id}/messages`
+  - endpoint: `app.api.v1.routers.telemed.sessions.send_message`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `POST /api/v1/telemed/sessions/{session_id}/notes`
+  - endpoint: `app.api.v1.routers.telemed.sessions.create_note`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `POST /api/v1/telemed/sessions/{session_id}/prescriptions`
+  - endpoint: `app.api.v1.routers.telemed.sessions.create_prescription`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `POST /api/v1/telemed/sessions/{session_id}/refresh-token`
+  - endpoint: `app.api.v1.routers.telemed.sessions.refresh_join_token`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `POST /api/v1/telemed/sessions/{session_id}/start`
+  - endpoint: `app.api.v1.routers.telemed.sessions.start_session`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `POST /api/v1/telemed/tele-appointments`
+  - endpoint: `app.api.v1.routers.telemed.tele_appointments.create_tele_appointment`
+  - status: `INFERRED`
+  - tables: `appointments, tele_appointments`
+- `POST /api/v1/telemed/tele-appointments/{tele_appointment_id}/cancel`
+  - endpoint: `app.api.v1.routers.telemed.tele_appointments.cancel_tele_appointment`
+  - status: `INFERRED`
+  - tables: `appointments, tele_appointments`
+- `POST /api/v1/telemed/tele-appointments/{tele_appointment_id}/confirm`
+  - endpoint: `app.api.v1.routers.telemed.tele_appointments.confirm_tele_appointment`
+  - status: `INFERRED`
+  - tables: `appointments, tele_appointments`
+- `POST /api/v1/telemed/tele-appointments/{tele_appointment_id}/reschedule`
+  - endpoint: `app.api.v1.routers.telemed.tele_appointments.reschedule_tele_appointment`
+  - status: `INFERRED`
+  - tables: `appointments, tele_appointments`
+- `POST /contact/send`
+  - endpoint: `app.api.contact_public.send_contact_message`
+  - status: `CONFIRMED`
+  - tables: `contact_messages`
+- `POST /contact/test-email`
+  - endpoint: `app.api.contact_public.test_email_sending`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `POST /demo/request`
+  - endpoint: `app.api.demo_public.submit_demo_request`
+  - status: `CONFIRMED`
+  - tables: `demo_requests`
+- `POST /notifications/ticket-email`
+  - endpoint: `app.api.notifications_root.ticket_email_root`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+
+## 2) All GET endpoints
+
+- `GET /admin/verify`
+  - endpoint: `main.verify_superadmin`
+  - status: `CONFIRMED`
+  - tables: `users`
+- `GET /api/v1/analytics/audit-logs`
+  - endpoint: `app.api.v1.routers.analytics.get_audit_logs`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/analytics/overview`
+  - endpoint: `app.api.v1.routers.analytics.get_analytics_overview`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/analytics/reports/business`
+  - endpoint: `app.api.v1.routers.analytics.get_reports_business_analytics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/analytics/reports/system-monitoring`
+  - endpoint: `app.api.v1.routers.analytics.get_reports_system_monitoring`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/auth/hospitals`
+  - endpoint: `app.api.v1.auth.get_available_hospitals`
+  - status: `CONFIRMED`
+  - tables: `hospitals`
+- `GET /api/v1/auth/me`
+  - endpoint: `app.api.v1.auth.get_current_user_info`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/billing/bills`
+  - endpoint: `app.api.v1.routers.billing.bills.list_bills`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/billing/bills/{bill_id}/balance`
+  - endpoint: `app.api.v1.routers.billing.bills.get_bill_balance`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/billing/bills/{bill_id}/invoice/pdf`
+  - endpoint: `app.api.v1.routers.billing.bills.get_bill_invoice_pdf`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/billing/bills/{bill_id}/items`
+  - endpoint: `app.api.v1.routers.billing.bills.list_bill_items`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/billing/bills/{bill_id}/payments`
+  - endpoint: `app.api.v1.routers.billing.bills.list_bill_payments`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `GET /api/v1/billing/ipd/bills`
+  - endpoint: `app.api.v1.routers.billing.bills.list_ipd_bills`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/billing/ipd/bills/{bill_id}`
+  - endpoint: `app.api.v1.routers.billing.bills.get_ipd_bill`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/billing/opd/bills`
+  - endpoint: `app.api.v1.routers.billing.bills.list_opd_bills`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/billing/opd/bills/{bill_id}`
+  - endpoint: `app.api.v1.routers.billing.bills.get_opd_bill`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/billing/services`
+  - endpoint: `app.api.v1.routers.billing.services.list_services`
+  - status: `CONFIRMED`
+  - tables: `service_items`
+- `GET /api/v1/billing/services/{service_id}`
+  - endpoint: `app.api.v1.routers.billing.services.get_service`
+  - status: `CONFIRMED`
+  - tables: `service_items`
+- `GET /api/v1/billing/tax-profiles`
+  - endpoint: `app.api.v1.routers.billing.services.list_tax_profiles`
+  - status: `CONFIRMED`
+  - tables: `tax_profiles`
+- `GET /api/v1/doctor-appointment-tracking/appointments/delays/today`
+  - endpoint: `app.api.v1.routers.doctor.doctor_appointment_tracking.get_todays_delays`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/doctor-appointment-tracking/appointments/today`
+  - endpoint: `app.api.v1.routers.doctor.doctor_appointment_tracking.get_todays_appointment_tracking`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/doctor-appointment-tracking/appointments/upcoming`
+  - endpoint: `app.api.v1.routers.doctor.doctor_appointment_tracking.get_upcoming_appointments_tracking`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/doctor-appointment-tracking/appointments/{appointment_ref}/tracking`
+  - endpoint: `app.api.v1.routers.doctor.doctor_appointment_tracking.get_appointment_tracking_details`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/doctor-appointment-tracking/communication/log`
+  - endpoint: `app.api.v1.routers.doctor.doctor_appointment_tracking.get_communication_log`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-appointment-tracking/metrics/summary`
+  - endpoint: `app.api.v1.routers.doctor.doctor_appointment_tracking.get_appointment_metrics_summary`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-appointment-tracking/notifications/history`
+  - endpoint: `app.api.v1.routers.doctor.doctor_appointment_tracking.get_notification_history`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `GET /api/v1/doctor-appointment-tracking/settings/notifications`
+  - endpoint: `app.api.v1.routers.doctor.doctor_appointment_tracking.get_notification_settings`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `GET /api/v1/doctor-dashboard/appointments/today`
+  - endpoint: `app.api.v1.routers.doctor.doctor_dashboard.get_todays_appointments`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/doctor-dashboard/overview`
+  - endpoint: `app.api.v1.routers.doctor.doctor_dashboard.get_doctor_dashboard_overview`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-dashboard/patients/admitted`
+  - endpoint: `app.api.v1.routers.doctor.doctor_dashboard.get_admitted_patients`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/doctor-dashboard/patients/recent`
+  - endpoint: `app.api.v1.routers.doctor.doctor_dashboard.get_recent_patients`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/doctor-dashboard/stats/quick`
+  - endpoint: `app.api.v1.routers.doctor.doctor_dashboard.get_quick_stats`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-dashboard/tasks/pending`
+  - endpoint: `app.api.v1.routers.doctor.doctor_dashboard.get_pending_tasks`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-management/appointments`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.get_doctor_appointments`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/doctor-management/appointments/{appointment_ref}`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.get_appointment_details`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/doctor-management/consultation/{patient_ref}`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.get_patient_consultation_details`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-management/patients/search`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.search_patients`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/doctor-management/schedule/slots`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.get_schedule_slots`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-management/schedule/weekly`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.get_weekly_schedule`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-management/statistics/summary`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.get_doctor_statistics_summary`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-patient-records/medical-records`
+  - endpoint: `app.api.v1.routers.doctor.doctor_patient_records.get_all_medical_records`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-patient-records/medical-records/{record_id}`
+  - endpoint: `app.api.v1.routers.doctor.doctor_patient_records.get_medical_record_details`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-patient-records/patients/search`
+  - endpoint: `app.api.v1.routers.doctor.doctor_patient_records.search_patients`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/doctor-patient-records/patients/{patient_ref}/case-history`
+  - endpoint: `app.api.v1.routers.doctor.doctor_patient_records.analyze_case_history`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/doctor-patient-records/patients/{patient_ref}/clinical-alerts`
+  - endpoint: `app.api.v1.routers.doctor.doctor_patient_records.get_clinical_alerts`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/doctor-patient-records/patients/{patient_ref}/documents`
+  - endpoint: `app.api.v1.routers.doctor.doctor_patient_records.get_patient_documents`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/doctor-patient-records/patients/{patient_ref}/medical-records`
+  - endpoint: `app.api.v1.routers.doctor.doctor_patient_records.get_patient_medical_records`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/doctor-patient-records/patients/{patient_ref}/summary`
+  - endpoint: `app.api.v1.routers.doctor.doctor_patient_records.get_patient_summary`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/doctor-patient-records/patients/{patient_ref}/timeline`
+  - endpoint: `app.api.v1.routers.doctor.doctor_patient_records.get_patient_timeline`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/doctor-reports-analytics/appointment-analytics`
+  - endpoint: `app.api.v1.routers.doctor.doctor_reports_analytics.get_appointment_analytics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-reports-analytics/clinical-outcomes`
+  - endpoint: `app.api.v1.routers.doctor.doctor_reports_analytics.get_clinical_outcomes`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-reports-analytics/comparative-analysis`
+  - endpoint: `app.api.v1.routers.doctor.doctor_reports_analytics.get_comparative_analysis`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-reports-analytics/export-options`
+  - endpoint: `app.api.v1.routers.doctor.doctor_reports_analytics.get_export_options`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-reports-analytics/financial-summary`
+  - endpoint: `app.api.v1.routers.doctor.doctor_reports_analytics.get_financial_summary`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-reports-analytics/patient-analytics`
+  - endpoint: `app.api.v1.routers.doctor.doctor_reports_analytics.get_patient_analytics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-reports-analytics/performance-metrics`
+  - endpoint: `app.api.v1.routers.doctor.doctor_reports_analytics.get_performance_metrics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-reports-analytics/practice-overview`
+  - endpoint: `app.api.v1.routers.doctor.doctor_reports_analytics.get_practice_overview`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-reports-analytics/prescription-analytics`
+  - endpoint: `app.api.v1.routers.doctor.doctor_reports_analytics.get_prescription_analytics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-sidebar/appointments`
+  - endpoint: `app.api.v1.routers.doctor.doctor_sidebar.sidebar_appointments`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/doctor-sidebar/inpatient-visits`
+  - endpoint: `app.api.v1.routers.doctor.doctor_sidebar.sidebar_inpatient_visits`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-sidebar/lab-results`
+  - endpoint: `app.api.v1.routers.doctor.doctor_sidebar.sidebar_lab_results`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-sidebar/messages`
+  - endpoint: `app.api.v1.routers.doctor.doctor_sidebar.sidebar_messages`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-sidebar/prescriptions`
+  - endpoint: `app.api.v1.routers.doctor.doctor_sidebar.sidebar_prescriptions`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-sidebar/profile`
+  - endpoint: `app.api.v1.routers.doctor.doctor_sidebar.sidebar_get_profile`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-treatment-plans/analytics/summary`
+  - endpoint: `app.api.v1.routers.doctor.doctor_treatment_plans.get_treatment_plan_analytics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctor-treatment-plans/plans`
+  - endpoint: `app.api.v1.routers.doctor.doctor_treatment_plans.get_treatment_plans`
+  - status: `INFERRED`
+  - tables: `subscription_plans`
+- `GET /api/v1/doctor-treatment-plans/plans/{plan_id}`
+  - endpoint: `app.api.v1.routers.doctor.doctor_treatment_plans.get_treatment_plan_details`
+  - status: `INFERRED`
+  - tables: `subscription_plans`
+- `GET /api/v1/doctor-treatment-plans/plans/{plan_id}/outcome`
+  - endpoint: `app.api.v1.routers.doctor.doctor_treatment_plans.get_treatment_outcome`
+  - status: `INFERRED`
+  - tables: `subscription_plans`
+- `GET /api/v1/doctor-treatment-plans/plans/{plan_id}/status`
+  - endpoint: `app.api.v1.routers.doctor.doctor_treatment_plans.get_treatment_plan_status`
+  - status: `INFERRED`
+  - tables: `subscription_plans`
+- `GET /api/v1/doctor-treatment-plans/templates`
+  - endpoint: `app.api.v1.routers.doctor.doctor_treatment_plans.get_treatment_plan_templates`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/doctors`
+  - endpoint: `app.api.v1.routers.management.opd_management.get_all_doctors`
+  - status: `INFERRED`
+  - tables: `users, doctor_profiles`
+- `GET /api/v1/finance/audit`
+  - endpoint: `app.api.v1.routers.audit_finance.audit.list_audit_logs`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/finance/audit/{audit_id}`
+  - endpoint: `app.api.v1.routers.audit_finance.audit.get_audit_log`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/finance/documents/templates`
+  - endpoint: `app.api.v1.routers.billing.documents.list_templates`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/finance/reconciliation/daily`
+  - endpoint: `app.api.v1.routers.reports_finance.reconciliation.get_daily_reconciliation`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/finance/reconciliation/discrepancies`
+  - endpoint: `app.api.v1.routers.reports_finance.reconciliation.list_discrepancies`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/finance/reconciliation/{recon_id}`
+  - endpoint: `app.api.v1.routers.reports_finance.reconciliation.get_reconciliation`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/finance/reports/department-revenue`
+  - endpoint: `app.api.v1.routers.reports_finance.reports.department_revenue`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/finance/reports/doctor-revenue`
+  - endpoint: `app.api.v1.routers.reports_finance.reports.doctor_revenue`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/finance/reports/outstanding`
+  - endpoint: `app.api.v1.routers.reports_finance.reports.outstanding_report`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/finance/reports/revenue`
+  - endpoint: `app.api.v1.routers.reports_finance.reports.revenue_report`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/finance/reports/tax-gst`
+  - endpoint: `app.api.v1.routers.reports_finance.reports.tax_gst_report`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/health`
+  - endpoint: `app.api.v1.api.health_check`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/hospital-admin/admissions`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.list_admissions`
+  - status: `INFERRED`
+  - tables: `admissions`
+- `GET /api/v1/hospital-admin/appointments`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.list_appointments`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/hospital-admin/appointments/{appointment_id}`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_appointment_details`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/hospital-admin/audit-logs`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.list_hospital_admin_audit_logs`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/hospital-admin/beds`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.list_beds`
+  - status: `INFERRED`
+  - tables: `beds`
+- `GET /api/v1/hospital-admin/beds/{bed_id}`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_bed_details`
+  - status: `INFERRED`
+  - tables: `beds`
+- `GET /api/v1/hospital-admin/dashboard/appointment-stats`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_appointment_statistics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/hospital-admin/dashboard/overview`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_dashboard_overview`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/hospital-admin/dashboard/staff-stats`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_staff_statistics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/hospital-admin/departments`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.list_departments`
+  - status: `CONFIRMED`
+  - tables: `departments`
+- `GET /api/v1/hospital-admin/departments/{department_id}`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_department_details`
+  - status: `INFERRED`
+  - tables: `departments`
+- `GET /api/v1/hospital-admin/departments/{department_name}/staff`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_department_staff`
+  - status: `INFERRED`
+  - tables: `departments`
+- `GET /api/v1/hospital-admin/patients`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.list_patients`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/hospital-admin/platform-settings/features`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_hospital_subscription_features`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/hospital-admin/reports/bed-occupancy`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_bed_occupancy_report`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/hospital-admin/reports/department-performance`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_department_performance_report`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/hospital-admin/reports/revenue-summary`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_revenue_summary_report`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/hospital-admin/staff`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.list_staff_users`
+  - status: `CONFIRMED`
+  - tables: `users + roles (via user_roles) + metadata/profile joins`
+- `GET /api/v1/hospital-admin/staff/{staff_id}`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_staff_details`
+  - status: `CONFIRMED`
+  - tables: `users, user_roles, role-specific profile table(s)`
+- `GET /api/v1/hospital-admin/staff/{staff_name}/departments`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.get_staff_departments`
+  - status: `INFERRED`
+  - tables: `users, user_roles, staff_profiles`
+- `GET /api/v1/hospital-admin/wards`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.list_wards`
+  - status: `INFERRED`
+  - tables: `wards`
+- `GET /api/v1/insurance/claims`
+  - endpoint: `app.api.v1.routers.insurance.claims.list_claims`
+  - status: `INFERRED`
+  - tables: `insurance_claims`
+- `GET /api/v1/insurance/claims/{claim_id}`
+  - endpoint: `app.api.v1.routers.insurance.claims.get_claim`
+  - status: `INFERRED`
+  - tables: `insurance_claims`
+- `GET /api/v1/ipd-management/admissions/{admission_number}`
+  - endpoint: `app.api.v1.routers.patient.ipd_management.get_ipd_admission_details`
+  - status: `INFERRED`
+  - tables: `admissions`
+- `GET /api/v1/ipd-management/available-patients`
+  - endpoint: `app.api.v1.routers.patient.ipd_management.get_available_patients_for_admission`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/ipd-management/dashboard`
+  - endpoint: `app.api.v1.routers.patient.ipd_management.get_ipd_dashboard`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/ipd-management/debug/all-patients`
+  - endpoint: `app.api.v1.routers.patient.ipd_management.debug_list_all_patients`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/ipd-management/patients`
+  - endpoint: `app.api.v1.routers.patient.ipd_management.get_ipd_patients`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/lab/critical-results`
+  - endpoint: `app.api.v1.routers.lab.lab_critical_results.get_critical_results_dashboard`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/lab/equipment-qc/equipment`
+  - endpoint: `app.api.v1.routers.lab.lab_equipment.get_equipment_list`
+  - status: `INFERRED`
+  - tables: `lab_equipment, equipment_maintenance_logs`
+- `GET /api/v1/lab/equipment-qc/equipment/logs`
+  - endpoint: `app.api.v1.routers.lab.lab_equipment.get_all_maintenance_logs`
+  - status: `INFERRED`
+  - tables: `lab_equipment, equipment_maintenance_logs`
+- `GET /api/v1/lab/equipment-qc/equipment/logs/{log_id}`
+  - endpoint: `app.api.v1.routers.lab.lab_equipment.get_maintenance_log`
+  - status: `INFERRED`
+  - tables: `lab_equipment, equipment_maintenance_logs`
+- `GET /api/v1/lab/equipment-qc/equipment/{equipment_id}`
+  - endpoint: `app.api.v1.routers.lab.lab_equipment.get_equipment`
+  - status: `INFERRED`
+  - tables: `lab_equipment, equipment_maintenance_logs`
+- `GET /api/v1/lab/equipment-qc/equipment/{equipment_id}/logs`
+  - endpoint: `app.api.v1.routers.lab.lab_equipment.get_equipment_logs`
+  - status: `INFERRED`
+  - tables: `lab_equipment, equipment_maintenance_logs`
+- `GET /api/v1/lab/equipment-tracking`
+  - endpoint: `app.api.v1.routers.lab.lab_equipment_tracking.get_equipment_tracking`
+  - status: `INFERRED`
+  - tables: `lab_equipment, equipment_maintenance_logs`
+- `GET /api/v1/lab/profile`
+  - endpoint: `app.api.v1.routers.lab.lab_profile.get_lab_profile`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/lab/quality-control`
+  - endpoint: `app.api.v1.routers.lab.lab_quality_control.get_quality_control_dashboard`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/lab/report-generation`
+  - endpoint: `app.api.v1.routers.lab.lab_report_generation.list_reports`
+  - status: `INFERRED`
+  - tables: `lab_report_records`
+- `GET /api/v1/lab/report-generation/ready-tests`
+  - endpoint: `app.api.v1.routers.lab.lab_report_generation.list_ready_tests`
+  - status: `INFERRED`
+  - tables: `lab_report_records`
+- `GET /api/v1/lab/report-generation/{report_id}/preview`
+  - endpoint: `app.api.v1.routers.lab.lab_report_generation.preview_report`
+  - status: `INFERRED`
+  - tables: `lab_report_records`
+- `GET /api/v1/lab/result-access`
+  - endpoint: `app.api.v1.routers.lab.lab_result_access.get_result_access_dashboard`
+  - status: `INFERRED`
+  - tables: `lab_result_access_grants, lab_result_access_logs`
+- `GET /api/v1/lab/sample-tracking`
+  - endpoint: `app.api.v1.routers.lab.lab_sample_tracking.list_sample_tracking`
+  - status: `INFERRED`
+  - tables: `lab_sample_tracking`
+- `GET /api/v1/lab/sample-tracking/lookup`
+  - endpoint: `app.api.v1.routers.lab.lab_sample_tracking.lookup_sample_barcode`
+  - status: `INFERRED`
+  - tables: `lab_sample_tracking`
+- `GET /api/v1/lab/tech-dashboard`
+  - endpoint: `app.api.v1.routers.lab.lab_tech_dashboard.get_lab_tech_dashboard`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/lab/test-catalogue`
+  - endpoint: `app.api.v1.routers.lab.lab_test_catalogue.list_test_catalogue`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/lab/test-registration`
+  - endpoint: `app.api.v1.routers.lab.lab_test_registration.list_test_registrations`
+  - status: `INFERRED`
+  - tables: `lab_test_registrations`
+- `GET /api/v1/notifications/history`
+  - endpoint: `app.api.v1.routers.notifications.notifications.list_history`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `GET /api/v1/notifications/jobs/{job_id}`
+  - endpoint: `app.api.v1.routers.notifications.notifications.get_job`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `GET /api/v1/notifications/preferences/me`
+  - endpoint: `app.api.v1.routers.notifications.notifications.get_preferences_me`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `GET /api/v1/notifications/preferences/{owner_type}/{owner_id}`
+  - endpoint: `app.api.v1.routers.notifications.notifications.get_preferences_admin`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `GET /api/v1/notifications/providers`
+  - endpoint: `app.api.v1.routers.notifications.notifications.list_providers`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `GET /api/v1/notifications/queue`
+  - endpoint: `app.api.v1.routers.notifications.notifications.list_queue`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `GET /api/v1/opd/consultation/{patient_id}`
+  - endpoint: `app.api.v1.routers.management.opd_management.get_consultations_for_patient`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/opd/consultations/{id}`
+  - endpoint: `app.api.v1.routers.management.opd_management.get_consultation`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/opd/dashboard`
+  - endpoint: `app.api.v1.routers.management.opd_management.get_opd_dashboard_stats`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/opd/doctors`
+  - endpoint: `app.api.v1.routers.management.opd_management.list_opd_doctors`
+  - status: `INFERRED`
+  - tables: `users, doctor_profiles`
+- `GET /api/v1/opd/patients`
+  - endpoint: `app.api.v1.routers.management.opd_management.list_opd_patients`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/opd/tokens`
+  - endpoint: `app.api.v1.routers.management.opd_management.get_all_tokens`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/opd/tokens/{id}`
+  - endpoint: `app.api.v1.routers.management.opd_management.get_token_by_id`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-appointment-booking/appointment/{appointment_ref}`
+  - endpoint: `app.api.v1.routers.patient.patient_appointment_booking.get_appointment_details`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-appointment-booking/departments`
+  - endpoint: `app.api.v1.routers.patient.patient_appointment_booking.get_departments`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-appointment-booking/departments/{department_name}/doctors`
+  - endpoint: `app.api.v1.routers.patient.patient_appointment_booking.get_department_doctors`
+  - status: `INFERRED`
+  - tables: `users, doctor_profiles`
+- `GET /api/v1/patient-appointment-booking/doctors/{doctor_name}/available-slots`
+  - endpoint: `app.api.v1.routers.patient.patient_appointment_booking.get_doctor_available_slots`
+  - status: `INFERRED`
+  - tables: `users, doctor_profiles`
+- `GET /api/v1/patient-appointment-booking/my-appointments`
+  - endpoint: `app.api.v1.routers.patient.patient_appointment_booking.get_my_appointments`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/patient-discharge-summary/admissions/ready-for-discharge`
+  - endpoint: `app.api.v1.routers.patient.patient_discharge_summary.get_admissions_ready_for_discharge`
+  - status: `INFERRED`
+  - tables: `admissions`
+- `GET /api/v1/patient-discharge-summary/admissions/{admission_number}/discharge-template`
+  - endpoint: `app.api.v1.routers.patient.patient_discharge_summary.get_discharge_summary_template`
+  - status: `INFERRED`
+  - tables: `admissions`
+- `GET /api/v1/patient-discharge-summary/discharge-summaries/statistics`
+  - endpoint: `app.api.v1.routers.patient.patient_discharge_summary.get_discharge_statistics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-discharge-summary/discharge-summaries/{summary_id}`
+  - endpoint: `app.api.v1.routers.patient.patient_discharge_summary.get_discharge_summary`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-discharge-summary/my/discharge-summaries`
+  - endpoint: `app.api.v1.routers.patient.patient_discharge_summary.get_my_discharge_summaries`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-discharge-summary/patients/{patient_ref}/discharge-summaries`
+  - endpoint: `app.api.v1.routers.patient.patient_discharge_summary.get_patient_discharge_summaries`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/patient-document-storage/my/documents`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.get_my_documents`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-document-storage/my/documents/statistics`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.get_my_document_statistics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-document-storage/my/documents/{document_id}`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.get_my_document_details`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-document-storage/my/documents/{document_id}/download`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.download_my_document`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-document-storage/patients/{patient_ref}/documents`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.get_patient_documents`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/patient-document-storage/patients/{patient_ref}/documents/statistics`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.get_document_statistics`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.get_document_details`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}/download`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.download_document`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/patient-medical-history/my/medical-records`
+  - endpoint: `app.api.v1.routers.patient.patient_medical_history.get_my_medical_records`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-medical-history/my/medical-records/{record_id}`
+  - endpoint: `app.api.v1.routers.patient.patient_medical_history.get_my_medical_record_details`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-medical-history/my/summary`
+  - endpoint: `app.api.v1.routers.patient.patient_medical_history.get_my_medical_summary`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-medical-history/my/timeline`
+  - endpoint: `app.api.v1.routers.patient.patient_medical_history.get_my_medical_timeline`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/patient-medical-history/patients/{patient_ref}/medical-records`
+  - endpoint: `app.api.v1.routers.patient.patient_medical_history.get_patient_medical_records`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/patient-medical-history/patients/{patient_ref}/medical-records/{record_id}`
+  - endpoint: `app.api.v1.routers.patient.patient_medical_history.get_medical_record_details`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/patient-medical-history/patients/{patient_ref}/summary`
+  - endpoint: `app.api.v1.routers.patient.patient_medical_history.get_patient_medical_summary`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/patient-medical-history/patients/{patient_ref}/timeline`
+  - endpoint: `app.api.v1.routers.patient.patient_medical_history.get_patient_medical_timeline`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/payments`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.list_payments`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `GET /api/v1/payments/ledger`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.get_ledger`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `GET /api/v1/payments/outstanding`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.get_outstanding`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `GET /api/v1/payments/providers`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.list_providers`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `GET /api/v1/payments/providers/{provider}/status`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.provider_status`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `GET /api/v1/payments/reports/daily-summary`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.daily_summary`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `GET /api/v1/payments/reports/reconciliation`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.reconciliation_report`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `GET /api/v1/payments/webhooks/{provider}/events`
+  - endpoint: `app.api.v1.routers.payment_webhooks.webhook_events.webhook_events`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `GET /api/v1/payments/{payment_id}`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.get_payment`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `GET /api/v1/payments/{payment_id}/receipt/pdf`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.get_receipt_pdf`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `GET /api/v1/payments/{payment_id}/refunds`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.list_payment_refunds`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `GET /api/v1/pharmacy/alerts`
+  - endpoint: `app.api.v1.routers.pharmacy.alerts.list_alerts`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/grn`
+  - endpoint: `app.api.v1.routers.pharmacy.grn.list_grns`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/grn/{grn_id}`
+  - endpoint: `app.api.v1.routers.pharmacy.grn.get_grn`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/medicines`
+  - endpoint: `app.api.v1.routers.pharmacy.medicines.list_medicines`
+  - status: `CONFIRMED`
+  - tables: `pharmacy_medicines`
+- `GET /api/v1/pharmacy/medicines/{medicine_id}`
+  - endpoint: `app.api.v1.routers.pharmacy.medicines.get_medicine`
+  - status: `CONFIRMED`
+  - tables: `pharmacy_medicines`
+- `GET /api/v1/pharmacy/purchase-orders`
+  - endpoint: `app.api.v1.routers.pharmacy.purchase_orders.list_purchase_orders`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/purchase-orders/{po_id}`
+  - endpoint: `app.api.v1.routers.pharmacy.purchase_orders.get_purchase_order`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/reports/expiry`
+  - endpoint: `app.api.v1.routers.pharmacy.reports.get_expiry_report`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/reports/fast-slow-moving`
+  - endpoint: `app.api.v1.routers.pharmacy.reports.get_fast_slow_moving`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/reports/profit-margins`
+  - endpoint: `app.api.v1.routers.pharmacy.reports.get_profit_margins`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/reports/sales-summary`
+  - endpoint: `app.api.v1.routers.pharmacy.reports.get_sales_summary`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/reports/stock-valuation`
+  - endpoint: `app.api.v1.routers.pharmacy.reports.get_stock_valuation`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/returns`
+  - endpoint: `app.api.v1.routers.pharmacy.returns.list_returns`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/sales`
+  - endpoint: `app.api.v1.routers.pharmacy.sales.list_sales`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/sales/{sale_id}`
+  - endpoint: `app.api.v1.routers.pharmacy.sales.get_sale`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/sales/{sale_id}/receipt`
+  - endpoint: `app.api.v1.routers.pharmacy.sales.get_sale_receipt`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/stock`
+  - endpoint: `app.api.v1.routers.pharmacy.stock.list_stock`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/stock/ledger`
+  - endpoint: `app.api.v1.routers.pharmacy.stock.get_stock_ledger`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/pharmacy/suppliers`
+  - endpoint: `app.api.v1.routers.pharmacy.suppliers.list_suppliers`
+  - status: `CONFIRMED`
+  - tables: `pharmacy_suppliers`
+- `GET /api/v1/pharmacy/suppliers/{supplier_id}`
+  - endpoint: `app.api.v1.routers.pharmacy.suppliers.get_supplier`
+  - status: `CONFIRMED`
+  - tables: `pharmacy_suppliers`
+- `GET /api/v1/receptionist/appointments/statistics`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.get_appointment_statistics`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/receptionist/appointments/today`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.get_todays_appointments`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `GET /api/v1/receptionist/dashboard`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.get_receptionist_dashboard`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/receptionist/patients`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.list_all_patients`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/receptionist/patients/search`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.search_patients`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/receptionist/patients/{patient_ref}/profile`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.get_patient_profile_for_schedule`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/receptionist/profile`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.get_receptionist_profile`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/receptionist/quick-actions`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.get_quick_actions`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/routes`
+  - endpoint: `app.api.v1.api.list_routes`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/simple-prescription/doctor/medicines/search`
+  - endpoint: `app.api.v1.routers.doctor.simple_prescription.search_real_medicines`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/simple-prescription/doctor/prescriptions`
+  - endpoint: `app.api.v1.routers.doctor.simple_prescription.get_doctor_prescriptions`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/simple-prescription/patient/prescriptions`
+  - endpoint: `app.api.v1.routers.doctor.simple_prescription.get_patient_prescriptions`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/simple-prescription/pharmacist/prescriptions`
+  - endpoint: `app.api.v1.routers.doctor.simple_prescription.get_prescriptions_for_pharmacist`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/simple-prescription/prescriptions/{prescription_id}`
+  - endpoint: `app.api.v1.routers.doctor.simple_prescription.get_prescription_details`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/simple-prescription/prescriptions/{prescription_id}/pdf`
+  - endpoint: `app.api.v1.routers.doctor.simple_prescription.get_prescription_pdf`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/staff/doctor-schedules/{doctor_name:path}`
+  - endpoint: `app.api.v1.routers.management.staff_doctor_schedules.staff_get_doctor_schedule_template`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/staff/doctor-schedules/{doctor_name:path}/check-slots`
+  - endpoint: `app.api.v1.routers.management.staff_doctor_schedules.staff_check_doctor_available_slots`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/super-admin/analytics/overview`
+  - endpoint: `app.api.v1.routers.admin.super_admin.get_platform_analytics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/super-admin/audit-logs`
+  - endpoint: `app.api.v1.routers.admin.super_admin.get_audit_logs`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/super-admin/dashboard/overview-cards`
+  - endpoint: `app.api.v1.routers.admin.super_admin.get_dashboard_overview_cards`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/super-admin/financial-analytics`
+  - endpoint: `app.api.v1.routers.admin.super_admin.get_financial_analytics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/super-admin/hospitals`
+  - endpoint: `app.api.v1.routers.admin.super_admin.list_hospitals`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/super-admin/hospitals/{hospital_id}`
+  - endpoint: `app.api.v1.routers.admin.super_admin.get_hospital_details`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/super-admin/hospitals/{hospital_id}/admins`
+  - endpoint: `app.api.v1.routers.admin.super_admin.list_hospital_admins`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/super-admin/hospitals/{hospital_name}/subscription`
+  - endpoint: `app.api.v1.routers.admin.super_admin.get_hospital_subscription`
+  - status: `CONFIRMED`
+  - tables: `hospital_subscriptions, subscription_plans, hospitals`
+- `GET /api/v1/super-admin/me`
+  - endpoint: `app.api.v1.routers.admin.super_admin.get_super_admin_me`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/super-admin/performance-analytics`
+  - endpoint: `app.api.v1.routers.admin.super_admin.get_performance_analytics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/super-admin/plans`
+  - endpoint: `app.api.v1.routers.admin.super_admin.list_subscription_plans`
+  - status: `CONFIRMED`
+  - tables: `subscription_plans`
+- `GET /api/v1/super-admin/profile`
+  - endpoint: `app.api.v1.routers.admin.super_admin.get_super_admin_profile`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/super-admin/subscription-analytics`
+  - endpoint: `app.api.v1.routers.admin.super_admin.get_subscription_analytics`
+  - status: `INFERRED`
+  - tables: `subscription_plans, hospital_subscriptions`
+- `GET /api/v1/super-admin/support/tickets`
+  - endpoint: `app.api.v1.routers.admin.super_admin.list_support_tickets`
+  - status: `INFERRED`
+  - tables: `support_tickets`
+- `GET /api/v1/support/hospital-admin/tickets`
+  - endpoint: `app.api.v1.routers.support.tickets.list_tickets_for_hospital_admin`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/support/hospital-admin/tickets/completed`
+  - endpoint: `app.api.v1.routers.support.tickets.list_completed_tickets_for_hospital_admin`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/support/staff/tickets`
+  - endpoint: `app.api.v1.routers.support.tickets.list_my_support_tickets_as_staff`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/surgery/patient/cases`
+  - endpoint: `app.api.v1.routers.surgery.routes.patient_list_my_surgeries`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/surgery/patient/cases/{surgery_id}/documentation`
+  - endpoint: `app.api.v1.routers.surgery.routes.patient_get_surgery_documentation`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/surgery/patient/cases/{surgery_id}/videos`
+  - endpoint: `app.api.v1.routers.surgery.routes.patient_list_surgery_videos`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/surgery/patient/videos/{video_id}/stream`
+  - endpoint: `app.api.v1.routers.surgery.routes.patient_stream_surgery_video`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/surgery/patient/videos/{video_id}/stream-token`
+  - endpoint: `app.api.v1.routers.surgery.routes.patient_get_video_stream_token`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/telemed/config`
+  - endpoint: `app.api.v1.routers.telemed.config.get_provider_config`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /api/v1/telemed/notifications/me`
+  - endpoint: `app.api.v1.routers.telemed.notifications.list_my_notifications`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `GET /api/v1/telemed/patients/me/prescriptions`
+  - endpoint: `app.api.v1.routers.telemed.vitals.list_my_prescriptions`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/telemed/patients/me/vitals`
+  - endpoint: `app.api.v1.routers.telemed.vitals.list_my_vitals`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/telemed/patients/{patient_id}/vitals`
+  - endpoint: `app.api.v1.routers.telemed.vitals.list_vitals`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `GET /api/v1/telemed/prescriptions/me`
+  - endpoint: `app.api.v1.routers.telemed.prescriptions.list_my_telemed_prescriptions`
+  - status: `INFERRED`
+  - tables: `tele_prescriptions`
+- `GET /api/v1/telemed/prescriptions/{prescription_id}/pdf`
+  - endpoint: `app.api.v1.routers.telemed.prescriptions.get_telemed_prescription_pdf`
+  - status: `INFERRED`
+  - tables: `tele_prescriptions`
+- `GET /api/v1/telemed/sessions`
+  - endpoint: `app.api.v1.routers.telemed.sessions.list_sessions`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `GET /api/v1/telemed/sessions/{session_id}`
+  - endpoint: `app.api.v1.routers.telemed.sessions.get_session`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `GET /api/v1/telemed/sessions/{session_id}/files`
+  - endpoint: `app.api.v1.routers.telemed.sessions.list_files`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `GET /api/v1/telemed/sessions/{session_id}/messages`
+  - endpoint: `app.api.v1.routers.telemed.sessions.list_messages`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `GET /api/v1/telemed/sessions/{session_id}/notes`
+  - endpoint: `app.api.v1.routers.telemed.sessions.list_notes`
+  - status: `INFERRED`
+  - tables: `telemed_sessions`
+- `GET /api/v1/telemed/tele-appointments`
+  - endpoint: `app.api.v1.routers.telemed.tele_appointments.list_tele_appointments`
+  - status: `INFERRED`
+  - tables: `appointments, tele_appointments`
+- `GET /api/v1/telemed/tele-appointments/{tele_appointment_id}`
+  - endpoint: `app.api.v1.routers.telemed.tele_appointments.get_tele_appointment`
+  - status: `INFERRED`
+  - tables: `appointments, tele_appointments`
+- `GET /contact/env-check`
+  - endpoint: `app.api.contact_public.check_environment_variables`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /contact/health`
+  - endpoint: `app.api.contact_public.contact_health_check`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /contact/render-diagnostics`
+  - endpoint: `app.api.contact_public.render_diagnostics`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `GET /health`
+  - endpoint: `main.health_check`
+  - status: `INFERRED`
+  - tables: `review_needed`
+
+## 3) All PUT endpoints
+
+- `PUT /api/v1/billing/services/{service_id}`
+  - endpoint: `app.api.v1.routers.billing.services.update_service`
+  - status: `CONFIRMED`
+  - tables: `service_items`
+- `PUT /api/v1/billing/tax-profiles/{tax_id}`
+  - endpoint: `app.api.v1.routers.billing.services.update_tax_profile`
+  - status: `CONFIRMED`
+  - tables: `tax_profiles`
+- `PUT /api/v1/doctor-management/appointments/{appointment_ref}`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.update_appointment`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `PUT /api/v1/doctor-management/schedule/{schedule_id}`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.update_schedule_slot`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PUT /api/v1/doctor-patient-records/medical-records/{record_id}`
+  - endpoint: `app.api.v1.routers.doctor.doctor_patient_records.update_medical_record`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PUT /api/v1/doctor-sidebar/inpatient-visits/{admission_id}/vitals`
+  - endpoint: `app.api.v1.routers.doctor.doctor_sidebar.sidebar_update_inpatient_vitals`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PUT /api/v1/doctor-sidebar/lab-results/{medical_record_id}/review`
+  - endpoint: `app.api.v1.routers.doctor.doctor_sidebar.sidebar_review_lab_result`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PUT /api/v1/doctor-treatment-plans/plans/{plan_id}`
+  - endpoint: `app.api.v1.routers.doctor.doctor_treatment_plans.update_treatment_plan`
+  - status: `INFERRED`
+  - tables: `subscription_plans`
+- `PUT /api/v1/doctors/{id}`
+  - endpoint: `app.api.v1.routers.management.opd_management.update_doctor`
+  - status: `INFERRED`
+  - tables: `users, doctor_profiles`
+- `PUT /api/v1/finance/documents/templates/{template_id}`
+  - endpoint: `app.api.v1.routers.billing.documents.update_template`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PUT /api/v1/hospital-admin/departments/{department_id}`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_department`
+  - status: `CONFIRMED`
+  - tables: `departments`
+- `PUT /api/v1/hospital-admin/wards/{ward_id}`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_ward`
+  - status: `INFERRED`
+  - tables: `wards`
+- `PUT /api/v1/lab/equipment-qc/equipment/{equipment_id}`
+  - endpoint: `app.api.v1.routers.lab.lab_equipment.update_equipment`
+  - status: `INFERRED`
+  - tables: `lab_equipment, equipment_maintenance_logs`
+- `PUT /api/v1/notifications/preferences/me`
+  - endpoint: `app.api.v1.routers.notifications.notifications.update_preferences_me`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `PUT /api/v1/notifications/providers/{provider_id}/config`
+  - endpoint: `app.api.v1.routers.notifications.notifications.update_provider_config`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `PUT /api/v1/opd/doctor/{doctor_user_id}/toggle-status`
+  - endpoint: `app.api.v1.routers.management.opd_management.toggle_opd_doctor`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PUT /api/v1/opd/patient/{visit_id}/status`
+  - endpoint: `app.api.v1.routers.management.opd_management.update_opd_patient_status`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PUT /api/v1/pharmacy/medicines/{medicine_id}`
+  - endpoint: `app.api.v1.routers.pharmacy.medicines.update_medicine`
+  - status: `CONFIRMED`
+  - tables: `pharmacy_medicines`
+- `PUT /api/v1/pharmacy/purchase-orders/{po_id}`
+  - endpoint: `app.api.v1.routers.pharmacy.purchase_orders.update_purchase_order`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PUT /api/v1/pharmacy/suppliers/{supplier_id}`
+  - endpoint: `app.api.v1.routers.pharmacy.suppliers.update_supplier`
+  - status: `CONFIRMED`
+  - tables: `pharmacy_suppliers`
+- `PUT /api/v1/staff/doctor-schedules/slots/{schedule_id}`
+  - endpoint: `app.api.v1.routers.management.staff_doctor_schedules.staff_update_doctor_schedule_slot`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PUT /api/v1/super-admin/hospitals/{hospital_id}`
+  - endpoint: `app.api.v1.routers.admin.super_admin.update_hospital`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PUT /api/v1/super-admin/plans/{plan_id}`
+  - endpoint: `app.api.v1.routers.admin.super_admin.update_subscription_plan`
+  - status: `CONFIRMED`
+  - tables: `subscription_plans`
+
+## 4) All PATCH endpoints
+
+- `PATCH /api/v1/billing/bills/{bill_id}/apply-discount`
+  - endpoint: `app.api.v1.routers.billing.bills.apply_discount`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/billing/bills/{bill_id}/cancel`
+  - endpoint: `app.api.v1.routers.billing.bills.cancel_bill`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/billing/bills/{bill_id}/finalize`
+  - endpoint: `app.api.v1.routers.billing.bills.finalize_bill`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/billing/bills/{bill_id}/items/{item_id}`
+  - endpoint: `app.api.v1.routers.billing.bills.update_bill_item`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/billing/bills/{bill_id}/reopen`
+  - endpoint: `app.api.v1.routers.billing.bills.reopen_bill`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/billing/services/{service_id}/status`
+  - endpoint: `app.api.v1.routers.billing.services.set_service_status`
+  - status: `CONFIRMED`
+  - tables: `service_items`
+- `PATCH /api/v1/billing/tax-profiles/{tax_id}/status`
+  - endpoint: `app.api.v1.routers.billing.services.set_tax_profile_status`
+  - status: `CONFIRMED`
+  - tables: `tax_profiles`
+- `PATCH /api/v1/doctor-sidebar/profile`
+  - endpoint: `app.api.v1.routers.doctor.doctor_sidebar.sidebar_patch_profile`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/doctors/{id}/status`
+  - endpoint: `app.api.v1.routers.management.opd_management.update_doctor_status`
+  - status: `INFERRED`
+  - tables: `users, doctor_profiles`
+- `PATCH /api/v1/hospital-admin/admissions/{admission_id}/assign-bed`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.assign_bed_to_admission`
+  - status: `INFERRED`
+  - tables: `admissions`
+- `PATCH /api/v1/hospital-admin/admissions/{admission_id}/discharge`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.discharge_patient`
+  - status: `INFERRED`
+  - tables: `admissions`
+- `PATCH /api/v1/hospital-admin/appointments/{appointment_id}/status`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_appointment_status`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `PATCH /api/v1/hospital-admin/beds/{bed_id}/status`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_bed_status`
+  - status: `INFERRED`
+  - tables: `beds`
+- `PATCH /api/v1/hospital-admin/departments/{department_id}/status`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_department_status`
+  - status: `CONFIRMED`
+  - tables: `departments`
+- `PATCH /api/v1/hospital-admin/patients/{patient_id}/status`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_patient_status`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `PATCH /api/v1/hospital-admin/staff/doctors/{staff_id}`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_doctor_staff_profile`
+  - status: `CONFIRMED`
+  - tables: `users, doctor_profiles, staff_profiles, staff_department_assignments`
+- `PATCH /api/v1/hospital-admin/staff/lab-techs/{staff_id}`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_lab_tech_staff_profile`
+  - status: `CONFIRMED`
+  - tables: `users, staff_profiles, staff_department_assignments`
+- `PATCH /api/v1/hospital-admin/staff/pharmacists/{staff_id}`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_pharmacist_staff_profile`
+  - status: `CONFIRMED`
+  - tables: `users, staff_profiles, staff_department_assignments`
+- `PATCH /api/v1/hospital-admin/staff/receptionists/{staff_id}`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_receptionist_staff_profile`
+  - status: `CONFIRMED`
+  - tables: `users, receptionist_profiles, staff_profiles, staff_department_assignments`
+- `PATCH /api/v1/hospital-admin/staff/{staff_id}/status`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_staff_status`
+  - status: `CONFIRMED`
+  - tables: `users`
+- `PATCH /api/v1/hospital-admin/wards/{ward_id}/status`
+  - endpoint: `app.api.v1.routers.admin.hospital_admin.update_ward_status`
+  - status: `INFERRED`
+  - tables: `wards`
+- `PATCH /api/v1/insurance/claims/{claim_id}/status`
+  - endpoint: `app.api.v1.routers.insurance.claims.update_claim_status`
+  - status: `INFERRED`
+  - tables: `insurance_claims`
+- `PATCH /api/v1/ipd-management/debug/all-patients/{patient_ref}`
+  - endpoint: `app.api.v1.routers.patient.ipd_management.debug_edit_patient`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/lab/equipment-qc/equipment/{equipment_id}/status`
+  - endpoint: `app.api.v1.routers.lab.lab_equipment.update_equipment_status`
+  - status: `INFERRED`
+  - tables: `lab_equipment, equipment_maintenance_logs`
+- `PATCH /api/v1/notifications/providers/{provider_id}/status`
+  - endpoint: `app.api.v1.routers.notifications.notifications.update_provider_status`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+- `PATCH /api/v1/patient-appointment-booking/appointment/{appointment_ref}/cancel`
+  - endpoint: `app.api.v1.routers.patient.patient_appointment_booking.cancel_appointment`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/patient-discharge-summary/discharge-summaries/{summary_id}`
+  - endpoint: `app.api.v1.routers.patient.patient_discharge_summary.update_discharge_summary`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/patient-document-storage/my/documents/{document_id}`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.update_my_document_metadata`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.update_document_metadata`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `PATCH /api/v1/payments/providers/{provider}/config`
+  - endpoint: `app.api.v1.routers.payments_gateway.collect.update_provider_config`
+  - status: `INFERRED`
+  - tables: `gateway_payments, refunds`
+- `PATCH /api/v1/receptionist/appointments/{appointment_ref}`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.modify_appointment`
+  - status: `INFERRED`
+  - tables: `appointments`
+- `PATCH /api/v1/receptionist/patients/{patient_ref}`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.patch_opd_patient`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `PATCH /api/v1/receptionist/profile`
+  - endpoint: `app.api.v1.routers.management.receptionist_management.update_receptionist_profile`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/super-admin/hospital-admins/{admin_id}/status`
+  - endpoint: `app.api.v1.routers.admin.super_admin.update_admin_status`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/super-admin/hospitals/{hospital_id}/status`
+  - endpoint: `app.api.v1.routers.admin.super_admin.update_hospital_status`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/super-admin/me`
+  - endpoint: `app.api.v1.routers.admin.super_admin.update_super_admin_me`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/super-admin/profile`
+  - endpoint: `app.api.v1.routers.admin.super_admin.update_super_admin_profile`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/super-admin/support/tickets/{ticket_id}/status`
+  - endpoint: `app.api.v1.routers.admin.super_admin.update_support_ticket_status`
+  - status: `INFERRED`
+  - tables: `support_tickets`
+- `PATCH /api/v1/support/hospital-admin/tickets/{ticket_id}/status`
+  - endpoint: `app.api.v1.routers.support.tickets.update_ticket_status_as_hospital_admin`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/surgery/doctor/cases/{surgery_id}/status`
+  - endpoint: `app.api.v1.routers.surgery.routes.update_surgery_status`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/telemed/config`
+  - endpoint: `app.api.v1.routers.telemed.config.update_provider_config`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `PATCH /api/v1/telemed/notifications/me/{notification_id}/read`
+  - endpoint: `app.api.v1.routers.telemed.notifications.mark_notification_read`
+  - status: `INFERRED`
+  - tables: `notification_jobs, notification_preferences, notification_providers`
+
+## 5) All DELETE endpoints
+
+- `DELETE /api/v1/auth/2fa/disable`
+  - endpoint: `app.api.v1.routers.auth_2fa.disable_totp`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `DELETE /api/v1/billing/bills/{bill_id}/items/{item_id}`
+  - endpoint: `app.api.v1.routers.billing.bills.delete_bill_item`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `DELETE /api/v1/billing/services/{service_id}`
+  - endpoint: `app.api.v1.routers.billing.services.delete_service`
+  - status: `CONFIRMED`
+  - tables: `service_items (soft-delete via is_active=false)`
+- `DELETE /api/v1/doctor-management/schedule/{schedule_id}`
+  - endpoint: `app.api.v1.routers.doctor.doctor_management.delete_schedule_slot`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `DELETE /api/v1/opd/patient/{visit_id}`
+  - endpoint: `app.api.v1.routers.management.opd_management.delete_opd_patient`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `DELETE /api/v1/opd/tokens/{id}`
+  - endpoint: `app.api.v1.routers.management.opd_management.cancel_token`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `DELETE /api/v1/patient-document-storage/my/documents/{document_id}`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.delete_my_document`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `DELETE /api/v1/patient-document-storage/patients/{patient_ref}/documents/{document_id}`
+  - endpoint: `app.api.v1.routers.patient.patient_document_storage.delete_document`
+  - status: `INFERRED`
+  - tables: `users, patient_profiles`
+- `DELETE /api/v1/pharmacy/medicines/{medicine_id}`
+  - endpoint: `app.api.v1.routers.pharmacy.medicines.delete_medicine`
+  - status: `CONFIRMED`
+  - tables: `pharmacy_medicines`
+- `DELETE /api/v1/pharmacy/purchase-orders/{po_id}`
+  - endpoint: `app.api.v1.routers.pharmacy.purchase_orders.delete_purchase_order`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `DELETE /api/v1/pharmacy/suppliers/{supplier_id}`
+  - endpoint: `app.api.v1.routers.pharmacy.suppliers.delete_supplier`
+  - status: `CONFIRMED`
+  - tables: `pharmacy_suppliers`
+- `DELETE /api/v1/staff/doctor-schedules/slots/{schedule_id}`
+  - endpoint: `app.api.v1.routers.management.staff_doctor_schedules.staff_delete_doctor_schedule_slot`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `DELETE /api/v1/super-admin/hospitals/{hospital_id}`
+  - endpoint: `app.api.v1.routers.admin.super_admin.delete_hospital`
+  - status: `INFERRED`
+  - tables: `review_needed`
+- `DELETE /api/v1/super-admin/plans/{plan_id}`
+  - endpoint: `app.api.v1.routers.admin.super_admin.delete_subscription_plan`
+  - status: `CONFIRMED`
+  - tables: `subscription_plans`
+
+## 6) Confirmed table fields reference
+
+- `contact_messages`
+  - fields: `full_name, email, phone, hospital_name, message, id, created_at, updated_at, is_active`
+- `demo_requests`
+  - fields: `full_name, email, phone, hospital_name, role, hospital_size, preferred_demo_date, preferred_demo_mode, modules, notes, id, created_at, updated_at, is_active`
+- `departments`
+  - fields: `name, code, description, head_doctor_id, location, phone, email, is_emergency, is_icu, bed_capacity, opening_time, closing_time, is_24x7, settings, hospital_id, id, created_at, updated_at, is_active`
+- `doctor_profiles`
+  - fields: `user_id, department_id, doctor_id, medical_license_number, designation, specialization, sub_specialization, experience_years, qualifications, certifications, medical_associations, consultation_fee, follow_up_fee, consultation_type, availability_time, is_available_for_emergency, is_accepting_new_patients, bio, languages_spoken, hospital_id, id, created_at, updated_at, is_active`
+- `hospital_subscriptions`
+  - fields: `hospital_id, plan_id, status, start_date, end_date, is_trial, trial_end_date, auto_renew, current_usage, id, created_at, updated_at, is_active`
+- `hospitals`
+  - fields: `name, registration_number, email, phone, address, city, state, country, pincode, license_number, established_date, website, logo_url, is_active, status, tenant_database_name, settings, id, created_at, updated_at`
+- `nurse_profiles`
+  - fields: `user_id, department_id, nurse_id, nursing_license_number, designation, specialization, experience_years, shift_type, certifications, ward_assignments, can_administer_medication, can_take_vitals, can_assist_procedures, bio, hospital_id, id, created_at, updated_at, is_active`
+- `patient_profiles`
+  - fields: `user_id, patient_id, date_of_birth, gender, blood_group, marital_status, occupation, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, address, city, state, country, pincode, allergies, chronic_conditions, current_medications, family_medical_history, insurance_provider, insurance_policy_number, insurance_expiry_date, preferred_language, communication_preferences, consent_data_sharing, profile_completed, registration_source, last_visit_date, total_visits, hospital_id, id, created_at, updated_at, is_active`
+- `pharmacy_medicines`
+  - fields: `code, name, generic_name, brand_name, category, schedule_type, dosage_form, strength, unit, manufacturer, hsn_code, gst_percent, min_stock, max_stock, reorder_level, requires_prescription, is_controlled_substance, storage_instructions, barcode, notes, status, hospital_id, id, created_at, updated_at, is_active`
+- `pharmacy_suppliers`
+  - fields: `name, contact_person, phone, email, address_line1, address_line2, city, state, pincode, country, gstin, drug_license_no, payment_terms, credit_limit, rating, status, notes, hospital_id, id, created_at, updated_at, is_active`
+- `receptionist_profiles`
+  - fields: `user_id, department_id, receptionist_id, employee_id, designation, work_area, experience_years, qualifications, shift_type, employment_type, computer_skills, languages_spoken, can_schedule_appointments, can_modify_appointments, can_register_patients, can_collect_payments, bio, is_active, hospital_id, id, created_at, updated_at`
+- `roles`
+  - fields: `name, display_name, description, is_system_role, level, id, created_at, updated_at, is_active`
+- `service_items`
+  - fields: `department_id, code, name, category, base_price, tax_profile_id, is_active, hospital_id, id, created_at, updated_at`
+- `staff_department_assignments`
+  - fields: `staff_id, department_id, is_primary, effective_from, effective_to, notes, unassignment_reason, hospital_id, id, created_at, updated_at, is_active`
+- `staff_profiles`
+  - fields: `user_id, department_id, employee_id, designation, joining_date, qualification, experience_years, specialization, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, is_full_time, salary, skills, certifications, hospital_id, id, created_at, updated_at, is_active`
+- `subscription_plans`
+  - fields: `name, display_name, description, monthly_price, yearly_price, max_doctors, max_patients, max_appointments_per_month, max_storage_gb, features, id, created_at, updated_at, is_active`
+- `tax_profiles`
+  - fields: `name, gst_percentage, is_active, hospital_id, id, created_at, updated_at`
+- `user_roles`
+  - fields: `user_id, role_id, assigned_at, assigned_by`
+- `users`
+  - fields: `hospital_id, email, phone, password_hash, first_name, last_name, middle_name, staff_id, status, email_verified, phone_verified, last_login, failed_login_attempts, locked_until, password_changed_at, avatar_url, timezone, language, user_metadata, id, created_at, updated_at, is_active`

@@ -25,52 +25,8 @@ class LabSampleTrackingService:
         self.db = db
         self.hospital_id = hospital_id
 
-    def _demo_rows(self) -> list[SampleTrackingRow]:
-        return [
-            SampleTrackingRow(
-                barcode="BC001",
-                test_id="TEST-2024-001",
-                patient_name="Rajesh Kumar",
-                test_type="CBC",
-                sample_type="Blood",
-                collection_time="2024-01-15 09:30",
-                status="COLLECTED",
-                current_location="Collection Desk",
-            ),
-            SampleTrackingRow(
-                barcode="BC002",
-                test_id="TEST-2024-002",
-                patient_name="Priya Sharma",
-                test_type="Lipid Profile",
-                sample_type="Blood",
-                collection_time="2024-01-15 10:15",
-                status="IN_TRANSIT",
-                current_location="Corridor - Tube Carrier",
-            ),
-            SampleTrackingRow(
-                barcode="BC003",
-                test_id="TEST-2024-003",
-                patient_name="Suresh Patel",
-                test_type="Urine Culture",
-                sample_type="Urine",
-                collection_time="2024-01-14 14:45",
-                status="IN_LAB",
-                current_location="Microbiology Bench",
-            ),
-            SampleTrackingRow(
-                barcode="BC004",
-                test_id="TEST-2024-004",
-                patient_name="Anita Mehta",
-                test_type="Liver Function",
-                sample_type="Blood",
-                collection_time="2024-01-14 11:20",
-                status="PROCESSED",
-                current_location="Chemistry Analyzer",
-            ),
-        ]
-
-    async def list_samples(self, *, demo: bool = False, search: Optional[str] = None) -> SampleTrackingListResponse:
-        rows = self._demo_rows() if demo else await self._db_rows()
+    async def list_samples(self, *, search: Optional[str] = None) -> SampleTrackingListResponse:
+        rows = await self._db_rows()
         if search:
             q = search.strip().lower()
             rows = [
@@ -83,14 +39,14 @@ class LabSampleTrackingService:
         return SampleTrackingListResponse(
             meta=SampleTrackingMeta(
                 generated_at=datetime.now(timezone.utc),
-                live_data=False,
-                demo_data=demo,
+                live_data=True,
+                demo_data=False,
             ),
             rows=rows,
         )
 
-    async def lookup_barcode(self, barcode: str, *, demo: bool = False) -> BarcodeLookupResponse:
-        rows = self._demo_rows() if demo else await self._db_rows()
+    async def lookup_barcode(self, barcode: str) -> BarcodeLookupResponse:
+        rows = await self._db_rows()
         sample = next((r for r in rows if r.barcode.upper() == barcode.upper().strip()), None)
         if not sample:
             return BarcodeLookupResponse(found=False, sample=None, message="Barcode not found.")

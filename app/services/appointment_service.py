@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, time
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, func
+from sqlalchemy import select, and_, or_, func, desc
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 
@@ -17,6 +17,8 @@ from app.models.hospital import Department
 from app.models.user import User
 from app.core.enums import AppointmentStatus, UserRole
 from app.core.utils import generate_appointment_ref, generate_patient_ref
+from app.utils.hospital_id_resolve import resolve_effective_hospital_id
+from app.utils.receptionist_serializers import build_receptionist_patient_full_payload
 
 
 def _normalize_appointment_time_parts(appointment_time: str) -> tuple[str, str]:
@@ -96,6 +98,7 @@ class AppointmentService:
         self,
         doctor_user_id: uuid.UUID,
         date: str,
+        exclude_appointment_id: Optional[uuid.UUID] = None,
     ) -> List[Dict[str, Any]]:
         """
         Build bookable time slots for a doctor (User.id) on a date from DoctorSchedule only.
@@ -104,16 +107,18 @@ class AppointmentService:
         target_date = datetime.fromisoformat(date)
         day_of_week = target_date.strftime("%A").upper()
 
-        result = await self.db.execute(
-            select(DoctorSchedule).where(
-                and_(
-                    DoctorSchedule.doctor_id == doctor_user_id,
-                    DoctorSchedule.day_of_week == day_of_week,
-                    DoctorSchedule.is_active == True,
-                )
-            )
+        doctor_schedule = await self._get_schedule_for_doctor_day(
+            doctor_user_id,
+            day_of_week,
+            target_date.date().isoformat(),
         )
-        doctor_schedule = result.scalar_one_or_none()
+        if not doctor_schedule:
+            await self._sync_doctor_schedules_from_tenant(doctor_user_id)
+            doctor_schedule = await self._get_schedule_for_doctor_day(
+                doctor_user_id,
+                day_of_week,
+                target_date.date().isoformat(),
+            )
         if not doctor_schedule:
             return []
 
@@ -143,16 +148,15 @@ class AppointmentService:
                 continue
 
             time_hms = current_time.strftime("%H:%M:%S")
-            booked_q = await self.db.execute(
-                select(func.count(Appointment.id)).where(
-                    and_(
-                        Appointment.doctor_id == doctor_user_id,
-                        Appointment.appointment_date == date,
-                        Appointment.appointment_time == time_hms,
-                        Appointment.status.in_([AppointmentStatus.REQUESTED, AppointmentStatus.CONFIRMED]),
-                    )
-                )
+            booked_filt = and_(
+                Appointment.doctor_id == doctor_user_id,
+                Appointment.appointment_date == date,
+                Appointment.appointment_time == time_hms,
+                Appointment.status.in_([AppointmentStatus.REQUESTED, AppointmentStatus.CONFIRMED]),
             )
+            if exclude_appointment_id is not None:
+                booked_filt = and_(booked_filt, Appointment.id != exclude_appointment_id)
+            booked_q = await self.db.execute(select(func.count(Appointment.id)).where(booked_filt))
             booked = int(booked_q.scalar() or 0)
             is_available = booked < max_patients
 
@@ -167,6 +171,99 @@ class AppointmentService:
             current_time += slot_duration
 
         return slots
+
+    async def _get_schedule_for_doctor_day(
+        self,
+        doctor_user_id: uuid.UUID,
+        day_of_week: str,
+        date_iso: str,
+    ) -> Optional[DoctorSchedule]:
+        """Find a schedule by canonical User.id, tolerating old rows stored with DoctorProfile.id."""
+        profile_ids: list[uuid.UUID] = []
+        profile_result = await self.db.execute(
+            select(DoctorProfile.id).where(DoctorProfile.user_id == doctor_user_id)
+        )
+        profile_ids = list(profile_result.scalars().all())
+        doctor_ids = [doctor_user_id, *profile_ids]
+
+        result = await self.db.execute(
+            select(DoctorSchedule)
+            .where(
+                and_(
+                    DoctorSchedule.doctor_id.in_(doctor_ids),
+                    func.upper(func.trim(DoctorSchedule.day_of_week)) == day_of_week,
+                    DoctorSchedule.is_active == True,
+                    or_(DoctorSchedule.effective_from.is_(None), DoctorSchedule.effective_from <= date_iso),
+                    or_(DoctorSchedule.effective_to.is_(None), DoctorSchedule.effective_to >= date_iso),
+                )
+            )
+            .order_by(
+                (DoctorSchedule.doctor_id == doctor_user_id).desc(),
+                DoctorSchedule.created_at.desc(),
+            )
+            .limit(1)
+        )
+        schedule = result.scalar_one_or_none()
+        if schedule and schedule.doctor_id != doctor_user_id:
+            # Repair legacy Hospital Admin rows where DoctorProfile.id was saved as DoctorSchedule.doctor_id.
+            schedule.doctor_id = doctor_user_id
+            await self.db.flush()
+        return schedule
+
+    async def _sync_doctor_schedules_from_tenant(self, doctor_user_id: uuid.UUID) -> None:
+        """
+        Receptionist OPD scheduling reads platform DB, while doctor/admin schedule writes can be tenant-routed.
+        Lazily copy the doctor's schedule rows into this session, correcting legacy profile-id rows.
+        """
+        doctor = await self.db.get(User, doctor_user_id)
+        hospital_id = getattr(doctor, "hospital_id", None)
+        if not hospital_id:
+            return
+
+        try:
+            from app.database.session import get_tenant_session_factory
+            from app.database.tenant_context import resolve_tenant_database_name_for_hospital
+
+            tenant_db = await resolve_tenant_database_name_for_hospital(hospital_id)
+            if not tenant_db:
+                return
+
+            tenant_rows: list[dict[str, Any]] = []
+            fac = get_tenant_session_factory(tenant_db)
+            async with fac() as tdb:
+                profile_result = await tdb.execute(
+                    select(DoctorProfile.id).where(DoctorProfile.user_id == doctor_user_id)
+                )
+                tenant_profile_ids = list(profile_result.scalars().all())
+                doctor_ids = [doctor_user_id, *tenant_profile_ids]
+                schedule_result = await tdb.execute(
+                    select(DoctorSchedule).where(DoctorSchedule.doctor_id.in_(doctor_ids))
+                )
+                for schedule in schedule_result.scalars().all():
+                    row = {
+                        col.name: getattr(schedule, col.name)
+                        for col in DoctorSchedule.__table__.columns
+                    }
+                    row["doctor_id"] = doctor_user_id
+                    tenant_rows.append(row)
+
+            for row in tenant_rows:
+                existing = await self.db.get(DoctorSchedule, row["id"])
+                if existing:
+                    for key, value in row.items():
+                        if key != "id":
+                            setattr(existing, key, value)
+                else:
+                    self.db.add(DoctorSchedule(**row))
+            if tenant_rows:
+                await self.db.flush()
+        except Exception:
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            # Availability endpoints should keep returning the normal empty-slot response on sync failure.
+            return
 
     async def get_doctor_available_slots(
         self,
@@ -401,12 +498,37 @@ class AppointmentService:
         current_user: User
     ) -> Dict[str, Any]:
         """Search patients by phone, email, name, patient_id, or MRN (receptionist)."""
-        hospital_id = current_user.hospital_id
+        hospital_id = current_user.hospital_id or await resolve_effective_hospital_id(
+            self.db, current_user
+        )
         if not hospital_id:
             return {"patients": [], "total": 0, "page": 1, "limit": 20}
         query = select(PatientProfile).join(User, PatientProfile.user_id == User.id).where(
             PatientProfile.hospital_id == hospital_id
         )
+        generic = (search_params.get("search") or search_params.get("q") or "").strip()
+        if generic:
+            term = f"%{generic}%"
+            full_name = func.lower(
+                func.trim(
+                    func.concat(
+                        func.coalesce(User.first_name, ""),
+                        " ",
+                        func.coalesce(User.last_name, ""),
+                    )
+                )
+            )
+            query = query.where(
+                or_(
+                    User.first_name.ilike(term),
+                    User.last_name.ilike(term),
+                    full_name.ilike(f"%{generic.lower()}%"),
+                    User.email.ilike(term),
+                    User.phone.ilike(term),
+                    PatientProfile.patient_id.ilike(term),
+                    PatientProfile.mrn.ilike(term),
+                )
+            )
         if search_params.get("phone"):
             query = query.where(User.phone.ilike(f"%{search_params['phone']}%"))
         if search_params.get("email"):
@@ -438,6 +560,28 @@ class AppointmentService:
         limit = min(search_params.get("limit", 20), 100)
         offset = (page - 1) * limit
         count_query = select(func.count(PatientProfile.id)).select_from(PatientProfile).join(User, PatientProfile.user_id == User.id).where(PatientProfile.hospital_id == hospital_id)
+        if generic:
+            term = f"%{generic}%"
+            full_name = func.lower(
+                func.trim(
+                    func.concat(
+                        func.coalesce(User.first_name, ""),
+                        " ",
+                        func.coalesce(User.last_name, ""),
+                    )
+                )
+            )
+            count_query = count_query.where(
+                or_(
+                    User.first_name.ilike(term),
+                    User.last_name.ilike(term),
+                    full_name.ilike(f"%{generic.lower()}%"),
+                    User.email.ilike(term),
+                    User.phone.ilike(term),
+                    PatientProfile.patient_id.ilike(term),
+                    PatientProfile.mrn.ilike(term),
+                )
+            )
         if search_params.get("phone"):
             count_query = count_query.where(User.phone.ilike(f"%{search_params['phone']}%"))
         if search_params.get("email"):
@@ -467,25 +611,15 @@ class AppointmentService:
             count_query = count_query.where(PatientProfile.mrn.ilike(f"%{search_params['mrn']}%"))
         count_result = await self.db.execute(count_query)
         total = count_result.scalar() or 0
-        result = await self.db.execute(query.offset(offset).limit(limit).options(selectinload(PatientProfile.user)))
+        result = await self.db.execute(
+            query.order_by(desc(PatientProfile.created_at))
+            .offset(offset)
+            .limit(limit)
+            .options(selectinload(PatientProfile.user))
+        )
         patients = result.scalars().all()
         return {
-            "patients": [
-                {
-                    "id": str(p.id),
-                    "patient_id": p.patient_id,
-                    "patient_ref": p.patient_id,
-                    "mrn": p.mrn,
-                    "name": f"{p.user.first_name} {p.user.last_name}",
-                    "first_name": p.user.first_name,
-                    "last_name": p.user.last_name,
-                    "email": p.user.email,
-                    "phone": p.user.phone,
-                    "gender": p.gender,
-                    "date_of_birth": p.date_of_birth,
-                }
-                for p in patients
-            ],
+            "patients": [build_receptionist_patient_full_payload(p) for p in patients],
             "total": total,
             "page": page,
             "limit": limit,

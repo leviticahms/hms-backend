@@ -1,7 +1,7 @@
 """
 Quality Control Workflows endpoints.
 """
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.routers.lab.rbac import LAB_GET_ROLES, LAB_MUTATION_ROLES
@@ -21,12 +21,11 @@ router = APIRouter(prefix="/lab/quality-control", tags=["Lab - Quality Control"]
 
 @router.get("", response_model=QualityControlDashboardResponse)
 async def get_quality_control_dashboard(
-    demo: bool = Query(False),
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> QualityControlDashboardResponse:
     svc = LabQualityControlService(db, current_user.hospital_id)
-    return await svc.dashboard(demo=demo)
+    return await svc.dashboard()
 
 
 @router.post("/run", response_model=RecordQcRunResponse)

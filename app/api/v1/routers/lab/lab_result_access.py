@@ -25,14 +25,13 @@ router = APIRouter(
 
 @router.get("", response_model=ResultAccessDashboardResponse)
 async def get_result_access_dashboard(
-    demo: bool = Query(False, description="Return static UI-aligned sample data."),
     search: Optional[str] = Query(None),
     status: Optional[str] = Query(None, description="ACTIVE|EXPIRED|REVOKED"),
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> ResultAccessDashboardResponse:
     svc = LabResultAccessService(db, current_user.hospital_id)
-    return await svc.get_dashboard(demo=demo, search=search, status=status)
+    return await svc.get_dashboard(search=search, status=status)
 
 
 @router.post("/grant", response_model=GrantResultAccessResponse)

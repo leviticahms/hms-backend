@@ -35,24 +35,22 @@ router = APIRouter(
     ),
 )
 async def list_reports(
-    demo: bool = Query(False),
     search: Optional[str] = Query(None),
     template: str = Query("STANDARD", description="STANDARD|COMPREHENSIVE|DOCTOR_SUMMARY|PATIENT_FRIENDLY|CUSTOM"),
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> ReportGenerationListResponse:
     svc = LabReportGenerationService(db, current_user.hospital_id)
-    return await svc.list_reports(demo=demo, search=search, template=template)
+    return await svc.list_reports(search=search, template=template)
 
 
 @router.get("/ready-tests", response_model=ReadyTestsResponse)
 async def list_ready_tests(
-    demo: bool = Query(False),
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> ReadyTestsResponse:
     svc = LabReportGenerationService(db, current_user.hospital_id)
-    return await svc.ready_tests(demo=demo)
+    return await svc.ready_tests()
 
 
 @router.post("/generate", response_model=GenerateReportResponse)

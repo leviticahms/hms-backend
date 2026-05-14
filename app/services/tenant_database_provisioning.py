@@ -18,7 +18,8 @@ from typing import Any, Optional
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
-from app.core.config import settings
+from app.core.config import Settings, settings
+from app.database.ssl_connect import psycopg2_engine_connect_args
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,11 @@ def provision_postgres_database(
         raise ValueError(f"Unsafe database name: {db_name!r}")
 
     admin_url = _admin_sync_url()
-    engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    engine = create_engine(
+        admin_url,
+        isolation_level="AUTOCOMMIT",
+        connect_args=psycopg2_engine_connect_args(),
+    )
 
     tpl = (template_database or settings.TENANT_TEMPLATE_DATABASE or "").strip()
     if tpl and not _SAFE_DB_NAME.match(tpl):
@@ -185,12 +190,14 @@ def async_url_for_tenant_database(db_name: str) -> str:
     u = make_url(s)
     driver = (u.drivername or "").lower()
     if driver == "postgresql+asyncpg":
-        return u.render_as_string(hide_password=False)
-    if driver.startswith("postgresql"):
-        return u.set(drivername="postgresql+asyncpg").render_as_string(hide_password=False)
-    if driver == "postgres":
-        return u.set(drivername="postgresql+asyncpg").render_as_string(hide_password=False)
-    return s
+        out = u.render_as_string(hide_password=False)
+    elif driver.startswith("postgresql"):
+        out = u.set(drivername="postgresql+asyncpg").render_as_string(hide_password=False)
+    elif driver == "postgres":
+        out = u.set(drivername="postgresql+asyncpg").render_as_string(hide_password=False)
+    else:
+        out = s
+    return Settings._strip_libpq_only_params_from_asyncpg_url(out)
 
 
 def ensure_tenant_schema(db_name: str) -> None:
@@ -203,7 +210,7 @@ def ensure_tenant_schema(db_name: str) -> None:
     from app.database.base import Base
 
     url = sync_url_for_tenant_database(db_name)
-    eng = create_engine(url)
+    eng = create_engine(url, connect_args=psycopg2_engine_connect_args())
     try:
         Base.metadata.create_all(bind=eng)
     finally:
@@ -219,13 +226,12 @@ def ensure_tenant_schema(db_name: str) -> None:
 
 def copy_hospital_registry_row_to_tenant(db_name: str, hospital: Any) -> None:
     """Mirror the platform hospital registry row into the tenant DB (for HospitalAdmin lookups)."""
-    from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
     from app.models.tenant import Hospital as HospModel
 
     url = sync_url_for_tenant_database(db_name)
-    eng = create_engine(url)
+    eng = create_engine(url, connect_args=psycopg2_engine_connect_args())
     Session = sessionmaker(bind=eng)
     try:
         with Session() as s:
@@ -261,6 +267,7 @@ def bootstrap_tenant_database(db_name: str, hospital: Any, created_from_template
     """
     After CREATE DATABASE: apply schema (if empty DB) and insert this hospital row in the tenant DB.
     """
-    if not created_from_template:
-        ensure_tenant_schema(db_name)
+    # Always run schema ensure. It is idempotent and protects against stale templates
+    # that may miss newly-added tables (e.g. users/roles).
+    ensure_tenant_schema(db_name)
     copy_hospital_registry_row_to_tenant(db_name, hospital)

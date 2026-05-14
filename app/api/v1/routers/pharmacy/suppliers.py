@@ -3,54 +3,14 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from uuid import UUID
-from pydantic import BaseModel
-
 from app.database.session import get_db_session
-from app.dependencies.auth import require_hospital_admin
+from app.dependencies.auth import require_admin_or_pharmacist
 from app.models.user import User
 from app.services.pharmacy_service import PharmacyService
+from app.schemas.pharmacy_suppliers_crud import SupplierCreate, SupplierUpdate
 from app.schemas.response import SuccessResponse
 
 router = APIRouter(prefix="/suppliers", tags=["Pharmacy - Suppliers"])
-
-
-class SupplierCreate(BaseModel):
-    name: str
-    contact_person: Optional[str] = None
-    phone: str
-    email: Optional[str] = None
-    address_line1: Optional[str] = None
-    address_line2: Optional[str] = None
-    city: Optional[str] = None
-    state: Optional[str] = None
-    pincode: Optional[str] = None
-    country: Optional[str] = "India"
-    gstin: Optional[str] = None
-    drug_license_no: Optional[str] = None
-    payment_terms: Optional[str] = "NET_30"
-    credit_limit: Optional[float] = None
-    rating: Optional[int] = None
-    notes: Optional[str] = None
-
-
-class SupplierUpdate(BaseModel):
-    name: Optional[str] = None
-    contact_person: Optional[str] = None
-    phone: Optional[str] = None
-    email: Optional[str] = None
-    address_line1: Optional[str] = None
-    address_line2: Optional[str] = None
-    city: Optional[str] = None
-    state: Optional[str] = None
-    pincode: Optional[str] = None
-    country: Optional[str] = None
-    gstin: Optional[str] = None
-    drug_license_no: Optional[str] = None
-    payment_terms: Optional[str] = None
-    credit_limit: Optional[float] = None
-    rating: Optional[int] = None
-    status: Optional[str] = None
-    notes: Optional[str] = None
 
 
 @router.get("")
@@ -59,7 +19,7 @@ async def list_suppliers(
     search: Optional[str] = Query(None, description="Search by name"),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_admin_or_pharmacist()),
     db: AsyncSession = Depends(get_db_session)
 ):
     """List all suppliers"""
@@ -96,7 +56,7 @@ async def list_suppliers(
 @router.get("/{supplier_id}")
 async def get_supplier(
     supplier_id: UUID,
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_admin_or_pharmacist()),
     db: AsyncSession = Depends(get_db_session)
 ):
     """Get supplier details by ID"""
@@ -136,14 +96,14 @@ async def get_supplier(
 @router.post("")
 async def create_supplier(
     supplier_data: SupplierCreate,
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_admin_or_pharmacist()),
     db: AsyncSession = Depends(get_db_session)
 ):
     """Create a new supplier"""
     service = PharmacyService(db)
     supplier = await service.create_supplier(
         hospital_id=current_user.hospital_id,
-        **supplier_data.dict()
+        **supplier_data.model_dump()
     )
     await db.commit()
     
@@ -158,12 +118,12 @@ async def create_supplier(
 async def update_supplier(
     supplier_id: UUID,
     supplier_data: SupplierUpdate,
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_admin_or_pharmacist()),
     db: AsyncSession = Depends(get_db_session)
 ):
     """Update supplier details"""
     service = PharmacyService(db)
-    updates = {k: v for k, v in supplier_data.dict().items() if v is not None}
+    updates = {k: v for k, v in supplier_data.model_dump().items() if v is not None}
     supplier = await service.update_supplier(
         supplier_id=supplier_id,
         hospital_id=current_user.hospital_id,
@@ -181,7 +141,7 @@ async def update_supplier(
 @router.delete("/{supplier_id}")
 async def delete_supplier(
     supplier_id: UUID,
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_admin_or_pharmacist()),
     db: AsyncSession = Depends(get_db_session)
 ):
     """Soft delete a supplier"""

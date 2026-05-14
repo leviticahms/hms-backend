@@ -3,7 +3,8 @@ Service for Secure Result Access UI.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import uuid
+from datetime import date, datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,76 +21,80 @@ from app.schemas.lab_result_access import (
 )
 
 
+def _utc_today() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+def _parse_access_log_date(access_time: str) -> date | None:
+    s = (access_time or "").strip()
+    if len(s) >= 10:
+        for chunk, fmt in (
+            (s[:10], "%Y-%m-%d"),
+            (s[:10], "%d-%m-%Y"),
+            (s[:10], "%d/%m/%Y"),
+        ):
+            try:
+                return datetime.strptime(chunk, fmt).date()
+            except ValueError:
+                continue
+    return None
+
+
+def _is_mobile_client_agent(device_browser: str) -> bool:
+    u = (device_browser or "").lower()
+    return any(k in u for k in ("mobile", "android", "iphone", "ipad", "okhttp"))
+
+
 class LabResultAccessService:
     def __init__(self, db: AsyncSession, hospital_id):
         self.db = db
         self.hospital_id = hospital_id
 
-    def _demo_patients(self) -> list[ResultAccessPatientRow]:
-        return [
-            ResultAccessPatientRow(
-                patient_ref="PAT-001",
-                patient_name="Rajesh Kumar",
-                email="rajesh@email.com",
-                phone="+91 9876543210",
-                last_access="2024-01-15 10:30",
-                access_count=3,
-                status="ACTIVE",
-            ),
-            ResultAccessPatientRow(
-                patient_ref="PAT-002",
-                patient_name="Priya Sharma",
-                email="priya@email.com",
-                phone="+91 9988776655",
-                last_access="2024-01-15 09:15",
-                access_count=2,
-                status="ACTIVE",
-            ),
-            ResultAccessPatientRow(
-                patient_ref="PAT-003",
-                patient_name="Suresh Patel",
-                email="suresh@email.com",
-                phone="+91 9123456780",
-                last_access="2024-01-14 16:45",
-                access_count=1,
-                status="ACTIVE",
-            ),
-        ]
+    def _stats_from_rows(self, p_recs: list, l_recs: list) -> ResultAccessStatCards:
+        today = _utc_today()
+        active_access = sum(1 for r in p_recs if (r.status or "").upper() == "ACTIVE")
+        doctor_access = sum(1 for r in p_recs if r.doctor_name and str(r.doctor_name).strip())
+        todays_accesses = sum(
+            1 for r in l_recs if (d := _parse_access_log_date(r.access_time)) is not None and d == today
+        )
+        mobile_accesses = sum(1 for r in l_recs if _is_mobile_client_agent(r.device_browser))
+        return ResultAccessStatCards(
+            active_access=active_access,
+            doctor_access=doctor_access,
+            todays_accesses=todays_accesses,
+            mobile_accesses=mobile_accesses,
+        )
 
-    def _demo_logs(self) -> list[ResultAccessLogRow]:
-        return [
-            ResultAccessLogRow(
-                patient_name="Rajesh Kumar",
-                accessed_by="patient@email.com",
-                access_time="2024-01-15 10:30",
-                action="View Report",
-                ip_address="192.168.1.100",
-                device_browser="Mobile - Chrome",
-            ),
-            ResultAccessLogRow(
-                patient_name="Priya Sharma",
-                accessed_by="dr.sharma@hospital.com",
-                access_time="2024-01-15 09:15",
-                action="Download Report",
-                ip_address="203.0.113.50",
-                device_browser="Desktop - Firefox",
-            ),
-            ResultAccessLogRow(
-                patient_name="Suresh Patel",
-                accessed_by="patient@email.com",
-                access_time="2024-01-14 16:45",
-                action="View Report",
-                ip_address="192.168.1.150",
-                device_browser="Tablet - Safari",
-            ),
-        ]
+    async def get_dashboard(self, *, search: str | None = None, status: str | None = None) -> ResultAccessDashboardResponse:
+        p_stmt = select(LabResultAccessGrant).where(LabResultAccessGrant.hospital_id == self.hospital_id)
+        l_stmt = select(LabResultAccessLog).where(LabResultAccessLog.hospital_id == self.hospital_id)
+        p_recs = list((await self.db.execute(p_stmt)).scalars().all())
+        l_recs = list((await self.db.execute(l_stmt)).scalars().all())
+        stats = self._stats_from_rows(p_recs, l_recs)
 
-    async def get_dashboard(self, *, demo: bool = False, search: str | None = None, status: str | None = None) -> ResultAccessDashboardResponse:
-        if demo:
-            patients = self._demo_patients()
-            logs = self._demo_logs()
-        else:
-            patients, logs = await self._db_rows()
+        patients = [
+            ResultAccessPatientRow(
+                patient_ref=r.patient_ref,
+                patient_name=r.patient_name,
+                email=r.email,
+                phone=r.phone or "",
+                last_access=r.last_access or "",
+                access_count=r.access_count,
+                status=r.status,
+            )
+            for r in p_recs
+        ]
+        logs = [
+            ResultAccessLogRow(
+                patient_name=r.patient_name,
+                accessed_by=r.accessed_by,
+                access_time=r.access_time,
+                action=r.action,
+                ip_address=r.ip_address,
+                device_browser=r.device_browser,
+            )
+            for r in l_recs
+        ]
 
         if search:
             q = search.strip().lower()
@@ -99,9 +104,7 @@ class LabResultAccessService:
                 if q in p.patient_name.lower() or q in p.patient_ref.lower() or q in p.email.lower()
             ]
             logs = [
-                l
-                for l in logs
-                if q in l.patient_name.lower() or q in l.accessed_by.lower()
+                l for l in logs if q in l.patient_name.lower() or q in l.accessed_by.lower()
             ]
         if status:
             s = status.strip().upper()
@@ -110,15 +113,10 @@ class LabResultAccessService:
         return ResultAccessDashboardResponse(
             meta=ResultAccessMeta(
                 generated_at=datetime.now(timezone.utc),
-                live_data=False,
-                demo_data=demo,
+                live_data=True,
+                demo_data=False,
             ),
-            stats=ResultAccessStatCards(
-                active_access=sum(1 for p in patients if p.status == "ACTIVE"),
-                doctor_access=12 if demo else 0,
-                todays_accesses=2 if demo else 0,
-                mobile_accesses=8 if demo else 0,
-            ),
+            stats=stats,
             patients=patients,
             access_logs=logs,
             security_features=[
@@ -129,11 +127,12 @@ class LabResultAccessService:
         )
 
     async def grant_access(self, payload: GrantResultAccessRequest) -> GrantResultAccessResponse:
-        code = f"ACC-{datetime.now(timezone.utc).strftime('%H%M%S')}"
+        display_name = (payload.patient_name or payload.patient_ref).strip()
+        code = f"ACC-{uuid.uuid4().hex[:10].upper()}"
         rec = LabResultAccessGrant(
             hospital_id=self.hospital_id,
             patient_ref=payload.patient_ref,
-            patient_name=payload.patient_ref,
+            patient_name=display_name,
             doctor_name=None,
             email=payload.email,
             phone="",
@@ -154,32 +153,3 @@ class LabResultAccessService:
             expiry_date=payload.expiry_date,
             access_code=code,
         )
-
-    async def _db_rows(self):
-        p_stmt = select(LabResultAccessGrant).where(LabResultAccessGrant.hospital_id == self.hospital_id)
-        l_stmt = select(LabResultAccessLog).where(LabResultAccessLog.hospital_id == self.hospital_id)
-        p_recs = (await self.db.execute(p_stmt)).scalars().all()
-        l_recs = (await self.db.execute(l_stmt)).scalars().all()
-        patients = [
-            ResultAccessPatientRow(
-                patient_ref=r.patient_ref,
-                patient_name=r.patient_name,
-                email=r.email,
-                phone=r.phone or "",
-                last_access=r.last_access or "",
-                access_count=r.access_count,
-                status=r.status,
-            ) for r in p_recs
-        ]
-        logs = [
-            ResultAccessLogRow(
-                patient_name=r.patient_name,
-                accessed_by=r.accessed_by,
-                access_time=r.access_time,
-                action=r.action,
-                ip_address=r.ip_address,
-                device_browser=r.device_browser,
-            ) for r in l_recs
-        ]
-        return patients, logs
-

@@ -7,14 +7,12 @@ import logging
 
 from app.core.plan_features import (
     FEATURE_LAB_TESTS,
-    FEATURE_PHARMACY,
     FEATURE_VIDEO_CONSULTATION,
 )
 from app.dependencies.plan_features import require_plan_feature
 
 logger = logging.getLogger(__name__)
 
-_pharmacy_dep = [Depends(require_plan_feature(FEATURE_PHARMACY))]
 _telemed_dep = [Depends(require_plan_feature(FEATURE_VIDEO_CONSULTATION))]
 _lab_dep = [Depends(require_plan_feature(FEATURE_LAB_TESTS))]
 
@@ -109,8 +107,20 @@ try:
     from app.api.v1.routers.patient.patient_document_storage import router as document_storage_router
     from app.api.v1.routers.patient.patient_discharge_summary import router as discharge_summary_router
     from app.api.v1.routers.patient.ipd_management import router as ipd_management_router
+    from app.api.v1.routers.patient.patient_dashboard import router as patient_dashboard_router
+    from app.api.v1.routers.patient.patient_billing import router as patient_billing_router
+    from app.api.v1.routers.patient.patient_prescriptions import router as patient_prescriptions_router
+    from app.api.v1.routers.patient.patient_profile import router as patient_profile_router
+    from app.api.v1.routers.patient.patient_lab_tests import router as patient_lab_tests_router
+    from app.api.v1.routers.patient.patient_messaging import router as patient_messaging_router
     
     api_router.include_router(patient_booking_router)
+    api_router.include_router(patient_dashboard_router)
+    api_router.include_router(patient_billing_router)
+    api_router.include_router(patient_prescriptions_router)
+    api_router.include_router(patient_profile_router)
+    api_router.include_router(patient_lab_tests_router)
+    api_router.include_router(patient_messaging_router)
     api_router.include_router(medical_history_router)
     api_router.include_router(document_storage_router)
     api_router.include_router(discharge_summary_router)
@@ -120,7 +130,7 @@ except ImportError as e:
     logger.error(f"✗ Failed to load patient routers: {e}")
 
 # ============================================================================
-# 6. STAFF MANAGEMENT (Nurse & Receptionist)
+# 6. STAFF MANAGEMENT (Receptionist + OPD)
 # ============================================================================
 try:
     from app.api.v1.routers.management.nurse_management import router as nurse_management_router
@@ -164,32 +174,25 @@ try:
     from app.api.v1.routers.pharmacy.returns import router as pharmacy_returns_router
     from app.api.v1.routers.pharmacy.alerts import router as pharmacy_alerts_router
     from app.api.v1.routers.pharmacy.reports import router as pharmacy_reports_router
-    
-    api_router.include_router(
-        pharmacy_medicines_router, prefix="/pharmacy", tags=["Pharmacy - Medicines"], dependencies=_pharmacy_dep
-    )
-    api_router.include_router(
-        pharmacy_suppliers_router, prefix="/pharmacy", tags=["Pharmacy - Suppliers"], dependencies=_pharmacy_dep
-    )
+    from app.api.v1.routers.pharmacy.pharmacy_portal import router as pharmacy_portal_router
+
+    # Pharmacy endpoints are protected by their router-level staff/admin role dependencies.
+    # Do not apply the subscription feature gate here; dashboard/module visibility uses plan flags.
+    api_router.include_router(pharmacy_medicines_router, prefix="/pharmacy", tags=["Pharmacy - Medicines"])
+    api_router.include_router(pharmacy_suppliers_router, prefix="/pharmacy", tags=["Pharmacy - Suppliers"])
     api_router.include_router(
         pharmacy_purchase_orders_router,
         prefix="/pharmacy",
         tags=["Pharmacy - Purchase Orders"],
-        dependencies=_pharmacy_dep,
     )
-    api_router.include_router(pharmacy_grn_router, prefix="/pharmacy", tags=["Pharmacy - GRN"], dependencies=_pharmacy_dep)
-    api_router.include_router(pharmacy_stock_router, prefix="/pharmacy", tags=["Pharmacy - Stock"], dependencies=_pharmacy_dep)
-    api_router.include_router(pharmacy_sales_router, prefix="/pharmacy", tags=["Pharmacy - Sales"], dependencies=_pharmacy_dep)
-    api_router.include_router(
-        pharmacy_returns_router, prefix="/pharmacy", tags=["Pharmacy - Returns"], dependencies=_pharmacy_dep
-    )
-    api_router.include_router(
-        pharmacy_alerts_router, prefix="/pharmacy", tags=["Pharmacy - Alerts"], dependencies=_pharmacy_dep
-    )
-    api_router.include_router(
-        pharmacy_reports_router, prefix="/pharmacy", tags=["Pharmacy - Reports"], dependencies=_pharmacy_dep
-    )
-    logger.info("✓ Pharmacy routers loaded (9 routers - complete module)")
+    api_router.include_router(pharmacy_grn_router, prefix="/pharmacy", tags=["Pharmacy - GRN"])
+    api_router.include_router(pharmacy_stock_router, prefix="/pharmacy", tags=["Pharmacy - Stock"])
+    api_router.include_router(pharmacy_sales_router, prefix="/pharmacy", tags=["Pharmacy - Sales"])
+    api_router.include_router(pharmacy_returns_router, prefix="/pharmacy", tags=["Pharmacy - Returns"])
+    api_router.include_router(pharmacy_alerts_router, prefix="/pharmacy", tags=["Pharmacy - Alerts"])
+    api_router.include_router(pharmacy_reports_router, prefix="/pharmacy", tags=["Pharmacy - Reports"])
+    api_router.include_router(pharmacy_portal_router, prefix="/pharmacy", tags=["Pharmacy - Portal"])
+    logger.info("✓ Pharmacy routers loaded (10 routers - complete module)")
 except ImportError as e:
     logger.error(f"✗ Failed to load pharmacy routers: {e}")
 
@@ -221,6 +224,7 @@ try:
     from app.api.v1.routers.lab.lab_tech_dashboard import router as lab_tech_dashboard_router
     from app.api.v1.routers.lab.lab_critical_results import router as lab_critical_results_router
     from app.api.v1.routers.lab.lab_test_registration import router as lab_test_registration_router
+    from app.api.v1.routers.lab.lab_patients import router as lab_patients_router
     from app.api.v1.routers.lab.lab_sample_tracking import router as lab_sample_tracking_router
     from app.api.v1.routers.lab.lab_report_generation import router as lab_report_generation_router
     from app.api.v1.routers.lab.lab_result_access import router as lab_result_access_router
@@ -232,6 +236,7 @@ try:
     api_router.include_router(lab_equipment_router, dependencies=_lab_dep)
     api_router.include_router(lab_tech_dashboard_router, dependencies=_lab_dep)
     api_router.include_router(lab_critical_results_router, dependencies=_lab_dep)
+    api_router.include_router(lab_patients_router, dependencies=_lab_dep)
     api_router.include_router(lab_test_registration_router, dependencies=_lab_dep)
     api_router.include_router(lab_sample_tracking_router, dependencies=_lab_dep)
     api_router.include_router(lab_report_generation_router, dependencies=_lab_dep)
@@ -241,7 +246,7 @@ try:
     api_router.include_router(lab_quality_control_router, dependencies=_lab_dep)
     api_router.include_router(lab_profile_router, dependencies=_lab_dep)
     logger.info(
-        "✓ Lab routers loaded (equipment + tech dashboard + critical results + test registration + sample tracking + report generation + result access + test catalogue + equipment tracking + quality control + profile)"
+        "✓ Lab routers loaded (equipment + tech dashboard + critical results + lab patients + test registration + sample tracking + report generation + result access + test catalogue + equipment tracking + quality control + profile)"
     )
 except ImportError as e:
     logger.error(f"✗ Failed to load lab routers: {e}")
@@ -311,7 +316,6 @@ async def health_check():
                 "hospital_admin",
                 "doctor",
                 "patient",
-                "nurse",
                 "receptionist",
                 "pharmacy",
                 "lab",

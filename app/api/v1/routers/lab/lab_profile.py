@@ -1,14 +1,15 @@
 """
 Lab Profile endpoints.
 """
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.routers.lab.rbac import LAB_GET_ROLES, LAB_MUTATION_ROLES
 from app.core.security import require_roles
-from app.database.session import get_db_session
+from app.database.session import get_db_session,get_platform_db_session
 from app.models.user import User
 from app.schemas.lab_profile import (
+    ChangePasswordRequest,
     ChangePasswordResponse,
     ConfigureLabSettingsRequest,
     ConfigureLabSettingsResponse,
@@ -24,11 +25,10 @@ router = APIRouter(prefix="/lab/profile", tags=["Lab - Profile"])
 
 @router.get("", response_model=LabProfileResponse)
 async def get_lab_profile(
-    demo: bool = Query(False),
     current_user: User = Depends(require_roles(LAB_GET_ROLES)),
     db: AsyncSession = Depends(get_db_session),
 ) -> LabProfileResponse:
-    return await LabProfileService(db, current_user.hospital_id).get_profile(demo=demo)
+    return await LabProfileService(db, current_user.hospital_id).get_profile()
 
 
 @router.post("/edit", response_model=EditLabProfileResponse)
@@ -60,8 +60,11 @@ async def change_lab_profile_password(
     ),
     db: AsyncSession = Depends(get_db_session),
 ) -> ChangePasswordResponse:
-    return await LabProfileService(db, current_user.hospital_id).change_password()
-
+    
+    return await LabProfileService(
+        db,
+        current_user.hospital_id
+    ).change_password(current_user, request)
 
 @router.post("/action/{action}", response_model=LabProfileActionResponse)
 async def run_lab_profile_action(

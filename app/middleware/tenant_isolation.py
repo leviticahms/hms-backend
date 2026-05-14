@@ -10,6 +10,7 @@ import uuid
 import logging
 
 from app.core.config import settings
+from app.database.routing import PLATFORM_ONLY_PREFIXES
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +46,8 @@ class TenantIsolationMiddleware(BaseHTTPMiddleware):
             "/contact/send",
         }
         
-        # Super Admin paths that bypass tenant isolation
-        self.super_admin_paths = {
-            "/api/v1/super-admin",
-            "/api/v1/analytics",
-        }
+        # Platform-scope paths (same list as DB routing — no hospital tenant binding)
+        self.super_admin_paths = tuple(PLATFORM_ONLY_PREFIXES)
         
         # Patient paths that don't require hospital_id (patients can access multiple hospitals)
         self.patient_paths = {

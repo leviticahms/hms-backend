@@ -9,14 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
-
 from app.database.session import get_db_session
 from app.api.deps import require_hospital_context, require_roles
 from app.core.enums import UserRole
 from app.models.user import User
 from app.models.billing import FinancialDocument, Bill, BillingPayment
 from app.models.tenant import Hospital
+from app.schemas.billing.documents import FinancialDocumentEmailBody
 from app.schemas.response import SuccessResponse
 from app.services.billing.invoice_pdf import build_invoice_pdf
 from app.services.payments.receipt_pdf import build_receipt_pdf
@@ -30,17 +29,10 @@ def _is_valid_email(email: str) -> bool:
     return bool(email and re.match(r"^[^@]+@[^@]+\.[^@]+$", email.strip()))
 
 
-class EmailBody(BaseModel):
-    to_email: str
-
-    class Config:
-        json_schema_extra = {"example": {"to_email": "patient@example.com"}}
-
-
 @router.post("/{doc_id}/email")
 async def email_document(
     doc_id: UUID,
-    body: EmailBody,
+    body: FinancialDocumentEmailBody,
     context: dict = Depends(require_hospital_context),
     user: User = Depends(require_billing),
     db: AsyncSession = Depends(get_db_session),

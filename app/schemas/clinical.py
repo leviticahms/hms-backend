@@ -2,7 +2,7 @@
 Clinical operations schemas for OPD, IPD, and nursing management.
 """
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, EmailStr, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, EmailStr, field_validator, model_validator
 
 
 # ============================================================================
@@ -11,11 +11,13 @@ from pydantic import BaseModel, Field, EmailStr, field_validator, model_validato
 
 class PatientRegistrationCreate(BaseModel):
     """Register new patient for OPD (receptionist). Insurance fields are not collected here."""
-    first_name: str
-    last_name: str
+    model_config = ConfigDict(populate_by_name=True)
+
+    first_name: str = Field(validation_alias=AliasChoices("first_name", "firstName"))
+    last_name: str = Field(validation_alias=AliasChoices("last_name", "lastName"))
     phone: str
     email: Optional[EmailStr] = None
-    date_of_birth: str  # YYYY-MM-DD
+    date_of_birth: str = Field(validation_alias=AliasChoices("date_of_birth", "dob"))  # YYYY-MM-DD
     gender: str  # MALE, FEMALE, OTHER (or Male / Female / Other — normalized server-side)
     address: Optional[str] = None
     pincode: Optional[str] = None
@@ -25,26 +27,53 @@ class PatientRegistrationCreate(BaseModel):
     country: Optional[str] = None
     id_type: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices("id_type", "idType"),
         description="e.g. Aadhaar Card, Passport, Other",
     )
-    id_number: Optional[str] = Field(default=None, description="ID document number when applicable")
+    id_number: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("id_number", "idNumber"),
+        description="ID document number when applicable",
+    )
     id_name: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices("id_name", "idName"),
         description="Name or label on ID when id_type is Other",
     )
-    emergency_contact_name: Optional[str] = None
-    emergency_contact_phone: Optional[str] = None
-    emergency_contact_relation: Optional[str] = None
+    emergency_contact_name: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("emergency_contact_name", "emergencyContactName"),
+    )
+    emergency_contact_phone: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "emergency_contact_phone",
+            "emergencyContact",
+            "emergency_contact_number",
+            "emergencyContactNumber",
+        ),
+    )
+    emergency_contact_relation: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "emergency_contact_relation",
+            "emergencyContactRelationship",
+            "relationship",
+        ),
+    )
     medical_history: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices("medical_history", "medicalHistory"),
         description="Known conditions, allergies, medications (free text)",
     )
     blood_group: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices("blood_group", "bloodGroup"),
         description="A+, A-, B+, B-, AB+, AB-, O+, O-, OTHER",
     )
     blood_group_value: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices("blood_group_value", "bloodGroupValue"),
         description="Required when blood_group is OTHER — specify the group",
     )
     password: Optional[str] = Field(
@@ -77,6 +106,56 @@ class PatientRegistrationCreate(BaseModel):
             raise ValueError("blood_group_value is required when blood_group is OTHER")
         return self
 
+    @field_validator("gender", mode="after")
+    @classmethod
+    def validate_gender(cls, v: str) -> str:
+        val = (v or "").strip().upper()
+        allowed = {"MALE", "FEMALE", "OTHER"}
+        if val not in allowed:
+            raise ValueError("gender must be one of: Male, Female, Other")
+        return val
+
+    @field_validator("id_type", mode="after")
+    @classmethod
+    def validate_id_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        raw = v.strip()
+        if not raw:
+            return None
+        canon = {
+            "AADHAAR CARD": "Aadhaar Card",
+            "AADHAR CARD": "Aadhaar Card",
+            "PASSPORT": "Passport",
+            "OTHER": "Other",
+            "OTHERS": "Other",
+        }
+        key = raw.upper()
+        if key not in canon:
+            raise ValueError("idType must be one of: Aadhaar Card, Passport, Other")
+        return canon[key]
+
+    @model_validator(mode="after")
+    def id_type_other_requires_id_name(self):
+        idt = (self.id_type or "").strip().upper()
+        if idt == "OTHER" and not (self.id_name or "").strip():
+            raise ValueError("idName is required when idType is Other")
+        return self
+
+    @field_validator("blood_group", mode="after")
+    @classmethod
+    def validate_blood_group(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        raw = v.strip()
+        if not raw:
+            return None
+        normalized = raw.upper().replace(" ", "")
+        allowed = {"A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-", "OTHER"}
+        if normalized not in allowed:
+            raise ValueError("bloodGroup must be one of: A+, A-, B+, B-, O+, O-, AB+, AB-, Other")
+        return normalized
+
     send_credentials_email: bool = Field(
         default=True,
         description=(
@@ -84,6 +163,128 @@ class PatientRegistrationCreate(BaseModel):
             "Registration always saves even if SMTP is misconfigured or sending fails — check `credentials_email_sent` in the response."
         ),
     )
+
+
+class ReceptionistPatientPatch(BaseModel):
+    """Partial update for OPD patient (receptionist). Only sent fields are applied."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    first_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("first_name", "firstName"))
+    last_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("last_name", "lastName"))
+    phone: Optional[str] = None
+    email: Optional[EmailStr] = None
+    date_of_birth: Optional[str] = Field(default=None, validation_alias=AliasChoices("date_of_birth", "dob"))
+    gender: Optional[str] = None
+    address: Optional[str] = None
+    pincode: Optional[str] = None
+    city: Optional[str] = None
+    district: Optional[str] = None
+    state: Optional[str] = None
+    country: Optional[str] = None
+    id_type: Optional[str] = Field(default=None, validation_alias=AliasChoices("id_type", "idType"))
+    id_number: Optional[str] = Field(default=None, validation_alias=AliasChoices("id_number", "idNumber"))
+    id_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("id_name", "idName"))
+    emergency_contact_name: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("emergency_contact_name", "emergencyContactName"),
+    )
+    emergency_contact_phone: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "emergency_contact_phone",
+            "emergencyContact",
+            "emergency_contact_number",
+            "emergencyContactNumber",
+        ),
+    )
+    emergency_contact_relation: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "emergency_contact_relation",
+            "emergencyContactRelationship",
+            "relationship",
+        ),
+    )
+    medical_history: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("medical_history", "medicalHistory"),
+    )
+    blood_group: Optional[str] = Field(default=None, validation_alias=AliasChoices("blood_group", "bloodGroup"))
+    blood_group_value: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("blood_group_value", "bloodGroupValue"),
+    )
+    password: Optional[str] = Field(
+        default=None,
+        min_length=8,
+        max_length=128,
+        description="New portal password; requires email on file or email in same request.",
+    )
+    send_credentials_email: bool = Field(
+        default=True,
+        description="When password is updated, queue credential email if SMTP configured.",
+    )
+
+    @field_validator("password", mode="before")
+    @classmethod
+    def empty_password_to_none_patch(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return v
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def strip_phone_patch(cls, v):
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
+
+    @field_validator("gender", mode="after")
+    @classmethod
+    def validate_gender_optional_patch(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        val = v.strip().upper()
+        allowed = {"MALE", "FEMALE", "OTHER"}
+        if val not in allowed:
+            raise ValueError("gender must be one of: Male, Female, Other")
+        return val
+
+    @field_validator("id_type", mode="after")
+    @classmethod
+    def validate_id_type_optional_patch(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        raw = v.strip()
+        if not raw:
+            return None
+        canon = {
+            "AADHAAR CARD": "Aadhaar Card",
+            "AADHAR CARD": "Aadhaar Card",
+            "PASSPORT": "Passport",
+            "OTHER": "Other",
+            "OTHERS": "Other",
+        }
+        key = raw.upper()
+        if key not in canon:
+            raise ValueError("idType must be one of: Aadhaar Card, Passport, Other")
+        return canon[key]
+
+    @field_validator("blood_group", mode="after")
+    @classmethod
+    def validate_blood_group_optional_patch(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        raw = v.strip()
+        if not raw:
+            return None
+        normalized = raw.upper().replace(" ", "")
+        allowed = {"A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-", "OTHER"}
+        if normalized not in allowed:
+            raise ValueError("bloodGroup must be one of: A+, A-, B+, B-, O+, O-, AB+, AB-, Other")
+        return normalized
 
 
 class AppointmentSchedulingCreate(BaseModel):
@@ -98,7 +299,14 @@ class AppointmentSchedulingCreate(BaseModel):
         description="Full name as registered (e.g. 'Jane Doe'). Used to resolve patient when patient_ref is omitted.",
     )
     doctor_name: str  # "Dr. John Smith"
-    department_name: str  # "Cardiology"
+    department_id: Optional[str] = Field(
+        default=None,
+        description="Optional department UUID. If omitted/invalid, the department is derived from the selected doctor.",
+    )
+    department_name: Optional[str] = Field(
+        default=None,
+        description="Optional department name/code (e.g. Cardiology). If omitted, derive from doctor assignment.",
+    )
     appointment_date: str  # YYYY-MM-DD
     appointment_time: str  # HH:MM
     appointment_type: str = "CONSULTATION"  # CONSULTATION, FOLLOW_UP, EMERGENCY
@@ -115,7 +323,7 @@ class AppointmentSchedulingCreate(BaseModel):
 
 
 class ReceptionistPatientDetailOut(BaseModel):
-    """Full OPD patient profile for receptionist UI (no password). Matches registration fields."""
+    """Full OPD patient profile for receptionist UI. Password is never returned (always null)."""
 
     patient_ref: str
     first_name: str
@@ -135,20 +343,102 @@ class ReceptionistPatientDetailOut(BaseModel):
     state: Optional[str] = None
     country: Optional[str] = None
     emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    emergency_contact_relation: Optional[str] = None
+    # Legacy / form aliases (same DB columns as above)
     emergency_contact_relationship: Optional[str] = None
+    relationship: Optional[str] = None
+    emergency_contact_number: Optional[str] = None
     emergency_contact: Optional[str] = None
     medical_history: Optional[str] = None
     blood_group: Optional[str] = None
     blood_group_value: Optional[str] = None
+    password: Optional[str] = Field(
+        default=None,
+        description="Always null — passwords are never exposed. Omit in PATCH forms or leave blank.",
+    )
+    portal_login_enabled: bool = Field(
+        default=False,
+        description="True when patient email is verified and suitable for POST /auth/patient/login.",
+    )
+
+
+class DebugPatientEditUpdate(BaseModel):
+    """Debug-only patient update payload for IPD patient list tooling."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    first_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("first_name", "firstName"))
+    last_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("last_name", "lastName"))
+    phone: Optional[str] = None
+    email: Optional[EmailStr] = None
+    date_of_birth: Optional[str] = Field(default=None, validation_alias=AliasChoices("date_of_birth", "dob"))
+    gender: Optional[str] = None
+    id_type: Optional[str] = Field(default=None, validation_alias=AliasChoices("id_type", "idType"))
+    id_number: Optional[str] = Field(default=None, validation_alias=AliasChoices("id_number", "idNumber"))
+    id_name: Optional[str] = Field(default=None, validation_alias=AliasChoices("id_name", "idName"))
+    address: Optional[str] = None
+    pincode: Optional[str] = None
+    city: Optional[str] = None
+    district: Optional[str] = None
+    state: Optional[str] = None
+    country: Optional[str] = None
+    emergency_contact_name: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("emergency_contact_name", "emergencyContactName"),
+    )
+    emergency_contact_phone: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("emergency_contact_phone", "emergencyContact"),
+    )
+    emergency_contact_relation: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("emergency_contact_relation", "emergencyContactRelationship"),
+    )
+    medical_history: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("medical_history", "medicalHistory"),
+    )
+    blood_group: Optional[str] = Field(default=None, validation_alias=AliasChoices("blood_group", "bloodGroup"))
+    blood_group_value: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("blood_group_value", "bloodGroupValue"),
+    )
 
 
 class AppointmentUpdate(BaseModel):
     """Modify existing appointment"""
-    appointment_date: Optional[str] = None
-    appointment_time: Optional[str] = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    appointment_date: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("appointment_date", "date"),
+    )
+    appointment_time: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("appointment_time", "time"),
+    )
     doctor_name: Optional[str] = None
-    department_name: Optional[str] = None
-    chief_complaint: Optional[str] = None
+    doctor_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("doctor_id", "doctorId"),
+    )
+    department_name: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("department_name", "department"),
+    )
+    department_id: Optional[str] = None
+    patient_ref: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("patient_ref", "patientId"),
+    )
+    appointment_type: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("appointment_type", "type"),
+    )
+    chief_complaint: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("chief_complaint", "reason"),
+    )
     notes: Optional[str] = None
     status: Optional[str] = None  # CONFIRMED, CANCELLED, RESCHEDULED
 

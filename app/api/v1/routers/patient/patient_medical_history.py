@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc, func
 from sqlalchemy.orm import selectinload
 
-from app.core.database import get_db_session
+from app.core.database import get_platform_db_session
 from app.core.security import get_current_user
 from app.dependencies.auth import get_current_patient
 from app.models.user import User
@@ -86,7 +86,7 @@ async def get_patient_by_ref(patient_ref: str, hospital_id: Optional[str], db: A
 @router.get("/my/summary")
 async def get_my_medical_summary(
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get comprehensive medical summary for the logged-in patient.
@@ -159,7 +159,7 @@ async def get_my_medical_records(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get paginated medical records for the logged-in patient.
@@ -228,7 +228,7 @@ async def get_my_medical_records(
 async def get_my_medical_record_details(
     record_id: str,
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get detailed medical record by ID for the logged-in patient.
@@ -299,7 +299,7 @@ async def get_my_medical_timeline(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     current_patient: PatientProfile = Depends(get_current_patient),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get medical timeline for the logged-in patient.
@@ -376,7 +376,7 @@ async def get_my_medical_timeline(
 async def get_patient_medical_summary(
     patient_ref: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get comprehensive medical summary for a patient.
@@ -493,7 +493,7 @@ async def get_patient_medical_records(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get paginated medical records for a patient.
@@ -605,7 +605,7 @@ async def get_medical_record_details(
     patient_ref: str,
     record_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get detailed medical record by ID.
@@ -707,7 +707,7 @@ async def get_patient_medical_timeline(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get patient's medical timeline with appointments, admissions, and records.
@@ -826,4 +826,55 @@ async def get_patient_medical_timeline(
         "patient_ref": patient.patient_id,
         "patient_name": f"{patient.user.first_name} {patient.user.last_name}",
         "timeline": timeline_events
+    }
+
+
+@router.get("/my/allergies")
+async def get_my_allergies(
+    current_patient: PatientProfile = Depends(get_current_patient),
+):
+    """Dedicated allergies endpoint for patient medical records screen."""
+    return {
+        "patient_ref": current_patient.patient_id,
+        "allergies": current_patient.allergies or [],
+        "historical_allergies": current_patient.allergies or [],
+    }
+
+
+@router.get("/my/immunizations")
+async def get_my_immunizations(
+    current_patient: PatientProfile = Depends(get_current_patient),
+):
+    """
+    Immunization records are not yet modeled in dedicated tables.
+    Returns a stable response shape for frontend integration.
+    """
+    return {
+        "patient_ref": current_patient.patient_id,
+        "immunizations": [],
+        "upcoming_schedules": [],
+        "message": "No immunization records available.",
+    }
+
+
+@router.post("/my/records/share")
+async def share_medical_record(
+    payload: Dict[str, Any],
+    current_patient: PatientProfile = Depends(get_current_patient),
+):
+    """Generate a temporary share token payload for medical record sharing."""
+    import uuid as _uuid
+    record_id = str(payload.get("record_id") or "").strip()
+    if not record_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="record_id is required",
+        )
+    token = str(_uuid.uuid4())
+    return {
+        "patient_ref": current_patient.patient_id,
+        "record_id": record_id,
+        "share_token": token,
+        "share_url": f"/api/v1/patient-medical-history/share/{token}",
+        "expires_in_minutes": 60,
     }

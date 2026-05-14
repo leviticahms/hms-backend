@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.utils import ensure_datetime_utc_aware
 from app.models.lab import Equipment, EquipmentMaintenanceLog
+from app.models.user import User
 
 __all__ = ["LabEquipmentService", "LabService"]
 
@@ -316,10 +317,34 @@ class LabEquipmentService:
                     detail={"code": "EQUIPMENT_NOT_FOUND", "message": f"Equipment with ID {equipment_id} not found"},
                 )
 
+            effective_performed_by = performed_by
+            user_result = await self.db.execute(select(User.id).where(User.id == performed_by))
+            if not user_result.scalar_one_or_none():
+                fallback_user_result = await self.db.execute(
+                    select(User.id)
+                    .where(
+                        and_(
+                            User.hospital_id == self.hospital_id,
+                            User.is_active == True,  # noqa: E712
+                        )
+                    )
+                    .limit(1)
+                )
+                fallback_user_id = fallback_user_result.scalar_one_or_none()
+                if not fallback_user_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "code": "INVALID_PERFORMED_BY",
+                            "message": "No valid user found in this hospital for performed_by",
+                        },
+                    )
+                effective_performed_by = fallback_user_id
+
             maintenance_log = EquipmentMaintenanceLog(
                 equipment_id=equipment_id,
                 type_=log_data["type"],
-                performed_by=performed_by,
+                performed_by=effective_performed_by,
                 performed_at=log_data["performed_at"],
                 next_due_at=log_data.get("next_due_at"),
                 remarks=log_data.get("remarks"),

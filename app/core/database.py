@@ -1,8 +1,8 @@
 """
-Database configuration and session management.
-Handles async database connections and Alembic migrations.
-Single source of truth: engine and session come from app.database.session
-so all routes (deps + direct imports) use the same connection pool.
+Application-facing DB facade (imports session factories from app.database.session).
+
+Lower-level pieces live under app.database/: engines, routing, tenant_context, ssl helpers.
+Alembic upgrades run here for convenience; pools are owned by app.database.session / engines.
 """
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -16,13 +16,14 @@ from app.core.config import settings
 
 # Single engine and session factory - imported from app.database.session
 from app.database.session import (
-    get_async_engine,
     AsyncSessionLocal,
+    close_database as close_database_pools,
+    get_async_engine,
     get_db_session,
     get_platform_db_session,
     get_tenant_session_factory,
-    resolve_tenant_database_name_for_hospital,
     invalidate_hospital_tenant_cache,
+    resolve_tenant_database_name_for_hospital,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,7 +99,5 @@ async def init_database():
 
 
 async def close_database():
-    """Close database connections."""
-    engine = get_async_engine()
-    await engine.dispose()
-    logger.info("Database connections closed")
+    """Dispose platform + tenant async pools."""
+    await close_database_pools()

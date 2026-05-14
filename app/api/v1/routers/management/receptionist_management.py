@@ -2,6 +2,12 @@
 Receptionist Management API
 Dedicated receptionist functionality for front desk operations, patient registration, and appointment management.
 
+DATABASE NOTE (patient portal login):
+Patient auth (`POST /api/v1/auth/patient/login`) always loads `users` from the **platform** DB (`get_platform_db_session`).
+This router therefore uses `get_platform_db_session` for all endpoints—not `get_db_session`—so OPD-registered patients
+and their `user_roles` rows exist where login reads them. Using tenant-routed sessions here caused “Invalid credentials”
+(AUTH_001) because users were written to the tenant DB only.
+
 BUSINESS RULES:
 - Receptionists are created by Hospital Admin only
 - Receptionists belong to one hospital AND one department
@@ -10,33 +16,123 @@ BUSINESS RULES:
 - Receptionists CANNOT: Access medical records, Prescribe medicines, Modify lab results
 """
 import logging
-from typing import Optional
+import os
+import uuid
+from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import and_, func, select
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
+from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import require_receptionist
-from app.core.database import get_db_session
+from app.core.database import get_platform_db_session
+from app.core.enums import DocumentType
 from app.core.security import get_current_user
 from app.core.utils import absolute_public_asset_url
 from app.models.hospital import Department
+from app.models.patient import PatientDocument, PatientProfile
 from app.models.user import User
 from app.schemas.receptionist import ReceptionistProfileSelfUpdate
 from app.services.clinical_service import ClinicalService, send_opd_portal_credentials_email_task
 from app.services.email_service import EmailService
 from app.schemas.clinical import (
     PatientRegistrationCreate,
+    ReceptionistPatientPatch,
     AppointmentSchedulingCreate,
     AppointmentUpdate,
     PatientCheckInCreate,
-    ReceptionistPatientDetailOut,
 )
 from app.core.response_utils import success_response
 
 router = APIRouter(prefix="/receptionist", tags=["Receptionist - OPD Management"])
 logger = logging.getLogger(__name__)
+
+
+def _normalize_patient_document_type(raw: str) -> str:
+    """Accept DocumentType enum values (e.g. MEDICAL_REPORT, LAB_RESULT)."""
+    s = (raw or "").strip()
+    if not s:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="document_type is required",
+        )
+    normalized = s.upper().replace(" ", "_").replace("-", "_")
+    try:
+        return DocumentType(normalized).value
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_DOCUMENT_TYPE",
+                "message": f"document_type must be one of: {[e.value for e in DocumentType]}",
+            },
+        )
+
+
+def _storage_path_to_public_url(file_path: Optional[str]) -> str:
+    if not file_path:
+        return ""
+    normalized = str(file_path).replace("\\", "/")
+    if "/uploads/" in normalized:
+        rel = normalized[normalized.index("/uploads/") :]
+    elif normalized.startswith("uploads/"):
+        rel = "/" + normalized
+    else:
+        rel = "/" + normalized.lstrip("/")
+    return absolute_public_asset_url(rel) or rel
+
+
+def _human_document_code(document_id: uuid.UUID) -> str:
+    return f"DOC-{document_id.hex[:6].upper()}"
+
+
+def _file_type_label(mime_type: Optional[str], file_name: Optional[str]) -> str:
+    if mime_type:
+        return mime_type
+    fn = file_name or ""
+    if "." in fn:
+        return fn.rsplit(".", 1)[-1].lower()
+    return ""
+
+
+async def _resolve_patient_for_documents(
+    patient_id: str, receptionist: User, db: AsyncSession
+) -> PatientProfile:
+    """Resolve PAT-... ref or patient_profiles.id UUID; must belong to receptionist's hospital."""
+    from app.api.v1.routers.patient.patient_document_storage import get_patient_by_ref
+
+    if not receptionist.hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Receptionist must be assigned to a hospital",
+        )
+    hid = str(receptionist.hospital_id)
+    pid = (patient_id or "").strip()
+    if not pid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="patient_id is required",
+        )
+    try:
+        uid = uuid.UUID(pid)
+        res = await db.execute(
+            select(PatientProfile).where(
+                and_(PatientProfile.id == uid, PatientProfile.hospital_id == receptionist.hospital_id)
+            )
+        )
+        row = res.scalar_one_or_none()
+        if row:
+            return row
+    except ValueError:
+        pass
+    patient = await get_patient_by_ref(pid, hid, db)
+    if patient.hospital_id and str(patient.hospital_id) != hid:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Patient is not registered in your hospital",
+        )
+    return patient
 
 
 async def _receptionist_user_for_write(db: AsyncSession, current_user: User) -> User:
@@ -89,7 +185,7 @@ def _receptionist_profile_base_dict(current_user: User) -> dict:
 @router.get("/dashboard")
 async def get_receptionist_dashboard(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get receptionist dashboard with key metrics and information.
@@ -120,7 +216,7 @@ async def register_patient(
     patient_data: PatientRegistrationCreate,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Register new patient for OPD services.
@@ -146,47 +242,84 @@ async def register_patient(
 
     pwd = (patient_data.password or "").strip() or None
     email = (str(patient_data.email).strip().lower() if patient_data.email else None)
+    # Always queue portal credential email in background — SMTP can take several seconds and blocked registration UX.
     if pwd and email and patient_data.send_credentials_email:
         es = EmailService()
         if not es.is_smtp_configured():
             result["credentials_email_sent"] = False
             result["credentials_email_queued"] = False
             result["credentials_email_hint"] = (
-                "SMTP is not configured (set SMTP_USER and SMTP_PASS). "
-                "Share credentials manually or configure SMTP and retry."
+                "SMTP is not configured on the server (set SMTP_USER and SMTP_PASS in Render/environment). "
+                "Share login email and password with the patient manually."
             )
         else:
-            sent_now = await es.send_patient_portal_credentials_email(
-                to_email=email,
-                first_name=patient_data.first_name,
-                login_email=email,
-                password_plain=pwd,
-                hospital_name=result.get("hospital_name"),
+            background_tasks.add_task(
+                send_opd_portal_credentials_email_task,
+                email,
+                patient_data.first_name,
+                pwd,
+                result.get("hospital_name"),
             )
-            result["credentials_email_sent"] = bool(sent_now)
-            result["credentials_email_queued"] = False
-            if sent_now:
-                result["credentials_email_hint"] = "Credentials email sent successfully."
-            else:
-                # Fallback to background retry so transient SMTP issues self-heal.
-                err = (getattr(es, "last_error", None) or "").strip()
-                background_tasks.add_task(
-                    send_opd_portal_credentials_email_task,
-                    email,
-                    patient_data.first_name,
-                    pwd,
-                    result.get("hospital_name"),
-                )
-                result["credentials_email_queued"] = True
-                result["credentials_email_hint"] = (
-                    "Immediate email send failed; queued background retry. "
-                    "If it still fails, verify SMTP host/credentials."
-                )
-                if err:
-                    result["credentials_email_error"] = err
-                logger.warning("Immediate portal credentials email failed for %s; queued retry", email)
+            result["credentials_email_sent"] = False
+            result["credentials_email_queued"] = True
+            result["credentials_email_hint"] = (
+                "Credentials email queued to send shortly. Check inbox/spam; "
+                "if nothing arrives, verify SMTP_HOST/SMTP_USER/SMTP_PASS on the deployment."
+            )
 
     return success_response(message="Patient registered successfully", data=result)
+
+
+@router.patch("/patients/{patient_ref}")
+async def patch_opd_patient(
+    patient_ref: str,
+    body: ReceptionistPatientPatch,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """
+    Update an existing OPD patient (same hospital as receptionist).
+
+    Send only fields to change (PATCH semantics). Setting ``password`` enables portal login;
+    patient must have an email on record or include ``email`` in the same request.
+    Optional credential email uses ``send_credentials_email`` (default true when password is sent).
+    """
+    payload = body.model_dump(exclude_unset=True)
+    send_cred = payload.pop("send_credentials_email", True)
+    pwd_plain = payload.pop("password", None)
+
+    clinical_service = ClinicalService(db)
+    result = await clinical_service.patch_opd_patient(
+        patient_ref,
+        payload,
+        new_password_plain=pwd_plain,
+        send_credentials_email=send_cred,
+        current_user=current_user,
+    )
+
+    login_email = (result.get("email") or "").strip().lower()
+    first_nm = result.get("first_name") or ""
+    if pwd_plain and str(pwd_plain).strip() and login_email and send_cred:
+        mail_svc = EmailService()
+        if not mail_svc.is_smtp_configured():
+            result["credentials_email_queued"] = False
+            result["credentials_email_sent"] = False
+            result["credentials_email_hint"] = (
+                "SMTP is not configured (set SMTP_USER/SMTP_PASS). Share login email and password manually."
+            )
+        else:
+            background_tasks.add_task(
+                send_opd_portal_credentials_email_task,
+                login_email,
+                first_nm,
+                str(pwd_plain).strip(),
+                result.get("hospital_name"),
+            )
+            result["credentials_email_queued"] = True
+            result["credentials_email_sent"] = False
+
+    return success_response(message="Patient updated successfully", data=result)
 
 
 # ============================================================================
@@ -196,8 +329,8 @@ async def register_patient(
 @router.post("/appointments/schedule")
 async def schedule_appointment(
     appointment_data: AppointmentSchedulingCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Schedule appointment for an existing patient.
@@ -231,8 +364,8 @@ async def get_todays_appointments(
     department_name: Optional[str] = Query(None, description="Filter by department"),
     doctor_name: Optional[str] = Query(None, description="Filter by doctor"),
     status: Optional[str] = Query(None, description="Filter by status: SCHEDULED, CHECKED_IN, IN_PROGRESS, COMPLETED, CANCELLED"),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get today's appointments for the hospital.
@@ -265,12 +398,24 @@ async def get_todays_appointments(
     return success_response(message="Appointments retrieved successfully", data=result)
 
 
+@router.get("/appointments/{appointment_ref}")
+async def get_appointment_by_ref(
+    appointment_ref: str,
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """Get a single appointment by reference (same hospital as receptionist)."""
+    clinical_service = ClinicalService(db)
+    data = await clinical_service.get_opd_appointment_by_ref(appointment_ref, current_user)
+    return success_response(message="Appointment retrieved successfully", data=data)
+
+
 @router.patch("/appointments/{appointment_ref}")
 async def modify_appointment(
     appointment_ref: str,
     modification_data: AppointmentUpdate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Modify existing appointment.
@@ -291,9 +436,9 @@ async def modify_appointment(
     """
     clinical_service = ClinicalService(db)
     result = await clinical_service.modify_opd_appointment(
-        appointment_ref, 
-        modification_data.dict(exclude_unset=True), 
-        current_user
+        appointment_ref,
+        modification_data.model_dump(exclude_unset=True),
+        current_user,
     )
     return success_response(message="Appointment modified successfully", data=result)
 
@@ -306,8 +451,8 @@ async def modify_appointment(
 async def check_in_patient(
     appointment_ref: str,
     checkin_data: PatientCheckInCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Check-in patient for their appointment.
@@ -333,11 +478,44 @@ async def check_in_patient(
 
 
 # ============================================================================
-# PATIENT SEARCH
+# PATIENT LIST & SEARCH
 # ============================================================================
+
+@router.get("/patients")
+async def list_all_patients(
+    search: Optional[str] = Query(
+        None,
+        description="Optional: filter by name, email, phone, patient ID, or MRN (partial match)",
+    ),
+    q: Optional[str] = Query(None, description="Alias for `search`"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """
+    List all registered OPD patients for the receptionist's hospital (paginated, newest first).
+
+    Omit ``search`` / ``q`` to return every patient for this hospital (within ``page`` / ``limit``).
+    """
+    from app.services.appointment_service import AppointmentService
+
+    combined = (search or "").strip() or (q or "").strip() or None
+    appointment_service = AppointmentService(db)
+    result = await appointment_service.search_patients(
+        {"search": combined, "page": page, "limit": limit},
+        current_user,
+    )
+    return success_response(message="Patients retrieved successfully", data=result)
+
 
 @router.get("/patients/search")
 async def search_patients(
+    search: Optional[str] = Query(
+        None,
+        description="Single search box: matches name, email, phone, patient ID, or MRN (partial)",
+    ),
+    q: Optional[str] = Query(None, description="Alias for `search` (frontend compatibility)"),
     phone: Optional[str] = Query(None, description="Search by phone number"),
     email: Optional[str] = Query(None, description="Search by email"),
     name: Optional[str] = Query(None, description="Search by name"),
@@ -346,7 +524,7 @@ async def search_patients(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Search for patients in the hospital.
@@ -355,11 +533,9 @@ async def search_patients(
     - Only Receptionists can search patients
     
     Search Options:
-    - By phone number
-    - By email
-    - By name (first or last)
-    - By patient ID
-    - By MRN (Medical Record Number)
+    - search or q: one box — partial match on name, email, phone, patient ID, or MRN
+    - phone, email, name, patient_id, mrn: specific fields (AND when several are set)
+    - With no filters: all patients for this hospital (paginated, newest first)
     
     Returns:
     - List of matching patients
@@ -371,7 +547,9 @@ async def search_patients(
     appointment_service = AppointmentService(db)
     
     # Build search parameters
+    combined = (search or "").strip() or (q or "").strip() or None
     search_params = {
+        "search": combined,
         "phone": phone,
         "email": email,
         "name": name,
@@ -389,18 +567,200 @@ async def search_patients(
 async def get_patient_profile_for_schedule(
     patient_ref: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Load full patient details for autofill (e.g. Schedule Appointment form after choosing a name).
 
-    Returns the same registration fields as stored for the patient (no password). Use with
-    GET /receptionist/patients/search?name=... to find `patient_ref`, then call this endpoint.
+    Returns registration fields plus emergency contact under canonical keys (`emergency_contact_name`,
+    `emergency_contact_phone`, `emergency_contact_relation`) and UI aliases (`relationship`,
+    `emergency_contact_number`, camelCase, `emergency_contact_details`). Legacy `emergency_contact`
+    is still the emergency phone string (same as `emergency_contact_phone`). Portal `password` is
+    never returned (always null); use `has_portal_password` / `portal_login_enabled` for UX.
     """
     clinical_service = ClinicalService(db)
     data = await clinical_service.get_receptionist_patient_by_ref(patient_ref, current_user)
-    validated = ReceptionistPatientDetailOut.model_validate(data)
-    return success_response(message="Patient profile loaded successfully", data=validated.model_dump())
+    return success_response(message="Patient profile loaded successfully", data=data)
+
+
+# ============================================================================
+# PATIENT DOCUMENTS (front desk — multipart upload + card list)
+# ============================================================================
+
+
+@router.post("/patient-documents/upload")
+async def receptionist_upload_patient_documents(
+    patient_id: str = Form(
+        ...,
+        description="Patient reference (e.g. PAT-...) or patient_profiles.id UUID",
+    ),
+    document_type: str = Form(...),
+    category: str = Form(..., description="Stored as document title / UI category"),
+    uploaded_by: str = Form(
+        ...,
+        description="Display name of uploader (should match signed-in receptionist)",
+    ),
+    files: List[UploadFile] = File(..., description="One or more files"),
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """
+    Upload one or more documents for a patient (multipart/form-data).
+
+    **Form fields:** ``patient_id``, ``document_type``, ``category``, ``uploaded_by``, ``files`` (repeatable).
+    """
+    from app.api.v1.routers.patient.patient_document_storage import (
+        get_upload_directory,
+        save_uploaded_file,
+        validate_file_size,
+        validate_file_type,
+    )
+
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "NO_FILES", "message": "At least one file is required"},
+        )
+    if not (uploaded_by or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MISSING_UPLOADER", "message": "uploaded_by is required"},
+        )
+    if not (category or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MISSING_CATEGORY", "message": "category is required"},
+        )
+
+    patient = await _resolve_patient_for_documents(patient_id, current_user, db)
+    dtype = _normalize_patient_document_type(document_type)
+    cat = category.strip()
+
+    hospital_id_for_doc = str(current_user.hospital_id)
+    if patient.hospital_id:
+        hospital_id_for_doc = str(patient.hospital_id)
+    pref = patient.patient_id
+    upload_dir = get_upload_directory(hospital_id_for_doc, pref)
+
+    saved_paths: List[str] = []
+    out_rows: List[dict] = []
+    try:
+        for file in files:
+            if not validate_file_type(file):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid file type. Allowed: PDF, images, Word, Excel, text",
+                )
+            if not validate_file_size(file):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="File size exceeds 10MB limit",
+                )
+            ext = os.path.splitext(file.filename or "")[1] or ""
+            unique_filename = f"{uuid.uuid4()}{ext}"
+            file_path = os.path.join(upload_dir, unique_filename)
+            file_size = await save_uploaded_file(file, file_path)
+            saved_paths.append(file_path)
+
+            doc = PatientDocument(
+                id=uuid.uuid4(),
+                hospital_id=uuid.UUID(hospital_id_for_doc),
+                patient_id=patient.id,
+                uploaded_by=current_user.id,
+                document_type=dtype,
+                title=cat,
+                description=None,
+                file_name=file.filename or unique_filename,
+                file_path=file_path,
+                file_size=file_size,
+                mime_type=file.content_type,
+                document_date=None,
+                is_sensitive=False,
+            )
+            db.add(doc)
+            await db.flush()
+            await db.refresh(doc)
+            out_rows.append(
+                {
+                    "id": _human_document_code(doc.id),
+                    "document_uuid": str(doc.id),
+                    "file_url": _storage_path_to_public_url(doc.file_path),
+                    "file_type": _file_type_label(doc.mime_type, doc.file_name),
+                    "document_type": doc.document_type,
+                    "category": cat,
+                    "uploaded_at": doc.created_at.date().isoformat()
+                    if doc.created_at
+                    else "",
+                }
+            )
+        await db.commit()
+    except HTTPException:
+        for p in saved_paths:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        await db.rollback()
+        raise
+    except Exception:
+        for p in saved_paths:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        await db.rollback()
+        logger.exception("Receptionist document upload failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to upload documents",
+        )
+
+    return success_response(
+        message="Documents uploaded successfully",
+        data=out_rows,
+    )
+
+
+@router.get("/patients/{patient_ref}/documents")
+async def receptionist_list_patient_documents(
+    patient_ref: str,
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """
+    Document list for the patient card (no pagination; capped at 500 newest first).
+    """
+    patient = await _resolve_patient_for_documents(patient_ref.strip(), current_user, db)
+    q = await db.execute(
+        select(PatientDocument)
+        .where(PatientDocument.patient_id == patient.id)
+        .options(selectinload(PatientDocument.uploader))
+        .order_by(desc(PatientDocument.created_at))
+        .limit(500)
+    )
+    docs = q.scalars().all()
+    data = []
+    for doc in docs:
+        ub = ""
+        if doc.uploader:
+            ub = f"{doc.uploader.first_name or ''} {doc.uploader.last_name or ''}".strip()
+        data.append(
+            {
+                "id": _human_document_code(doc.id),
+                "document_uuid": str(doc.id),
+                "file_name": doc.file_name,
+                "file_url": _storage_path_to_public_url(doc.file_path),
+                "file_type": _file_type_label(doc.mime_type, doc.file_name),
+                "document_type": doc.document_type,
+                "category": doc.title,
+                "file_size": str(doc.file_size) if doc.file_size is not None else "",
+                "uploaded_at": doc.created_at.isoformat() if doc.created_at else "",
+                "uploaded_by": ub,
+            }
+        )
+    return success_response(message="Documents retrieved successfully", data=data)
 
 
 # ============================================================================
@@ -410,8 +770,8 @@ async def get_patient_profile_for_schedule(
 @router.get("/appointments/statistics")
 async def get_appointment_statistics(
     date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (default: today)"),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get appointment statistics for the day.
@@ -444,7 +804,7 @@ async def get_appointment_statistics(
 @router.get("/quick-actions")
 async def get_quick_actions(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
     Get quick action items for receptionist.
@@ -491,7 +851,7 @@ async def get_quick_actions(
 @router.get("/profile")
 async def get_receptionist_profile(
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get receptionist profile information.
@@ -555,7 +915,7 @@ async def get_receptionist_profile(
 async def update_receptionist_profile(
     body: ReceptionistProfileSelfUpdate,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Update receptionist-visible profile fields (name, email, phone, employee id, shift, work area, etc.).
