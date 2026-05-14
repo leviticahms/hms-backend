@@ -3324,15 +3324,12 @@ class HospitalAdminService:
         active_only: bool = False
     ) -> Dict[str, Any]:
         """Get paginated list of wards"""
-        from app.models.hospital import Ward
+        from app.models.hospital import Bed, Ward
         
         offset = (page - 1) * limit
         
         # Build query with hospital filter
-        query = select(Ward).options(
-            selectinload(Ward.head_nurse),
-            selectinload(Ward.beds)
-        ).where(Ward.hospital_id == self.hospital_id)
+        query = select(Ward).where(Ward.hospital_id == self.hospital_id)
         
         # Filter by ward type
         if ward_type:
@@ -3355,19 +3352,64 @@ class HospitalAdminService:
         query = query.offset(offset).limit(limit).order_by(Ward.name.asc())
         result = await self.db.execute(query)
         wards = result.scalars().all()
+
+        ward_ids = [ward.id for ward in wards]
+        bed_stats: Dict[uuid.UUID, Dict[str, int]] = {
+            ward_id: {"total": 0, "available": 0, "occupied": 0, "maintenance": 0}
+            for ward_id in ward_ids
+        }
+        if ward_ids:
+            bed_result = await self.db.execute(
+                select(Bed.ward_id, Bed.status).where(
+                    and_(
+                        Bed.hospital_id == self.hospital_id,
+                        Bed.ward_id.in_(ward_ids),
+                    )
+                )
+            )
+            for ward_id, bed_status in bed_result.all():
+                stats = bed_stats.setdefault(
+                    ward_id,
+                    {"total": 0, "available": 0, "occupied": 0, "maintenance": 0},
+                )
+                status_label = (
+                    bed_status.value if hasattr(bed_status, "value") else str(bed_status or "")
+                ).upper()
+                stats["total"] += 1
+                if status_label == "AVAILABLE":
+                    stats["available"] += 1
+                elif status_label == "OCCUPIED":
+                    stats["occupied"] += 1
+                elif status_label == "MAINTENANCE":
+                    stats["maintenance"] += 1
+
+        nurse_ids = {ward.head_nurse_id for ward in wards if ward.head_nurse_id}
+        head_nurse_names: Dict[uuid.UUID, str] = {}
+        if nurse_ids:
+            nurse_result = await self.db.execute(
+                select(User.id, User.first_name, User.last_name).where(
+                    and_(
+                        User.hospital_id == self.hospital_id,
+                        User.id.in_(nurse_ids),
+                    )
+                )
+            )
+            for nurse_id, first_name, last_name in nurse_result.all():
+                head_nurse_names[nurse_id] = f"{first_name or ''} {last_name or ''}".strip()
         
         # Format response
         ward_list = []
         for ward in wards:
             # Calculate bed statistics
-            total_beds = len(ward.beds)
-            available_beds = len([bed for bed in ward.beds if bed.status == "AVAILABLE"])
-            occupied_beds = len([bed for bed in ward.beds if bed.status == "OCCUPIED"])
-            maintenance_beds = len([bed for bed in ward.beds if bed.status == "MAINTENANCE"])
-            
-            head_nurse_name = None
-            if ward.head_nurse:
-                head_nurse_name = f"{ward.head_nurse.first_name} {ward.head_nurse.last_name}"
+            stats = bed_stats.get(
+                ward.id,
+                {"total": 0, "available": 0, "occupied": 0, "maintenance": 0},
+            )
+            total_beds = stats["total"]
+            available_beds = stats["available"]
+            occupied_beds = stats["occupied"]
+            maintenance_beds = stats["maintenance"]
+            head_nurse_name = head_nurse_names.get(ward.head_nurse_id)
             
             ward_list.append({
                 "id": str(ward.id),
