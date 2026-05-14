@@ -45,8 +45,15 @@ from app.schemas.clinical import (
 )
 from app.core.response_utils import success_response
 
-router = APIRouter(prefix="/receptionist", tags=["Receptionist - OPD Management"])
+router = APIRouter(prefix="/receptionist")
 logger = logging.getLogger(__name__)
+
+TAG_DASHBOARD = "Receptionist - Dashboard"
+TAG_PATIENT_REGISTRATION = "Receptionist - Patient Registration"
+TAG_PATIENT_RECORDS = "Receptionist - Patient Records"
+TAG_APPOINTMENTS = "Receptionist - Appointment Scheduling"
+TAG_DOCUMENTS = "Receptionist - Patient Documents"
+TAG_PROFILE = "Receptionist - Profile"
 
 
 def _normalize_patient_document_type(raw: str) -> str:
@@ -182,7 +189,7 @@ def _receptionist_profile_base_dict(current_user: User) -> dict:
 # RECEPTIONIST DASHBOARD
 # ============================================================================
 
-@router.get("/dashboard")
+@router.get("/dashboard", tags=[TAG_DASHBOARD])
 async def get_receptionist_dashboard(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_platform_db_session)
@@ -211,7 +218,7 @@ async def get_receptionist_dashboard(
 # PATIENT REGISTRATION
 # ============================================================================
 
-@router.post("/patients/register")
+@router.post("/patients/register", tags=[TAG_PATIENT_REGISTRATION])
 async def register_patient(
     patient_data: PatientRegistrationCreate,
     background_tasks: BackgroundTasks,
@@ -270,7 +277,7 @@ async def register_patient(
     return success_response(message="Patient registered successfully", data=result)
 
 
-@router.patch("/patients/{patient_ref}")
+@router.patch("/patients/{patient_ref}", tags=[TAG_PATIENT_REGISTRATION])
 async def patch_opd_patient(
     patient_ref: str,
     body: ReceptionistPatientPatch,
@@ -326,7 +333,7 @@ async def patch_opd_patient(
 # APPOINTMENT MANAGEMENT
 # ============================================================================
 
-@router.post("/appointments/schedule")
+@router.post("/appointments/schedule", tags=[TAG_APPOINTMENTS])
 async def schedule_appointment(
     appointment_data: AppointmentSchedulingCreate,
     current_user: User = Depends(require_receptionist()),
@@ -357,7 +364,7 @@ async def schedule_appointment(
     return success_response(message="Appointment scheduled successfully", data=result)
 
 
-@router.get("/appointments/today")
+@router.get("/appointments/today", tags=[TAG_APPOINTMENTS])
 async def get_todays_appointments(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
@@ -398,7 +405,7 @@ async def get_todays_appointments(
     return success_response(message="Appointments retrieved successfully", data=result)
 
 
-@router.get("/appointments/{appointment_ref}")
+@router.get("/appointments/{appointment_ref}", tags=[TAG_APPOINTMENTS])
 async def get_appointment_by_ref(
     appointment_ref: str,
     current_user: User = Depends(require_receptionist()),
@@ -410,7 +417,7 @@ async def get_appointment_by_ref(
     return success_response(message="Appointment retrieved successfully", data=data)
 
 
-@router.patch("/appointments/{appointment_ref}")
+@router.patch("/appointments/{appointment_ref}", tags=[TAG_APPOINTMENTS])
 async def modify_appointment(
     appointment_ref: str,
     modification_data: AppointmentUpdate,
@@ -447,7 +454,7 @@ async def modify_appointment(
 # PATIENT CHECK-IN
 # ============================================================================
 
-@router.post("/appointments/{appointment_ref}/check-in")
+@router.post("/appointments/{appointment_ref}/check-in", tags=[TAG_APPOINTMENTS])
 async def check_in_patient(
     appointment_ref: str,
     checkin_data: PatientCheckInCreate,
@@ -485,7 +492,7 @@ async def check_in_patient(
 # PATIENT LIST & SEARCH
 # ============================================================================
 
-@router.get("/patients")
+@router.get("/patients", tags=[TAG_PATIENT_RECORDS])
 async def list_all_patients(
     search: Optional[str] = Query(
         None,
@@ -513,7 +520,7 @@ async def list_all_patients(
     return success_response(message="Patients retrieved successfully", data=result)
 
 
-@router.get("/patients/search")
+@router.get("/patients/search", tags=[TAG_PATIENT_RECORDS])
 async def search_patients(
     search: Optional[str] = Query(
         None,
@@ -567,7 +574,7 @@ async def search_patients(
     return success_response(message="Search completed successfully", data=result)
 
 
-@router.get("/patients/{patient_ref}/profile")
+@router.get("/patients/{patient_ref}/profile", tags=[TAG_PATIENT_RECORDS])
 async def get_patient_profile_for_schedule(
     patient_ref: str,
     current_user: User = Depends(get_current_user),
@@ -592,7 +599,7 @@ async def get_patient_profile_for_schedule(
 # ============================================================================
 
 
-@router.post("/patient-documents/upload")
+@router.post("/patient-documents/upload", tags=[TAG_DOCUMENTS])
 async def receptionist_upload_patient_documents(
     patient_id: str = Form(
         ...,
@@ -727,7 +734,7 @@ async def receptionist_upload_patient_documents(
     )
 
 
-@router.get("/patients/{patient_ref}/documents")
+@router.get("/patients/{patient_ref}/documents", tags=[TAG_DOCUMENTS])
 async def receptionist_list_patient_documents(
     patient_ref: str,
     current_user: User = Depends(require_receptionist()),
@@ -771,7 +778,7 @@ async def receptionist_list_patient_documents(
 # APPOINTMENT STATISTICS
 # ============================================================================
 
-@router.get("/appointments/statistics")
+@router.get("/appointments/statistics", tags=[TAG_APPOINTMENTS])
 async def get_appointment_statistics(
     date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (default: today)"),
     current_user: User = Depends(require_receptionist()),
@@ -805,7 +812,7 @@ async def get_appointment_statistics(
 # QUICK ACTIONS
 # ============================================================================
 
-@router.get("/quick-actions")
+@router.get("/quick-actions", tags=[TAG_DASHBOARD])
 async def get_quick_actions(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_platform_db_session)
@@ -852,7 +859,7 @@ async def get_quick_actions(
 # RECEPTIONIST PROFILE
 # ============================================================================
 
-@router.get("/profile")
+@router.get("/profile", tags=[TAG_PROFILE])
 async def get_receptionist_profile(
     current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_platform_db_session),
@@ -915,7 +922,7 @@ async def get_receptionist_profile(
     return success_response(message="Profile retrieved successfully", data=profile_data)
 
 
-@router.patch("/profile")
+@router.patch("/profile", tags=[TAG_PROFILE])
 async def update_receptionist_profile(
     body: ReceptionistProfileSelfUpdate,
     current_user: User = Depends(require_receptionist()),
