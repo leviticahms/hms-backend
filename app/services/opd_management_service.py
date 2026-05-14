@@ -385,7 +385,33 @@ class OpdManagementService:
         md = dict(u.user_metadata or {})
         if body.get("opdRoom") is not None:
             md["opd_room"] = body["opdRoom"]
-            u.user_metadata = md
+        profile_result = await self.db.execute(
+            select(DoctorProfile).where(
+                DoctorProfile.user_id == u.id,
+                DoctorProfile.hospital_id == self.hospital_id,
+            )
+        )
+        profile = profile_result.scalar_one_or_none()
+        if body.get("department"):
+            dept_name = str(body["department"]).strip()
+            dept_result = await self.db.execute(
+                select(Department).where(
+                    Department.hospital_id == self.hospital_id,
+                    func.lower(Department.name) == dept_name.lower(),
+                )
+            )
+            dept = dept_result.scalar_one_or_none()
+            if not dept:
+                raise HTTPException(status_code=404, detail="Department not found")
+            md["department_id"] = str(dept.id)
+            md["department_name"] = dept.name
+            if profile:
+                profile.department_id = dept.id
+        if body.get("specialization") and profile:
+            profile.specialization = str(body["specialization"]).strip() or profile.specialization
+        if body.get("qualification") and profile:
+            profile.qualifications = [body["qualification"]]
+        u.user_metadata = md
         await self.db.commit()
         return {"id": str(u.id), "isActive": u.status == UserStatus.ACTIVE.value}
 

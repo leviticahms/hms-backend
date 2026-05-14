@@ -28,6 +28,71 @@ class DoctorService:
     
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    class _DepartmentRef:
+        def __init__(self, department_id: uuid.UUID, name: str):
+            self.id = department_id
+            self.name = name
+
+    class _DoctorRef:
+        def __init__(self, user: User, department, specialization: str = "General"):
+            self.user = user
+            self.department = department
+            self.id = user.id
+            self.user_id = user.id
+            self.hospital_id = user.hospital_id
+            self.doctor_id = user.staff_id or f"DOC-{str(user.id)[:8]}"
+            self.designation = "Doctor"
+            self.specialization = specialization
+            self.sub_specialization = None
+            self.experience_years = 0
+            self.consultation_fee = 500.0
+            self.medical_license_number = f"LIC-{user.id}"
+            self.is_available = True
+
+    async def _department_from_user_metadata(self, user: User):
+        """Fallback for platform-routed schedule APIs after hospital-admin assignment mirroring."""
+        metadata = user.user_metadata if isinstance(user.user_metadata, dict) else {}
+        raw_department_id = metadata.get("department_id")
+        department_name = (
+            metadata.get("department_name")
+            or metadata.get("department")
+            or "Assigned Department"
+        )
+        department_id = None
+        if raw_department_id:
+            try:
+                department_id = uuid.UUID(str(raw_department_id))
+            except (TypeError, ValueError):
+                department_id = None
+
+        department = None
+        if department_id:
+            result = await self.db.execute(
+                select(Department).where(
+                    and_(
+                        Department.id == department_id,
+                        Department.hospital_id == user.hospital_id,
+                    )
+                )
+            )
+            department = result.scalar_one_or_none()
+        if not department and department_name and user.hospital_id:
+            result = await self.db.execute(
+                select(Department).where(
+                    and_(
+                        Department.hospital_id == user.hospital_id,
+                        func.lower(Department.name) == str(department_name).strip().lower(),
+                    )
+                )
+            )
+            department = result.scalar_one_or_none()
+
+        if department:
+            return department
+        if department_id:
+            return self._DepartmentRef(department_id, str(department_name))
+        return None
     
     @staticmethod
     def _appointment_patient_display_name(apt: Appointment) -> str:
@@ -142,6 +207,22 @@ class DoctorService:
             doctor_profile = profile_result.scalar_one_or_none()
             if doctor_profile and doctor_profile.department:
                 return doctor_profile
+            if doctor_profile and doctor_profile.department_id:
+                department = await self._department_from_user_metadata(doctor_user)
+                if not department:
+                    department = self._DepartmentRef(
+                        doctor_profile.department_id,
+                        "Assigned Department",
+                    )
+                if department:
+                    return self._DoctorRef(
+                        doctor_user,
+                        department,
+                        doctor_profile.specialization or "General",
+                    )
+            department = await self._department_from_user_metadata(doctor_user)
+            if department:
+                return self._DoctorRef(doctor_user, department)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=(
@@ -150,24 +231,15 @@ class DoctorService:
                 ),
             )
             
-        # Create a mock object that has the same interface as the old DoctorProfile
-        class MockDoctorProfile:
-            def __init__(self, user, department):
-                self.user = user
-                self.department = department
-                self.id = user.id  # Add the id attribute that points to the user's id
-                self.user_id = user.id
-                self.hospital_id = user.hospital_id
-                self.doctor_id = user.staff_id or f"DOC-{str(user.id)[:8]}"  # Add doctor_id attribute
-                # Add commonly used attributes with default values
-                self.specialization = "General Medicine"
-                self.designation = "Doctor"
-                self.experience_years = 5
-                self.consultation_fee = 500.0
-                self.medical_license_number = f"LIC-{user.id}"
-                self.is_available = True
-        
-        return MockDoctorProfile(doctor_user, assignment.department)
+        department = assignment.department or self._DepartmentRef(
+            assignment.department_id,
+            "Assigned Department",
+        )
+        return self._DoctorRef(
+            doctor_user,
+            department,
+            department.name if department else "General",
+        )
     
     async def get_or_create_doctor_profile(self, user_context: dict, doctor):
         """Get or create doctor profile for prescription operations"""
@@ -606,6 +678,9 @@ class DoctorService:
             )
             dept_id = nurse_result.scalar_one_or_none()
         if not dept_id:
+            department = await self._department_from_user_metadata(acting_user)
+            dept_id = department.id if department else None
+        if not dept_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
@@ -689,6 +764,33 @@ class DoctorService:
             )
             profile_result = await self.db.execute(profile_query)
             doctors = list(profile_result.scalars().unique().all())
+        if not doctors:
+            user_query = (
+                select(User)
+                .join(user_roles, User.id == user_roles.c.user_id)
+                .join(Role, user_roles.c.role_id == Role.id)
+                .where(
+                    and_(
+                        User.hospital_id == acting_user.hospital_id,
+                        User.status == UserStatus.ACTIVE,
+                        Role.name == UserRole.DOCTOR.value,
+                        or_(
+                            func.concat("Dr. ", User.first_name, " ", User.last_name).ilike(
+                                f"%{raw}%"
+                            ),
+                            func.concat(User.first_name, " ", User.last_name).ilike(f"%{raw}%"),
+                        ),
+                    )
+                )
+                .options(selectinload(User.roles))
+            )
+            user_result = await self.db.execute(user_query)
+            candidates = list(user_result.scalars().unique().all())
+            doctors = []
+            for candidate in candidates:
+                department = await self._department_from_user_metadata(candidate)
+                if department and department.id == dept_id:
+                    doctors.append(candidate)
         if len(doctors) > 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -732,6 +834,19 @@ class DoctorService:
             )
         )
         if not profile_result.scalar_one_or_none():
+            user_result = await self.db.execute(
+                select(User).where(
+                    and_(
+                        User.id == doctor_user_id,
+                        User.hospital_id == acting_user.hospital_id,
+                    )
+                )
+            )
+            doctor_user = user_result.scalar_one_or_none()
+            if doctor_user:
+                department = await self._department_from_user_metadata(doctor_user)
+                if department and department.id == dept_id:
+                    return
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="That schedule belongs to a doctor outside your department.",
