@@ -351,7 +351,7 @@ async def get_doctor_dashboard_overview(
 # TODAY'S APPOINTMENTS
 # ============================================================================
 
-@router.get("/appointments/today")
+# Duplicate disabled: use GET /api/v1/doctor-appointment-tracking/appointments/today.
 async def get_todays_appointments(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session)

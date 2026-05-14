@@ -144,7 +144,7 @@ async def delete_schedule_slot(
 # APPOINTMENT MANAGEMENT
 # ============================================================================
 
-@router.get("/appointments")
+# Duplicate disabled: use GET /api/v1/doctor-sidebar/appointments for the doctor portal list.
 async def get_doctor_appointments(
     date_from: Optional[str] = Query(None, pattern="^\\d{4}-\\d{2}-\\d{2}$"),
     date_to: Optional[str] = Query(None, pattern="^\\d{4}-\\d{2}-\\d{2}$"),
@@ -170,7 +170,7 @@ async def get_doctor_appointments(
     return success_response(message="Appointments retrieved successfully", data=result)
 
 
-@router.get("/appointments/{appointment_ref}")
+# Duplicate disabled: use GET /api/v1/doctor-appointment-tracking/appointments/{appointment_ref}/tracking.
 async def get_appointment_details(
     appointment_ref: str,
     current_user: User = Depends(require_doctor()),
@@ -263,7 +263,7 @@ async def get_patient_consultation_details(
     return success_response(message="Patient consultation details retrieved successfully", data=result)
 
 
-@router.post("/consultation/medical-record")
+# Duplicate disabled: use POST /api/v1/doctor-patient-records/medical-records.
 async def create_medical_record(
     request: CreateMedicalRecordRequest,
     current_user: User = Depends(require_doctor()),
@@ -295,7 +295,7 @@ async def create_medical_record(
     return success_response(message="Medical record created successfully", data=result)
 
 
-@router.get("/patients/search")
+# Duplicate disabled: use GET /api/v1/doctor-patient-records/patients/search.
 async def search_patients(
     query: str = Query(..., min_length=2),
     limit: int = Query(10, ge=1, le=50),
