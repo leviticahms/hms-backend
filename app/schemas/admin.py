@@ -427,6 +427,31 @@ class WardCreate(BaseModel):
     oxygen_supply: bool = False
     nurse_station_location: Optional[str] = None
 
+    @field_validator("phone", "head_nurse", "nurse_station_location", "visiting_hours", mode="before")
+    @classmethod
+    def empty_strings_to_none(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("ward_type", mode="before")
+    @classmethod
+    def normalize_ward_type(cls, value):
+        if value is None:
+            return value
+        raw = str(value).strip().upper().replace("-", "_").replace(" ", "_")
+        return {
+            "GENERAL_WARD": "GENERAL",
+            "PRIVATE_ROOM": "PRIVATE",
+            "PRIVATE_WARD": "PRIVATE",
+            "ICU_WARD": "ICU",
+            "EMERGENCY_WARD": "EMERGENCY",
+            "MATERNITY_WARD": "MATERNITY",
+            "PEDIATRIC_WARD": "PEDIATRIC",
+            "SURGICAL_WARD": "SURGICAL",
+            "CARDIAC_WARD": "CARDIAC",
+        }.get(raw, raw)
+
 
 class WardUpdate(BaseModel):
     """Ward update request"""
@@ -443,6 +468,26 @@ class WardUpdate(BaseModel):
     isolation_capability: Optional[bool] = None
     oxygen_supply: Optional[bool] = None
     nurse_station_location: Optional[str] = None
+
+    @field_validator("phone", "head_nurse", "nurse_station_location", "visiting_hours", "ward_type", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        if isinstance(value, str):
+            raw = value.strip().upper().replace("-", "_").replace(" ", "_")
+            return {
+                "GENERAL_WARD": "GENERAL",
+                "PRIVATE_ROOM": "PRIVATE",
+                "PRIVATE_WARD": "PRIVATE",
+                "ICU_WARD": "ICU",
+                "EMERGENCY_WARD": "EMERGENCY",
+                "MATERNITY_WARD": "MATERNITY",
+                "PEDIATRIC_WARD": "PEDIATRIC",
+                "SURGICAL_WARD": "SURGICAL",
+                "CARDIAC_WARD": "CARDIAC",
+            }.get(raw, value)
+        return value
 
 
 class WardStatusUpdate(BaseModel):

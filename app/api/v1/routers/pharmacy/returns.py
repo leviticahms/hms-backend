@@ -68,10 +68,10 @@ async def create_patient_return(
     return_record = await service.create_patient_return(
         hospital_id=current_user.hospital_id,
         returned_by=current_user.id,
-        **return_data.dict()
+        **return_data.model_dump()
     )
     await db.commit()
-    return SuccessResponse(success=True, message="Patient return created", data={"return_id": str(return_record.id)}).dict()
+    return SuccessResponse(success=True, message="Patient return created", data={"return_id": str(return_record.id)}).model_dump(mode="json")
 
 
 @router.post("/supplier", response_model=dict, status_code=status.HTTP_201_CREATED)
@@ -86,10 +86,10 @@ async def create_supplier_return(
     return_record = await service.create_supplier_return(
         hospital_id=current_user.hospital_id,
         returned_by=current_user.id,
-        **return_data.dict()
+        **return_data.model_dump()
     )
     await db.commit()
-    return SuccessResponse(success=True, message="Supplier return created", data={"return_id": str(return_record.id)}).dict()
+    return SuccessResponse(success=True, message="Supplier return created", data={"return_id": str(return_record.id)}).model_dump(mode="json")
 
 
 @router.get("", response_model=dict)
@@ -107,4 +107,4 @@ async def list_returns(
         ReturnOut.model_validate(return_record).model_dump(mode="json")
         for return_record in returns_list
     ]
-    return SuccessResponse(success=True, message=f"Found {len(returns_list)} returns", data={"returns": returns_data}).dict()
+    return SuccessResponse(success=True, message=f"Found {len(returns_list)} returns", data={"returns": returns_data}).model_dump(mode="json")

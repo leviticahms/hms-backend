@@ -2093,7 +2093,8 @@ class HospitalAdminService:
         
         # Check if user has staff role
         user_roles = [role.name for role in user.roles]
-        if primary_staff_role_for_display(user_roles) is None:
+        primary_role = primary_staff_role_for_display(user_roles)
+        if primary_role is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "NOT_STAFF_USER", "message": "User is not a staff member"}
@@ -2170,7 +2171,8 @@ class HospitalAdminService:
         user.updated_at = datetime.utcnow()
         
         await self.db.commit()
-        await self._mirror_platform_user_if_configured(user.id)
+        if self.platform_db is not None:
+            await self._mirror_staff_auth_to_platform(user.id, primary_role)
         
         return {
             "user_id": str(user.id),
@@ -3252,8 +3254,19 @@ class HospitalAdminService:
                 detail={"code": "WARD_CODE_EXISTS", "message": "Ward with this code already exists"}
             )
         
-        # Validate ward type
-        ward_type = ward_data['ward_type']
+        # Validate ward type. Accept UI labels like "General Ward" in addition to enum values.
+        ward_type_raw = str(ward_data['ward_type']).strip().upper().replace("-", "_").replace(" ", "_")
+        ward_type = {
+            "GENERAL_WARD": "GENERAL",
+            "PRIVATE_ROOM": "PRIVATE",
+            "PRIVATE_WARD": "PRIVATE",
+            "ICU_WARD": "ICU",
+            "EMERGENCY_WARD": "EMERGENCY",
+            "MATERNITY_WARD": "MATERNITY",
+            "PEDIATRIC_WARD": "PEDIATRIC",
+            "SURGICAL_WARD": "SURGICAL",
+            "CARDIAC_WARD": "CARDIAC",
+        }.get(ward_type_raw, ward_type_raw)
         if ward_type not in [wt.value for wt in WardType]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -3273,7 +3286,7 @@ class HospitalAdminService:
             
             # Verify the staff member has NURSE role
             user_roles = [role.name for role in head_nurse.roles]
-            if UserRole.NURSE not in user_roles:
+            if not any(normalize_staff_role_name(role_name) == UserRole.NURSE.value for role_name in user_roles):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={"code": "NOT_A_NURSE", "message": f"Staff member '{head_nurse_name}' is not a nurse"}
@@ -3465,6 +3478,7 @@ class HospitalAdminService:
         names like ``head_nurse`` directly (that triggers async MissingGreenlet).
         """
         from app.models.hospital import Ward
+        from app.core.enums import WardType
         from app.core.utils import parse_time_string
 
         result = await self.db.execute(
@@ -3518,7 +3532,7 @@ class HospitalAdminService:
                         },
                     )
                 nurse_roles = [r.name for r in head_nurse_user.roles]
-                if UserRole.NURSE not in nurse_roles:
+                if not any(normalize_staff_role_name(role_name) == UserRole.NURSE.value for role_name in nurse_roles):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail={
@@ -3541,7 +3555,7 @@ class HospitalAdminService:
                         detail={"code": "HEAD_NURSE_NOT_FOUND", "message": "Head nurse not found in this hospital"},
                     )
                 nurse_roles = [r.name for r in head_nurse.roles]
-                if UserRole.NURSE not in nurse_roles:
+                if not any(normalize_staff_role_name(role_name) == UserRole.NURSE.value for role_name in nurse_roles):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail={
@@ -3558,6 +3572,28 @@ class HospitalAdminService:
 
         if "floor_number" in data and data["floor_number"] is not None:
             data["floor"] = str(data.pop("floor_number"))
+
+        if "ward_type" in data and data["ward_type"] is not None:
+            ward_type_raw = str(data["ward_type"]).strip().upper().replace("-", "_").replace(" ", "_")
+            data["ward_type"] = {
+                "GENERAL_WARD": "GENERAL",
+                "PRIVATE_ROOM": "PRIVATE",
+                "PRIVATE_WARD": "PRIVATE",
+                "ICU_WARD": "ICU",
+                "EMERGENCY_WARD": "EMERGENCY",
+                "MATERNITY_WARD": "MATERNITY",
+                "PEDIATRIC_WARD": "PEDIATRIC",
+                "SURGICAL_WARD": "SURGICAL",
+                "CARDIAC_WARD": "CARDIAC",
+            }.get(ward_type_raw, ward_type_raw)
+            if data["ward_type"] not in [wt.value for wt in WardType]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "INVALID_WARD_TYPE",
+                        "message": f"Invalid ward type. Must be one of: {', '.join([wt.value for wt in WardType])}",
+                    },
+                )
 
         if "nurse_station_location" in data:
             loc = data.pop("nurse_station_location")
