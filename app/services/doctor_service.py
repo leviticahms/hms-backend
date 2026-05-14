@@ -13,6 +13,9 @@ from fastapi import HTTPException, status
 from app.models.user import User, Role, user_roles
 from app.models.patient import PatientProfile, Appointment, MedicalRecord, Admission
 from app.models.hospital import Department, StaffDepartmentAssignment
+from app.models.doctor import DoctorProfile
+from app.models.nurse import NurseProfile
+from app.models.receptionist import ReceptionistProfile
 from app.models.schedule import DoctorSchedule
 from app.core.enums import UserRole, AppointmentStatus, UserStatus, DayOfWeek
 from app.core.utils import generate_patient_ref, parse_date_string, validate_medicine_id
@@ -123,9 +126,28 @@ class DoctorService:
         assignment = assignment_result.scalars().first()
         
         if not assignment:
+            profile_result = await self.db.execute(
+                select(DoctorProfile)
+                .where(
+                    and_(
+                        DoctorProfile.user_id == staff_uuid,
+                        DoctorProfile.hospital_id == doctor_user.hospital_id,
+                    )
+                )
+                .options(
+                    selectinload(DoctorProfile.user),
+                    selectinload(DoctorProfile.department),
+                )
+            )
+            doctor_profile = profile_result.scalar_one_or_none()
+            if doctor_profile and doctor_profile.department:
+                return doctor_profile
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Doctor department assignment not found. Please contact administrator."
+                detail=(
+                    "Doctor department assignment not found. Assign the doctor to a department "
+                    "or set department_id on the doctor profile."
+                ),
             )
             
         # Create a mock object that has the same interface as the old DoctorProfile
@@ -547,18 +569,49 @@ class DoctorService:
                 detail="Hospital context required to manage doctor schedules.",
             )
         r = await self.db.execute(
-            select(StaffDepartmentAssignment.department_id).where(
+            select(StaffDepartmentAssignment.department_id)
+            .where(
                 and_(
                     StaffDepartmentAssignment.staff_id == acting_user.id,
                     StaffDepartmentAssignment.is_active == True,
                 )
             )
+            .order_by(
+                StaffDepartmentAssignment.is_primary.desc(),
+                StaffDepartmentAssignment.effective_from.desc(),
+            )
+            .limit(1)
         )
         dept_id = r.scalar_one_or_none()
         if not dept_id:
+            receptionist_result = await self.db.execute(
+                select(ReceptionistProfile.department_id).where(
+                    and_(
+                        ReceptionistProfile.user_id == acting_user.id,
+                        ReceptionistProfile.hospital_id == acting_user.hospital_id,
+                        ReceptionistProfile.is_active == True,
+                    )
+                )
+            )
+            dept_id = receptionist_result.scalar_one_or_none()
+        if not dept_id:
+            nurse_result = await self.db.execute(
+                select(NurseProfile.department_id).where(
+                    and_(
+                        NurseProfile.user_id == acting_user.id,
+                        NurseProfile.hospital_id == acting_user.hospital_id,
+                        NurseProfile.is_active == True,
+                    )
+                )
+            )
+            dept_id = nurse_result.scalar_one_or_none()
+        if not dept_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="No active department assignment found. Ask your admin to assign you to a department.",
+                detail=(
+                    "No active department found. Ask your admin to assign you to a department "
+                    "or set department_id on your staff profile."
+                ),
             )
         return dept_id
     
@@ -598,7 +651,7 @@ class DoctorService:
                 and_(
                     User.hospital_id == acting_user.hospital_id,
                     User.status == UserStatus.ACTIVE,
-                    Role.name == UserRole.DOCTOR,
+                    Role.name == UserRole.DOCTOR.value,
                     or_(
                         func.concat("Dr. ", User.first_name, " ", User.last_name).ilike(
                             f"%{raw}%"
@@ -611,6 +664,31 @@ class DoctorService:
         )
         result = await self.db.execute(q)
         doctors = list(result.scalars().unique().all())
+        if not doctors:
+            profile_query = (
+                select(User)
+                .join(user_roles, User.id == user_roles.c.user_id)
+                .join(Role, user_roles.c.role_id == Role.id)
+                .join(DoctorProfile, DoctorProfile.user_id == User.id)
+                .where(
+                    and_(
+                        User.hospital_id == acting_user.hospital_id,
+                        User.status == UserStatus.ACTIVE,
+                        Role.name == UserRole.DOCTOR.value,
+                        DoctorProfile.department_id == dept_id,
+                        DoctorProfile.hospital_id == acting_user.hospital_id,
+                        or_(
+                            func.concat("Dr. ", User.first_name, " ", User.last_name).ilike(
+                                f"%{raw}%"
+                            ),
+                            func.concat(User.first_name, " ", User.last_name).ilike(f"%{raw}%"),
+                        ),
+                    )
+                )
+                .options(selectinload(User.roles))
+            )
+            profile_result = await self.db.execute(profile_query)
+            doctors = list(profile_result.scalars().unique().all())
         if len(doctors) > 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -642,7 +720,18 @@ class DoctorService:
                 )
             )
         )
-        if not r.scalar_one_or_none():
+        if r.scalar_one_or_none():
+            return
+        profile_result = await self.db.execute(
+            select(DoctorProfile.id).where(
+                and_(
+                    DoctorProfile.user_id == doctor_user_id,
+                    DoctorProfile.department_id == dept_id,
+                    DoctorProfile.hospital_id == acting_user.hospital_id,
+                )
+            )
+        )
+        if not profile_result.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="That schedule belongs to a doctor outside your department.",
