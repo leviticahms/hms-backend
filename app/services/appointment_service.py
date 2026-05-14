@@ -20,6 +20,8 @@ from app.core.utils import generate_appointment_ref, generate_patient_ref
 from app.utils.hospital_id_resolve import resolve_effective_hospital_id
 from app.utils.receptionist_serializers import build_receptionist_patient_full_payload
 
+DEFAULT_APPOINTMENT_SLOT_MINUTES = 30
+
 
 def _normalize_appointment_time_parts(appointment_time: str) -> tuple[str, str]:
     """Return (HH:MM for slot match, HH:MM:SS for DB)."""
@@ -122,8 +124,8 @@ class AppointmentService:
         if not doctor_schedule:
             return []
 
-        # Slot length must be set on the doctor's schedule — no invented defaults
-        slot_mins = doctor_schedule.slot_duration_minutes
+        # Simplified schedule creation hides slot length; use a stable internal default.
+        slot_mins = doctor_schedule.slot_duration_minutes or DEFAULT_APPOINTMENT_SLOT_MINUTES
         if slot_mins is None or slot_mins < 15:
             return []
 
@@ -199,6 +201,7 @@ class AppointmentService:
             )
             .order_by(
                 (DoctorSchedule.doctor_id == doctor_user_id).desc(),
+                (DoctorSchedule.effective_from == date_iso).desc(),
                 DoctorSchedule.created_at.desc(),
             )
             .limit(1)

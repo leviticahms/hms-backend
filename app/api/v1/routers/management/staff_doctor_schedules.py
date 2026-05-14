@@ -78,7 +78,7 @@ async def staff_get_doctor_schedule_template(
     current_user: User = Depends(require_receptionist_or_nurse()),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """Weekly template (DoctorSchedule rows) for a doctor in your department."""
+    """Date-specific schedule slots for a doctor in your department."""
     svc = DoctorService(db)
     result = await svc.get_schedule_slots_for_target_doctor(current_user, doctor_name)
     return success_response(message="Schedule configuration retrieved successfully", data=result)
@@ -91,7 +91,7 @@ async def staff_create_doctor_schedule_slot(
     current_user: User = Depends(require_receptionist_or_nurse()),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """Add one weekday template for a doctor in your department."""
+    """Add one date-specific availability slot for a doctor in your department."""
     svc = DoctorService(db)
     result = await svc.create_schedule_slot_for_staff(
         current_user, doctor_name, body.model_dump()

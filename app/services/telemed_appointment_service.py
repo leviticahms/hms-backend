@@ -139,6 +139,7 @@ class TeleAppointmentService:
         Raises 400 if doctor has no schedule for that day or slot is outside working hours.
         """
         day_of_week = scheduled_start.strftime("%A").upper()
+        date_iso = scheduled_start.date().isoformat()
         result = await self.db.execute(
             select(DoctorSchedule)
             .where(
@@ -146,7 +147,11 @@ class TeleAppointmentService:
                 DoctorSchedule.doctor_id == doctor_id,
                 DoctorSchedule.day_of_week == day_of_week,
                 DoctorSchedule.is_active == True,
+                or_(DoctorSchedule.effective_from.is_(None), DoctorSchedule.effective_from <= date_iso),
+                or_(DoctorSchedule.effective_to.is_(None), DoctorSchedule.effective_to >= date_iso),
             )
+            .order_by((DoctorSchedule.effective_from == date_iso).desc(), DoctorSchedule.created_at.desc())
+            .limit(1)
         )
         schedule = result.scalar_one_or_none()
         if not schedule:

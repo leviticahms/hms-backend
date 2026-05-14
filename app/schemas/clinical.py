@@ -289,36 +289,60 @@ class ReceptionistPatientPatch(BaseModel):
 
 class AppointmentSchedulingCreate(BaseModel):
     """Schedule appointment for an existing patient. Provide patient_ref and/or patient_name."""
+    model_config = ConfigDict(populate_by_name=True)
 
     patient_ref: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices("patient_ref", "patientId", "patient_id", "patientRef"),
         description="Patient ID from registration (e.g. PAT-...). Omit if patient_name uniquely resolves.",
     )
     patient_name: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices("patient_name", "patientName", "name"),
         description="Full name as registered (e.g. 'Jane Doe'). Used to resolve patient when patient_ref is omitted.",
     )
-    doctor_name: str  # "Dr. John Smith"
+    doctor_name: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("doctor_name", "doctorName", "doctor"),
+        description="Doctor display name, e.g. Dr. John Smith. Optional if doctor_id is provided.",
+    )
+    doctor_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("doctor_id", "doctorId", "doctor_user_id", "doctorUserId"),
+        description="Doctor user UUID. Preferred when available.",
+    )
     department_id: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices("department_id", "departmentId"),
         description="Optional department UUID. If omitted/invalid, the department is derived from the selected doctor.",
     )
     department_name: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices("department_name", "departmentName", "department"),
         description="Optional department name/code (e.g. Cardiology). If omitted, derive from doctor assignment.",
     )
-    appointment_date: str  # YYYY-MM-DD
-    appointment_time: str  # HH:MM
-    appointment_type: str = "CONSULTATION"  # CONSULTATION, FOLLOW_UP, EMERGENCY
-    chief_complaint: Optional[str] = None
+    appointment_date: str = Field(validation_alias=AliasChoices("appointment_date", "appointmentDate", "date"))
+    appointment_time: str = Field(validation_alias=AliasChoices("appointment_time", "appointmentTime", "time"))
+    appointment_type: str = Field(
+        default="CONSULTATION",
+        validation_alias=AliasChoices("appointment_type", "appointmentType", "type"),
+    )
+    chief_complaint: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("chief_complaint", "chiefComplaint", "reason", "complaint"),
+    )
     notes: Optional[str] = None
 
     @model_validator(mode="after")
-    def require_patient_identifier(self):
+    def require_patient_and_doctor_identifiers(self):
         ref = (self.patient_ref or "").strip()
         name = (self.patient_name or "").strip()
         if not ref and not name:
             raise ValueError("Either patient_ref or patient_name is required")
+        doctor_ref = (self.doctor_id or "").strip()
+        doctor_name = (self.doctor_name or "").strip()
+        if not doctor_ref and not doctor_name:
+            raise ValueError("Either doctor_id or doctor_name is required")
         return self
 
 
@@ -411,33 +435,39 @@ class AppointmentUpdate(BaseModel):
 
     appointment_date: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("appointment_date", "date"),
+        validation_alias=AliasChoices("appointment_date", "appointmentDate", "date"),
     )
     appointment_time: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("appointment_time", "time"),
+        validation_alias=AliasChoices("appointment_time", "appointmentTime", "time"),
     )
-    doctor_name: Optional[str] = None
+    doctor_name: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("doctor_name", "doctorName", "doctor"),
+    )
     doctor_id: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("doctor_id", "doctorId"),
+        validation_alias=AliasChoices("doctor_id", "doctorId", "doctor_user_id", "doctorUserId"),
     )
     department_name: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("department_name", "department"),
+        validation_alias=AliasChoices("department_name", "departmentName", "department"),
     )
-    department_id: Optional[str] = None
+    department_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("department_id", "departmentId"),
+    )
     patient_ref: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("patient_ref", "patientId"),
+        validation_alias=AliasChoices("patient_ref", "patientId", "patient_id", "patientRef"),
     )
     appointment_type: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("appointment_type", "type"),
+        validation_alias=AliasChoices("appointment_type", "appointmentType", "type"),
     )
     chief_complaint: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("chief_complaint", "reason"),
+        validation_alias=AliasChoices("chief_complaint", "chiefComplaint", "reason", "complaint"),
     )
     notes: Optional[str] = None
     status: Optional[str] = None  # CONFIRMED, CANCELLED, RESCHEDULED

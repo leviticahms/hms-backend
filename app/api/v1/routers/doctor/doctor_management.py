@@ -95,13 +95,13 @@ async def create_schedule_slot(
     db: AsyncSession = Depends(get_db_session)
 ):
     """
-    Create new schedule slot for doctor.
+    Create a date-specific schedule slot for doctor.
     
     Access Control:
     - Only Doctors can create their schedule slots
     """
     doctor_service = DoctorService(db)
-    result = await doctor_service.create_schedule_slot(request.dict(), current_user)
+    result = await doctor_service.create_schedule_slot(request.model_dump(), current_user)
     return success_response(message="Schedule slot created successfully", data=result)
 
 
@@ -119,7 +119,7 @@ async def update_schedule_slot(
     - Only Doctors can update their own schedule slots
     """
     doctor_service = DoctorService(db)
-    result = await doctor_service.update_schedule_slot(schedule_id, request.dict(exclude_unset=True), current_user)
+    result = await doctor_service.update_schedule_slot(schedule_id, request.model_dump(exclude_unset=True), current_user)
     return success_response(message="Schedule slot updated successfully", data=result)
 
 

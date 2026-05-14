@@ -17,6 +17,8 @@ from app.models.schedule import DoctorSchedule
 from app.core.enums import UserRole, AppointmentStatus, UserStatus, DayOfWeek
 from app.core.utils import generate_patient_ref, parse_date_string, validate_medicine_id
 
+DEFAULT_APPOINTMENT_SLOT_MINUTES = 30
+
 
 class DoctorService:
     """Service for doctor operations"""
@@ -36,6 +38,28 @@ class DoctorService:
         parts = [user.first_name or "", user.last_name or ""]
         name = " ".join(p for p in parts if p).strip()
         return name or "Patient"
+
+    @staticmethod
+    def _schedule_date_parts(schedule_data: Dict[str, Any]) -> tuple[str, str]:
+        """Return (date_iso, day_of_week) for the simplified schedule API."""
+        raw_date = schedule_data.get("date") or schedule_data.get("effective_from")
+        if raw_date:
+            date_iso = datetime.strptime(str(raw_date), "%Y-%m-%d").date().isoformat()
+            return date_iso, datetime.strptime(date_iso, "%Y-%m-%d").strftime("%A").upper()
+        # Backward compatibility for old callers during rollout.
+        day_of_week = str(schedule_data.get("day_of_week") or "").strip().upper()
+        if not day_of_week:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="date is required in YYYY-MM-DD format.",
+            )
+        return "", day_of_week
+
+    @staticmethod
+    def _schedule_date_from_row(schedule: DoctorSchedule) -> Optional[str]:
+        if schedule.effective_from and schedule.effective_from == schedule.effective_to:
+            return schedule.effective_from
+        return schedule.effective_from
     
     # ============================================================================
     # USER CONTEXT AND VALIDATION
@@ -208,11 +232,22 @@ class DoctorService:
             current_date = start_date + timedelta(days=i)
             day_name = current_date.strftime("%A").upper()
             
-            # Find schedule for this day (normalize DB casing)
-            day_schedule = next(
-                (s for s in schedules if (s.day_of_week or "").strip().upper() == day_name),
-                None,
+            # Find schedule for this date; exact date rows override older weekly rows.
+            current_iso = current_date.isoformat()
+            day_candidates = [
+                s for s in schedules
+                if (s.day_of_week or "").strip().upper() == day_name
+                and (not s.effective_from or s.effective_from <= current_iso)
+                and (not s.effective_to or s.effective_to >= current_iso)
+            ]
+            day_candidates.sort(
+                key=lambda s: (
+                    s.effective_from == current_iso and s.effective_to == current_iso,
+                    s.created_at,
+                ),
+                reverse=True,
             )
+            day_schedule = day_candidates[0] if day_candidates else None
             
             # Get appointments for this day
             day_appointments = [a for a in appointments if a.appointment_date == current_date.isoformat()]
@@ -331,15 +366,9 @@ class DoctorService:
         for schedule in schedules:
             schedule_slots.append({
                 "schedule_id": str(schedule.id),
-                "day_of_week": schedule.day_of_week,
+                "date": self._schedule_date_from_row(schedule),
                 "start_time": schedule.start_time.strftime("%H:%M"),
                 "end_time": schedule.end_time.strftime("%H:%M"),
-                "slot_duration_minutes": schedule.slot_duration_minutes,
-                "break_start_time": schedule.break_start_time.strftime("%H:%M") if schedule.break_start_time else None,
-                "break_end_time": schedule.break_end_time.strftime("%H:%M") if schedule.break_end_time else None,
-                "max_patients_per_slot": schedule.max_patients_per_slot,
-                "is_active": schedule.is_active,
-                "notes": schedule.notes
             })
         
         doc_first = (getattr(doctor.user, "first_name", None) or "").strip()
@@ -357,40 +386,43 @@ class DoctorService:
         user_context = self.get_user_context(current_user)
         doctor = await self.get_doctor_profile(user_context)
         
-        # Check if schedule already exists for this day
+        schedule_date, day_of_week = self._schedule_date_parts(schedule_data)
+
+        # Check if schedule already exists for this date.
+        conflict_filters = [
+            DoctorSchedule.doctor_id == doctor.user_id,
+            DoctorSchedule.day_of_week == day_of_week,
+            DoctorSchedule.is_active == True,
+        ]
+        if schedule_date:
+            conflict_filters.extend(
+                [
+                    DoctorSchedule.effective_from == schedule_date,
+                    DoctorSchedule.effective_to == schedule_date,
+                ]
+            )
         existing_schedule = await self.db.execute(
             select(DoctorSchedule)
-            .where(
-                and_(
-                    DoctorSchedule.doctor_id == doctor.user_id,
-                    DoctorSchedule.day_of_week == schedule_data["day_of_week"]
-                )
-            )
+            .where(and_(*conflict_filters))
         )
         
         if existing_schedule.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Schedule already exists for {schedule_data['day_of_week']}"
+                detail=f"Schedule already exists for {schedule_date or day_of_week}"
             )
         
         # Parse time strings
         start_time = datetime.strptime(schedule_data["start_time"], "%H:%M").time()
         end_time = datetime.strptime(schedule_data["end_time"], "%H:%M").time()
         
-        break_start_time = None
-        break_end_time = None
-        if schedule_data.get("break_start_time"):
-            break_start_time = datetime.strptime(schedule_data["break_start_time"], "%H:%M").time()
-        if schedule_data.get("break_end_time"):
-            break_end_time = datetime.strptime(schedule_data["break_end_time"], "%H:%M").time()
-        
-        if "slot_duration_minutes" not in schedule_data or schedule_data.get("slot_duration_minutes") is None:
+        if start_time >= end_time:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="slot_duration_minutes is required (minutes per bookable slot, 15–120).",
+                detail="start_time must be before end_time.",
             )
-        slot_mins = int(schedule_data["slot_duration_minutes"])
+
+        slot_mins = int(schedule_data.get("slot_duration_minutes") or DEFAULT_APPOINTMENT_SLOT_MINUTES)
         if slot_mins < 15 or slot_mins > 120:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -402,15 +434,17 @@ class DoctorService:
             id=uuid.uuid4(),
             hospital_id=uuid.UUID(str(user_context["hospital_id"])),
             doctor_id=doctor.user_id,
-            day_of_week=schedule_data["day_of_week"],
+            day_of_week=day_of_week,
             start_time=start_time,
             end_time=end_time,
             slot_duration_minutes=slot_mins,
-            max_patients_per_slot=schedule_data.get("max_patients_per_slot", 1),
-            break_start_time=break_start_time,
-            break_end_time=break_end_time,
-            notes=schedule_data.get("notes"),
-            is_emergency_available=schedule_data.get("is_emergency_available", False)
+            max_patients_per_slot=1,
+            break_start_time=None,
+            break_end_time=None,
+            effective_from=schedule_date or None,
+            effective_to=schedule_date or None,
+            notes=None,
+            is_emergency_available=False
         )
         
         self.db.add(schedule)
@@ -418,7 +452,7 @@ class DoctorService:
         
         return {
             "schedule_id": str(schedule.id),
-            "day_of_week": schedule.day_of_week,
+            "date": self._schedule_date_from_row(schedule),
             "start_time": schedule.start_time.strftime("%H:%M"),
             "end_time": schedule.end_time.strftime("%H:%M"),
             "message": "Schedule slot created successfully"
@@ -447,12 +481,22 @@ class DoctorService:
                 detail="Schedule slot not found"
             )
         
-        # Update fields
-        for field, value in update_data.items():
-            if field in ["start_time", "end_time", "break_start_time", "break_end_time"] and value:
-                setattr(schedule, field, datetime.strptime(value, "%H:%M").time())
-            elif hasattr(schedule, field) and value is not None:
-                setattr(schedule, field, value)
+        if "date" in update_data and update_data["date"] is not None:
+            date_iso, day_of_week = self._schedule_date_parts(update_data)
+            schedule.day_of_week = day_of_week
+            schedule.effective_from = date_iso
+            schedule.effective_to = date_iso
+
+        if update_data.get("start_time"):
+            schedule.start_time = datetime.strptime(update_data["start_time"], "%H:%M").time()
+        if update_data.get("end_time"):
+            schedule.end_time = datetime.strptime(update_data["end_time"], "%H:%M").time()
+
+        if schedule.start_time >= schedule.end_time:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="start_time must be before end_time.",
+            )
         
         await self.db.commit()
         
@@ -628,19 +672,9 @@ class DoctorService:
             schedule_slots.append(
                 {
                     "schedule_id": str(schedule.id),
-                    "day_of_week": schedule.day_of_week,
+                    "date": self._schedule_date_from_row(schedule),
                     "start_time": schedule.start_time.strftime("%H:%M"),
                     "end_time": schedule.end_time.strftime("%H:%M"),
-                    "slot_duration_minutes": schedule.slot_duration_minutes,
-                    "break_start_time": schedule.break_start_time.strftime("%H:%M")
-                    if schedule.break_start_time
-                    else None,
-                    "break_end_time": schedule.break_end_time.strftime("%H:%M")
-                    if schedule.break_end_time
-                    else None,
-                    "max_patients_per_slot": schedule.max_patients_per_slot,
-                    "is_active": schedule.is_active,
-                    "notes": schedule.notes,
                 }
             )
         dept_nm = await self.get_staff_department_name(acting_user)
@@ -661,35 +695,37 @@ class DoctorService:
         doctor_user = await self.get_target_doctor_in_hospital_for_staff_by_name(
             acting_user, doctor_name
         )
+        schedule_date, day_of_week = self._schedule_date_parts(schedule_data)
+        conflict_filters = [
+            DoctorSchedule.doctor_id == doctor_user.id,
+            DoctorSchedule.day_of_week == day_of_week,
+            DoctorSchedule.hospital_id == acting_user.hospital_id,
+            DoctorSchedule.is_active == True,
+        ]
+        if schedule_date:
+            conflict_filters.extend(
+                [
+                    DoctorSchedule.effective_from == schedule_date,
+                    DoctorSchedule.effective_to == schedule_date,
+                ]
+            )
         existing_schedule = await self.db.execute(
             select(DoctorSchedule)
-            .where(
-                and_(
-                    DoctorSchedule.doctor_id == doctor_user.id,
-                    DoctorSchedule.day_of_week == schedule_data["day_of_week"],
-                    DoctorSchedule.hospital_id == acting_user.hospital_id,
-                )
-            )
+            .where(and_(*conflict_filters))
         )
         if existing_schedule.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Schedule already exists for {schedule_data['day_of_week']}",
+                detail=f"Schedule already exists for {schedule_date or day_of_week}",
             )
         start_time = datetime.strptime(schedule_data["start_time"], "%H:%M").time()
         end_time = datetime.strptime(schedule_data["end_time"], "%H:%M").time()
-        break_start_time = None
-        break_end_time = None
-        if schedule_data.get("break_start_time"):
-            break_start_time = datetime.strptime(schedule_data["break_start_time"], "%H:%M").time()
-        if schedule_data.get("break_end_time"):
-            break_end_time = datetime.strptime(schedule_data["break_end_time"], "%H:%M").time()
-        if "slot_duration_minutes" not in schedule_data or schedule_data.get("slot_duration_minutes") is None:
+        if start_time >= end_time:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="slot_duration_minutes is required (minutes per bookable slot, 15–120).",
+                detail="start_time must be before end_time.",
             )
-        slot_mins = int(schedule_data["slot_duration_minutes"])
+        slot_mins = int(schedule_data.get("slot_duration_minutes") or DEFAULT_APPOINTMENT_SLOT_MINUTES)
         if slot_mins < 15 or slot_mins > 120:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -700,22 +736,24 @@ class DoctorService:
             id=uuid.uuid4(),
             hospital_id=acting_user.hospital_id,
             doctor_id=doctor_user.id,
-            day_of_week=schedule_data["day_of_week"],
+            day_of_week=day_of_week,
             start_time=start_time,
             end_time=end_time,
             slot_duration_minutes=slot_mins,
-            max_patients_per_slot=schedule_data.get("max_patients_per_slot", 1),
-            break_start_time=break_start_time,
-            break_end_time=break_end_time,
-            notes=schedule_data.get("notes"),
-            is_emergency_available=schedule_data.get("is_emergency_available", False),
+            max_patients_per_slot=1,
+            break_start_time=None,
+            break_end_time=None,
+            effective_from=schedule_date or None,
+            effective_to=schedule_date or None,
+            notes=None,
+            is_emergency_available=False,
         )
         self.db.add(schedule)
         await self.db.commit()
         return {
             "schedule_id": str(schedule.id),
             "doctor_user_id": str(doctor_user.id),
-            "day_of_week": schedule.day_of_week,
+            "date": self._schedule_date_from_row(schedule),
             "start_time": schedule.start_time.strftime("%H:%M"),
             "end_time": schedule.end_time.strftime("%H:%M"),
             "message": "Schedule slot created successfully",
@@ -747,11 +785,20 @@ class DoctorService:
                 detail="Schedule slot not found",
             )
         await self._ensure_schedule_doctor_in_staff_department(acting_user, schedule.doctor_id)
-        for field, value in update_data.items():
-            if field in ["start_time", "end_time", "break_start_time", "break_end_time"] and value:
-                setattr(schedule, field, datetime.strptime(value, "%H:%M").time())
-            elif hasattr(schedule, field) and value is not None:
-                setattr(schedule, field, value)
+        if "date" in update_data and update_data["date"] is not None:
+            date_iso, day_of_week = self._schedule_date_parts(update_data)
+            schedule.day_of_week = day_of_week
+            schedule.effective_from = date_iso
+            schedule.effective_to = date_iso
+        if update_data.get("start_time"):
+            schedule.start_time = datetime.strptime(update_data["start_time"], "%H:%M").time()
+        if update_data.get("end_time"):
+            schedule.end_time = datetime.strptime(update_data["end_time"], "%H:%M").time()
+        if schedule.start_time >= schedule.end_time:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="start_time must be before end_time.",
+            )
         await self.db.commit()
         return {
             "schedule_id": str(schedule.id),

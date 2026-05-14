@@ -64,6 +64,22 @@ def _normalize_opd_appointment_type(raw: Any) -> str:
     return s[:50]
 
 
+def _normalize_opd_appointment_status(raw: Any) -> Optional[str]:
+    """Map receptionist UI labels to appointment status values stored in the DB."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    s = str(raw).strip().upper()
+    if s in ("SCHEDULED", "BOOKED", "CONFIRM", "CONFIRMED"):
+        return AppointmentStatus.CONFIRMED.value
+    if s in ("PENDING", "REQUEST", "REQUESTED"):
+        return AppointmentStatus.REQUESTED.value
+    if s in ("CANCEL", "CANCELED", "CANCELLED"):
+        return AppointmentStatus.CANCELLED.value
+    if s in ("DONE", "COMPLETE", "COMPLETED"):
+        return AppointmentStatus.COMPLETED.value
+    return s
+
+
 def _normalize_opd_blood_group(bg: Optional[str]) -> Optional[str]:
     if not bg:
         return None
@@ -886,13 +902,55 @@ class ClinicalService:
             appointment_data.get("department_name"),
             hid,
         )
-        doctor = await self.get_doctor_by_name(
-            appointment_data["doctor_name"],
-            hid,
-            department_id=department.id if department else None,
-        )
+        if appointment_data.get("doctor_id"):
+            try:
+                doctor_user_id = uuid.UUID(str(appointment_data["doctor_id"]).strip())
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="doctor_id must be a valid UUID",
+                )
+            doctor_result = await self.db.execute(
+                select(User)
+                .join(user_roles, User.id == user_roles.c.user_id)
+                .join(Role, user_roles.c.role_id == Role.id)
+                .where(
+                    and_(
+                        User.id == doctor_user_id,
+                        User.hospital_id == hospital_id_uuid,
+                        Role.name == UserRole.DOCTOR.value,
+                    )
+                )
+            )
+            doctor = doctor_result.scalar_one_or_none()
+            if not doctor:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Doctor not found for provided doctor_id",
+                )
+        else:
+            doctor = await self.get_doctor_by_name(
+                appointment_data.get("doctor_name"),
+                hid,
+                department_id=department.id if department else None,
+            )
         if department is None:
             department = await self.get_primary_department_for_doctor(doctor.id, hospital_id_uuid)
+        else:
+            in_dept = await self.db.execute(
+                select(StaffDepartmentAssignment.id).where(
+                    and_(
+                        StaffDepartmentAssignment.staff_id == doctor.id,
+                        StaffDepartmentAssignment.department_id == department.id,
+                        StaffDepartmentAssignment.is_active == True,
+                    )
+                )
+            )
+            if not in_dept.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Selected doctor is not assigned to this department",
+                )
 
         try:
             time_hhmmss = _appointment_time_to_db_hms(appointment_data.get("appointment_time"))
@@ -929,9 +987,8 @@ class ClinicalService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    f"This doctor has no published {requested_weekday} availability. "
-                    "Doctor schedules are weekly templates (day_of_week + time), not date-wise rows. "
-                    "Choose a date that matches one of the doctor's scheduled weekdays or add that weekday schedule."
+                    f"This doctor has no published availability on {appt_date} ({requested_weekday}). "
+                    "Create a doctor schedule for that date with start_time and end_time first."
                 ),
             )
         match = next((s for s in day_slots if s["time"] == time_hhmm), None)
@@ -1035,6 +1092,7 @@ class ClinicalService:
         page = filters.get("page", 1)
         limit = filters.get("limit", 50)
         offset = (page - 1) * limit
+        status_filter = _normalize_opd_appointment_status(filters.get("status"))
         
         query = select(Appointment).where(
             and_(
@@ -1059,8 +1117,8 @@ class ClinicalService:
                 )
             )
         
-        if filters.get("status"):
-            query = query.where(Appointment.status == filters["status"])
+        if status_filter:
+            query = query.where(Appointment.status == status_filter)
         
         # Get total count
         count_query = select(func.count(Appointment.id)).where(
@@ -1079,8 +1137,8 @@ class ClinicalService:
                     func.concat('Dr. ', User.first_name, ' ', User.last_name) == filters["doctor_name"]
                 )
             )
-        if filters.get("status"):
-            count_query = count_query.where(Appointment.status == filters["status"])
+        if status_filter:
+            count_query = count_query.where(Appointment.status == status_filter)
         
         total_result = await self.db.execute(count_query)
         total_appointments = total_result.scalar() or 0
@@ -1095,7 +1153,7 @@ class ClinicalService:
             "date": today,
             "department": filters.get("department_name"),
             "doctor": filters.get("doctor_name"),
-            "status_filter": filters.get("status"),
+            "status_filter": status_filter,
             "appointments": appointment_list,
             "pagination": {
                 "page": page,
@@ -1234,7 +1292,7 @@ class ClinicalService:
                     and_(
                         User.id == doctor_user_id,
                         User.hospital_id == user_context["hospital_id"],
-                        Role.name == UserRole.DOCTOR,
+                        Role.name == UserRole.DOCTOR.value,
                     )
                 )
             )
@@ -1276,7 +1334,9 @@ class ClinicalService:
         if "notes" in modification_data:
             appointment.notes = modification_data.get("notes")
         if "status" in modification_data and modification_data.get("status") is not None:
-            appointment.status = str(modification_data["status"]).strip().upper()
+            status_value = _normalize_opd_appointment_status(modification_data["status"])
+            if status_value:
+                appointment.status = status_value
 
         need_slot_check = any(
             modification_data.get(k) is not None

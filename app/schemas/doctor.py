@@ -61,27 +61,17 @@ class OutcomeStatus(str, Enum):
 # ============================================================================
 
 class ScheduleCreate(BaseModel):
-    """Request to create doctor schedule"""
-    day_of_week: str = Field(..., pattern="^(MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY)$")
+    """Request to create one date-specific doctor availability window."""
+    date: str = Field(..., pattern="^\\d{4}-\\d{2}-\\d{2}$", description="Appointment date, YYYY-MM-DD")
     start_time: str = Field(..., pattern="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
     end_time: str = Field(..., pattern="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
-    slot_duration_minutes: int = Field(..., ge=15, le=120, description="Minutes per slot — required; drives patient booking")
-    break_start_time: Optional[str] = Field(None, pattern="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
-    break_end_time: Optional[str] = Field(None, pattern="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
-    max_patients_per_slot: int = Field(1, ge=1, le=5)
-    notes: Optional[str] = None
 
 
 class ScheduleUpdate(BaseModel):
-    """Request to update doctor schedule"""
+    """Request to update one date-specific doctor availability window."""
+    date: Optional[str] = Field(None, pattern="^\\d{4}-\\d{2}-\\d{2}$")
     start_time: Optional[str] = Field(None, pattern="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
     end_time: Optional[str] = Field(None, pattern="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
-    slot_duration_minutes: Optional[int] = Field(None, ge=15, le=120)
-    break_start_time: Optional[str] = Field(None, pattern="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
-    break_end_time: Optional[str] = Field(None, pattern="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
-    max_patients_per_slot: Optional[int] = Field(None, ge=1, le=5)
-    is_active: Optional[bool] = None
-    notes: Optional[str] = None
 
 
 class AppointmentUpdate(BaseModel):
@@ -262,15 +252,9 @@ class AdvancedSearchFilter(BaseModel):
 class ScheduleSlotOut(BaseModel):
     """Doctor schedule slot"""
     schedule_id: str
-    day_of_week: str
+    date: Optional[str] = None
     start_time: str
     end_time: str
-    slot_duration_minutes: int
-    break_start_time: Optional[str]
-    break_end_time: Optional[str]
-    max_patients_per_slot: int
-    is_active: bool
-    notes: Optional[str]
 
 
 class AppointmentDetailsOut(BaseModel):

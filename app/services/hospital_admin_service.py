@@ -2490,20 +2490,36 @@ class HospitalAdminService:
                 detail={"code": "DOCTOR_NOT_FOUND", "message": "Doctor not found in this hospital"}
             )
         
+        raw_date = schedule_data.get("date") or schedule_data.get("effective_from")
+        if raw_date:
+            schedule_date = datetime.strptime(str(raw_date), "%Y-%m-%d").date().isoformat()
+            day_of_week = datetime.strptime(schedule_date, "%Y-%m-%d").strftime("%A").upper()
+        else:
+            schedule_date = None
+            day_of_week = str(schedule_data['day_of_week']).strip().upper()
+
         # Check for schedule conflicts
+        conflict_filters = [
+            DoctorSchedule.doctor_id.in_([doctor.user_id, doctor_id]),
+            func.upper(func.trim(DoctorSchedule.day_of_week)) == day_of_week,
+            DoctorSchedule.is_active == True,
+        ]
+        if schedule_date:
+            conflict_filters.extend(
+                [
+                    DoctorSchedule.effective_from == schedule_date,
+                    DoctorSchedule.effective_to == schedule_date,
+                ]
+            )
         existing_schedule = await self.db.execute(
             select(DoctorSchedule).where(
-                and_(
-                    DoctorSchedule.doctor_id.in_([doctor.user_id, doctor_id]),
-                    func.upper(func.trim(DoctorSchedule.day_of_week)) == str(schedule_data['day_of_week']).strip().upper(),
-                    DoctorSchedule.is_active == True
-                )
+                and_(*conflict_filters)
             )
         )
         if existing_schedule.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail={"code": "SCHEDULE_CONFLICT", "message": f"Schedule already exists for {schedule_data['day_of_week']}"}
+                detail={"code": "SCHEDULE_CONFLICT", "message": f"Schedule already exists for {schedule_date or day_of_week}"}
             )
         
         # Parse time strings
@@ -2517,33 +2533,7 @@ class HospitalAdminService:
                 detail={"code": "INVALID_TIME_RANGE", "message": "Start time must be before end time"}
             )
         
-        # Parse break times if provided
-        break_start_time = None
-        break_end_time = None
-        if schedule_data.get('break_start_time') and schedule_data.get('break_end_time'):
-            break_start_time = parse_time_string(schedule_data['break_start_time'])
-            break_end_time = parse_time_string(schedule_data['break_end_time'])
-            
-            # Validate break time range
-            if break_start_time >= break_end_time:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={"code": "INVALID_BREAK_TIME", "message": "Break start time must be before break end time"}
-                )
-            
-            # Validate break times are within working hours
-            if break_start_time < start_time or break_end_time > end_time:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={"code": "BREAK_OUT_OF_RANGE", "message": "Break times must be within working hours"}
-                )
-        
-        if "slot_duration_minutes" not in schedule_data or schedule_data.get("slot_duration_minutes") is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "SLOT_DURATION_REQUIRED", "message": "slot_duration_minutes is required (15–120)."},
-            )
-        slot_mins = int(schedule_data["slot_duration_minutes"])
+        slot_mins = int(schedule_data.get("slot_duration_minutes") or 30)
         if slot_mins < 15 or slot_mins > 120:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -2555,17 +2545,17 @@ class HospitalAdminService:
             id=uuid.uuid4(),
             hospital_id=self.hospital_id,
             doctor_id=doctor.user_id,
-            day_of_week=str(schedule_data['day_of_week']).strip().upper(),
+            day_of_week=day_of_week,
             start_time=start_time,
             end_time=end_time,
             slot_duration_minutes=slot_mins,
-            break_start_time=break_start_time,
-            break_end_time=break_end_time,
-            max_patients_per_slot=schedule_data.get('max_patients_per_slot', 1),
-            is_emergency_available=schedule_data.get('is_emergency_available', False),
-            effective_from=schedule_data.get('effective_from'),
-            effective_to=schedule_data.get('effective_to'),
-            notes=schedule_data.get('notes')
+            break_start_time=None,
+            break_end_time=None,
+            max_patients_per_slot=1,
+            is_emergency_available=False,
+            effective_from=schedule_date,
+            effective_to=schedule_date,
+            notes=None
         )
         
         self.db.add(schedule)
@@ -2574,7 +2564,7 @@ class HospitalAdminService:
         return {
             "schedule_id": str(schedule.id),
             "doctor_id": str(doctor_id),
-            "day_of_week": schedule.day_of_week,
+            "date": schedule.effective_from,
             "message": "Doctor schedule created successfully"
         }
     
@@ -2623,18 +2613,9 @@ class HospitalAdminService:
         for schedule in schedules:
             schedule_list.append({
                 "id": str(schedule.id),
-                "day_of_week": schedule.day_of_week,
+                "date": schedule.effective_from,
                 "start_time": schedule.start_time.strftime("%H:%M") if schedule.start_time else None,
                 "end_time": schedule.end_time.strftime("%H:%M") if schedule.end_time else None,
-                "slot_duration_minutes": schedule.slot_duration_minutes,
-                "break_start_time": schedule.break_start_time.strftime("%H:%M") if schedule.break_start_time else None,
-                "break_end_time": schedule.break_end_time.strftime("%H:%M") if schedule.break_end_time else None,
-                "max_patients_per_slot": schedule.max_patients_per_slot,
-                "is_emergency_available": schedule.is_emergency_available,
-                "is_active": schedule.is_active,
-                "effective_from": schedule.effective_from,
-                "effective_to": schedule.effective_to,
-                "notes": schedule.notes,
                 "created_at": schedule.created_at.isoformat(),
                 "updated_at": schedule.updated_at.isoformat()
             })
