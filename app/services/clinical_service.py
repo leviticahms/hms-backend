@@ -134,6 +134,129 @@ class ClinicalService:
         self.db = db
         self.platform_db = platform_db
         self.security = SecurityManager()
+
+    async def _get_primary_staff_assignment(
+        self,
+        staff_id: Any,
+        hospital_id: Optional[Any] = None,
+    ) -> Optional[StaffDepartmentAssignment]:
+        """
+        Pick one active department assignment when staff have multiple rows.
+        Prefers ``is_primary``, then most recently created (avoids MultipleResultsFound).
+        """
+        sid = staff_id if isinstance(staff_id, uuid.UUID) else uuid.UUID(str(staff_id))
+        conditions = [
+            StaffDepartmentAssignment.staff_id == sid,
+            StaffDepartmentAssignment.is_active == True,
+        ]
+        if hospital_id is not None:
+            hid = (
+                hospital_id
+                if isinstance(hospital_id, uuid.UUID)
+                else uuid.UUID(str(hospital_id))
+            )
+            conditions.append(StaffDepartmentAssignment.hospital_id == hid)
+        result = await self.db.execute(
+            select(StaffDepartmentAssignment)
+            .where(and_(*conditions))
+            .options(selectinload(StaffDepartmentAssignment.department))
+            .order_by(
+                StaffDepartmentAssignment.is_primary.desc(),
+                StaffDepartmentAssignment.effective_from.desc(),
+                StaffDepartmentAssignment.created_at.desc(),
+            )
+            .limit(1)
+        )
+        return result.scalars().first()
+
+    async def _department_from_user_metadata(self, user: User) -> Optional[Department]:
+        """Resolve department from user_metadata when assignment/profile rows are missing."""
+        metadata = user.user_metadata if isinstance(user.user_metadata, dict) else {}
+        raw_department_id = metadata.get("department_id")
+        department_name = (
+            metadata.get("department_name")
+            or metadata.get("department")
+            or ""
+        )
+        department_id = None
+        if raw_department_id:
+            try:
+                department_id = uuid.UUID(str(raw_department_id))
+            except (TypeError, ValueError):
+                department_id = None
+
+        if department_id and user.hospital_id:
+            result = await self.db.execute(
+                select(Department).where(
+                    and_(
+                        Department.id == department_id,
+                        Department.hospital_id == user.hospital_id,
+                    )
+                )
+                .limit(1)
+            )
+            department = result.scalars().first()
+            if department:
+                return department
+
+        if department_name and user.hospital_id:
+            result = await self.db.execute(
+                select(Department).where(
+                    and_(
+                        Department.hospital_id == user.hospital_id,
+                        func.lower(func.trim(Department.name))
+                        == str(department_name).strip().lower(),
+                    )
+                )
+                .limit(1)
+            )
+            return result.scalars().first()
+        return None
+
+    async def _resolve_ipd_department(
+        self,
+        user: User,
+        hospital_id: Optional[Any] = None,
+    ) -> Optional[Department]:
+        """
+        Department for IPD access. Tolerates multiple staff assignments or profile rows.
+        """
+        assignment = await self._get_primary_staff_assignment(user.id, hospital_id)
+        if assignment:
+            if assignment.department:
+                return assignment.department
+            if assignment.department_id:
+                dept = await self.db.get(Department, assignment.department_id)
+                if dept:
+                    return dept
+
+        hid = hospital_id or user.hospital_id
+        if hid is not None:
+            hid_uuid = hid if isinstance(hid, uuid.UUID) else uuid.UUID(str(hid))
+            from app.models.doctor import DoctorProfile
+            from app.models.nurse import NurseProfile
+
+            for model in (DoctorProfile, NurseProfile):
+                profile_result = await self.db.execute(
+                    select(model)
+                    .where(
+                        and_(
+                            model.user_id == user.id,
+                            model.hospital_id == hid_uuid,
+                        )
+                    )
+                    .options(selectinload(model.department))
+                    .limit(1)
+                )
+                profile = profile_result.scalars().first()
+                if profile and profile.department:
+                    return profile.department
+                if profile and profile.department_id:
+                    dept = await self.db.get(Department, profile.department_id)
+                    if dept:
+                        return dept
+
+        return await self._department_from_user_metadata(user)
     
     # ============================================================================
     # USER CONTEXT AND VALIDATION
@@ -209,18 +332,10 @@ class ClinicalService:
                 detail="Receptionist user not found. Please contact administrator."
             )
             
-        # Get department assignment
-        assignment_result = await self.db.execute(
-            select(StaffDepartmentAssignment)
-            .where(
-                and_(
-                    StaffDepartmentAssignment.staff_id == user_context["user_id"],
-                    StaffDepartmentAssignment.is_active == True,
-                )
-            )
-            .options(selectinload(StaffDepartmentAssignment.department))
+        assignment = await self._get_primary_staff_assignment(
+            user_context["user_id"],
+            user_context.get("hospital_id"),
         )
-        assignment = assignment_result.scalar_one_or_none()
 
         # Legacy/fallback compatibility:
         # some setups have ReceptionistProfile metadata but no StaffDepartmentAssignment row
@@ -1609,9 +1724,11 @@ class ClinicalService:
                 )
             )
             .options(selectinload(PatientProfile.user))
+            .order_by(desc(PatientProfile.created_at))
+            .limit(1)
         )
         
-        patient = patient_result.scalar_one_or_none()
+        patient = patient_result.scalars().first()
         if not patient:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1628,9 +1745,11 @@ class ClinicalService:
                     Admission.is_active == True
                 )
             )
+            .order_by(desc(Admission.admission_date))
+            .limit(1)
         )
         
-        active_admission = existing_admission.scalar_one_or_none()
+        active_admission = existing_admission.scalars().first()
         if active_admission:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -2284,35 +2403,56 @@ class ClinicalService:
     
     async def get_admission_by_number_with_department_check(self, admission_number: str, user_profile) -> Admission:
         """Get admission with department access control"""
-        result = await self.db.execute(
-            select(Admission)
-            .where(
-                and_(
-                    Admission.admission_number == admission_number,
-                    Admission.hospital_id == user_profile.hospital_id,
-                    Admission.department_id == user_profile.department_id  # Department-based access
-                )
-            )
-            .options(
-                selectinload(Admission.patient).selectinload(PatientProfile.user),
-                selectinload(Admission.doctor),
-                selectinload(Admission.department)
-            )
-        )
-        
-        admission = result.scalar_one_or_none()
-        if not admission:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Admission {admission_number} not found in your department"
-            )
-        
-        return admission
+        return await self._fetch_admission_for_ipd_department(admission_number, user_profile)
     
     # ============================================================================
     # HELPER METHODS FOR IPD
     # ============================================================================
     
+    async def _fetch_admission_for_ipd_department(self, admission_number: str, user_profile) -> Admission:
+        """Load one admission scoped to the caller's department (id or name)."""
+        hid = user_profile.hospital_id
+        dept_id = user_profile.department_id
+        dept_name = (
+            (getattr(getattr(user_profile, "department", None), "name", None) or "")
+            .strip()
+            .lower()
+        )
+        dept_match = [Admission.department_id == dept_id]
+        if dept_name:
+            dept_match.append(
+                Admission.department_id.in_(
+                    select(Department.id).where(
+                        Department.hospital_id == hid,
+                        func.lower(func.trim(Department.name)) == dept_name,
+                    )
+                )
+            )
+        result = await self.db.execute(
+            select(Admission)
+            .where(
+                and_(
+                    Admission.admission_number == admission_number,
+                    Admission.hospital_id == hid,
+                    or_(*dept_match),
+                )
+            )
+            .options(
+                selectinload(Admission.patient).selectinload(PatientProfile.user),
+                selectinload(Admission.doctor),
+                selectinload(Admission.department),
+            )
+            .order_by(desc(Admission.admission_date))
+            .limit(1)
+        )
+        admission = result.scalars().first()
+        if not admission:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Admission {admission_number} not found in your department",
+            )
+        return admission
+
     async def get_doctor_profile(self, user_context: dict):
         """Get doctor profile with department information"""
         # Get doctor user and their department assignment
@@ -2320,28 +2460,24 @@ class ClinicalService:
             select(User)
             .where(User.id == user_context["user_id"])
         )
-        doctor_user = doctor_result.scalar_one_or_none()
+        doctor_user = doctor_result.scalars().first()
         
         if not doctor_user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Doctor user not found. Please contact administrator."
             )
-            
-        # Get department assignment
-        assignment_result = await self.db.execute(
-            select(StaffDepartmentAssignment)
-            .where(StaffDepartmentAssignment.staff_id == user_context["user_id"])
-            .options(selectinload(StaffDepartmentAssignment.department))
+
+        department = await self._resolve_ipd_department(
+            doctor_user,
+            user_context.get("hospital_id"),
         )
-        assignment = assignment_result.scalar_one_or_none()
-        
-        if not assignment:
+        if not department:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Doctor department assignment not found. Please contact administrator."
+                detail="Doctor department assignment not found. Please contact administrator.",
             )
-            
+
         # Create a mock object that has the same interface as the old DoctorProfile
         class MockDoctorProfile:
             def __init__(self, user, department):
@@ -2360,7 +2496,7 @@ class ClinicalService:
                 self.medical_license_number = f"LIC-{user.id}"
                 self.is_available = True
         
-        return MockDoctorProfile(doctor_user, assignment.department)
+        return MockDoctorProfile(doctor_user, department)
     
     async def get_ipd_user_profile(self, user_context: dict):
         """Get user profile (nurse or doctor) with department information for IPD"""
@@ -2370,22 +2506,18 @@ class ClinicalService:
                 select(User)
                 .where(User.id == user_context["user_id"])
             )
-            nurse_user = nurse_result.scalar_one_or_none()
+            nurse_user = nurse_result.scalars().first()
             
             if not nurse_user:
                 return None
-                
-            # Get department assignment
-            assignment_result = await self.db.execute(
-                select(StaffDepartmentAssignment)
-                .where(StaffDepartmentAssignment.staff_id == user_context["user_id"])
-                .options(selectinload(StaffDepartmentAssignment.department))
+
+            department = await self._resolve_ipd_department(
+                nurse_user,
+                user_context.get("hospital_id"),
             )
-            assignment = assignment_result.scalar_one_or_none()
-            
-            if not assignment:
+            if not department:
                 return None
-                
+
             # Create a mock object that has the same interface as the old NurseProfile
             class MockNurseProfile:
                 def __init__(self, user, department):
@@ -2395,7 +2527,7 @@ class ClinicalService:
                     self.hospital_id = user.hospital_id
                     self.department_id = department.id
             
-            profile = MockNurseProfile(nurse_user, assignment.department)
+            profile = MockNurseProfile(nurse_user, department)
         elif user_context["role"] == UserRole.DOCTOR:
             profile = await self.get_doctor_profile(user_context)
         else:
@@ -2760,30 +2892,7 @@ class ClinicalService:
     
     async def get_admission_by_number_with_department_check(self, admission_number: str, user_profile) -> Admission:
         """Get admission with department access control"""
-        result = await self.db.execute(
-            select(Admission)
-            .where(
-                and_(
-                    Admission.admission_number == admission_number,
-                    Admission.hospital_id == user_profile.hospital_id,
-                    Admission.department_id == user_profile.department_id  # Department-based access
-                )
-            )
-            .options(
-                selectinload(Admission.patient).selectinload(PatientProfile.user),
-                selectinload(Admission.doctor),
-                selectinload(Admission.department)
-            )
-        )
-        
-        admission = result.scalar_one_or_none()
-        if not admission:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Admission {admission_number} not found in your department"
-            )
-        
-        return admission
+        return await self._fetch_admission_for_ipd_department(admission_number, user_profile)
 
     # ============================================================================
     # HELPER METHODS

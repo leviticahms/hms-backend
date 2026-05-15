@@ -275,8 +275,10 @@ async def debug_edit_patient(
             PatientProfile.hospital_id == hospital_id,
         )
         .options(selectinload(PatientProfile.user))
+        .order_by(PatientProfile.created_at.desc())
+        .limit(1)
     )
-    patient = result.scalar_one_or_none()
+    patient = result.scalars().first()
     if not patient or not patient.user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -30,6 +30,23 @@ def _hospital_line(h: Dict[str, Any]) -> str:
     return "<br/>".join(parts)
 
 
+def _timing_slots_label(med: Dict[str, Any]) -> str:
+    timing = med.get("timing")
+    if not isinstance(timing, dict):
+        timing = {}
+    parts: List[str] = []
+    if timing.get("morning"):
+        parts.append("Morning")
+    if timing.get("afternoon"):
+        parts.append("Afternoon")
+    if timing.get("night"):
+        parts.append("Night")
+    for t in timing.get("times") or []:
+        if t:
+            parts.append(_escape(str(t)))
+    return ", ".join(parts) if parts else ""
+
+
 def _medication_line(med: Dict[str, Any]) -> str:
     name = med.get("generic_name") or med.get("brand_name") or "Medicine"
     if med.get("strength"):
@@ -45,11 +62,14 @@ def _medication_line(med: Dict[str, Any]) -> str:
     else:
         duration_str = _escape(med.get("duration") or "")
     if dosage or freq or duration_str:
-        lines.append(f"  {dosage} {freq} {duration_str}".strip())
+        lines.append(f"  Dose: {dosage} &nbsp;|&nbsp; {freq} &nbsp;|&nbsp; {duration_str}".strip(" |"))
+    when = _timing_slots_label(med)
+    if when:
+        lines.append(f"  When: {when}")
     if med.get("before_food"):
-        lines.append("  Take before food")
+        lines.append("  Before meals (before lunch)")
     if med.get("after_food"):
-        lines.append("  Take after food")
+        lines.append("  After meals (after lunch)")
     if med.get("route") and str(med.get("route")).upper() != "ORAL":
         lines.append(f"  Route: {_escape(str(med['route']))}")
     if med.get("instructions"):

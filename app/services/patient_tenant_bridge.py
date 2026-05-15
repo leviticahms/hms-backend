@@ -44,8 +44,13 @@ async def upsert_tenant_user_from_platform_user(
     for role_name in role_names:
         if not role_name:
             continue
-        role_result = await tenant_db.execute(select(Role).where(Role.name == role_name))
-        tenant_role = role_result.scalar_one_or_none()
+        role_result = await tenant_db.execute(
+            select(Role)
+            .where(Role.name == role_name)
+            .order_by(Role.created_at.desc())
+            .limit(1)
+        )
+        tenant_role = role_result.scalars().first()
         if not tenant_role:
             tenant_role = Role(
                 id=uuid.uuid4(),

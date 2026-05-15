@@ -90,8 +90,20 @@ class MedicationTimingSchema(BaseModel):
 
 
 class PrescriptionMedicineCreate(BaseModel):
-    """Structured prescription item: full directions for PDF; no mandatory pharmacy ID."""
-    medicine_name: str = Field(..., description="Medicine name (brand or generic, free text)")
+    """Prescription line item — must resolve to an in-stock pharmacy ``Medicine`` (by id, SKU, or name)."""
+
+    medicine_id: Optional[str] = Field(
+        None,
+        description="Pharmacy Medicine UUID (preferred).",
+    )
+    medicine_code: Optional[str] = Field(
+        None,
+        description="Pharmacy SKU / medicine code when id is not sent.",
+    )
+    medicine_name: str = Field(
+        ...,
+        description="Display name; used to match pharmacy catalog when id/code omitted.",
+    )
     quantity: int = Field(..., description="Total quantity to dispense (requested_qty)", gt=0)
     dosage_text: str = Field(..., description="e.g. '1 tablet', '5ml'")
     frequency: str = Field(..., description="e.g. BD, TID, QID, OD, SOS, twice daily")
@@ -130,6 +142,68 @@ class PrescriptionResponse(BaseModel):
     total_medicines: int
     is_dispensed: bool
     created_at: str
+
+
+class PrescriptionMedicineOut(BaseModel):
+    """Medicine line for detail / edit forms and PDF source data."""
+
+    medicine_id: Optional[str] = None
+    medicine_code: Optional[str] = None
+    medicine_name: str
+    generic_name: Optional[str] = None
+    brand_name: Optional[str] = None
+    strength: Optional[str] = None
+    dosage_form: Optional[str] = None
+    dose: str = Field(..., description="Dosage text e.g. 1 tablet, 5ml")
+    frequency: str
+    quantity: int
+    duration_days: int
+    route: str = "ORAL"
+    morning: bool = False
+    afternoon: bool = False
+    night: bool = False
+    times: Optional[List[str]] = None
+    before_food: bool = Field(False, description="Take before meals / before lunch")
+    after_food: bool = Field(False, description="Take after meals / after lunch")
+    instructions: Optional[str] = None
+
+
+class PrescriptionDetailOut(BaseModel):
+    prescription_id: str
+    prescription_number: str
+    patient_ref: str
+    patient_name: str
+    doctor_name: str
+    prescription_date: str
+    diagnosis: Optional[str] = None
+    symptoms: Optional[str] = None
+    medicines: List[PrescriptionMedicineOut] = Field(default_factory=list)
+    general_instructions: Optional[str] = None
+    diet_instructions: Optional[str] = None
+    follow_up_date: Optional[str] = None
+    is_dispensed: bool = False
+    dispensed_at: Optional[str] = None
+    is_digitally_signed: bool = False
+    created_at: str
+    pdf_url: str = Field(
+        ...,
+        description="Relative path to download PDF: GET /api/v1/simple-prescription/prescriptions/{id}/pdf",
+    )
+
+
+class PrescriptionUpdateRequest(BaseModel):
+    """Doctor PATCH — only before dispense; medicines re-validated against pharmacy stock."""
+
+    diagnosis: Optional[str] = None
+    symptoms: Optional[str] = None
+    medicines: Optional[List[PrescriptionMedicineCreate]] = Field(
+        None,
+        description="Replace full medicine list when provided (at least one line)",
+    )
+    general_instructions: Optional[str] = None
+    diet_instructions: Optional[str] = None
+    follow_up_date: Optional[str] = Field(None, pattern="^\\d{4}-\\d{2}-\\d{2}$")
+    prescription_date: Optional[str] = Field(None, pattern="^\\d{4}-\\d{2}-\\d{2}$")
 
 
 # ============================================================================
@@ -249,6 +323,252 @@ def _stock_status(available_qty: int, reorder_level: Optional[int]) -> str:
     if available_qty <= threshold:
         return "LOW_STOCK"
     return "IN_STOCK"
+
+
+async def _available_medicine_qty(
+    db: AsyncSession, medicine: Medicine, hospital_uuid: uuid.UUID, today: date
+) -> int:
+    stock_result = await db.execute(
+        select(func.coalesce(func.sum(StockBatch.qty_on_hand - StockBatch.qty_reserved), 0)).where(
+            and_(
+                StockBatch.medicine_id == medicine.id,
+                StockBatch.hospital_id == hospital_uuid,
+                StockBatch.expiry_date > today,
+                StockBatch.qty_on_hand > 0,
+            )
+        )
+    )
+    return int(stock_result.scalar() or 0)
+
+
+async def _resolve_pharmacy_medicine(
+    db: AsyncSession,
+    hospital_uuid: uuid.UUID,
+    med: PrescriptionMedicineCreate,
+) -> Medicine:
+    """Resolve line item to an active pharmacy Medicine by id, SKU, or exact brand/generic name."""
+    if med.medicine_id and str(med.medicine_id).strip():
+        try:
+            uid = uuid.UUID(str(med.medicine_id).strip())
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid medicine_id: {med.medicine_id}",
+            )
+        row = (
+            await db.execute(
+                select(Medicine).where(
+                    and_(
+                        Medicine.id == uid,
+                        Medicine.hospital_id == hospital_uuid,
+                        Medicine.is_active == True,
+                    )
+                )
+            )
+        ).scalar_one_or_none()
+        if row:
+            return row
+
+    if med.medicine_code and str(med.medicine_code).strip():
+        code = str(med.medicine_code).strip()
+        row = (
+            await db.execute(
+                select(Medicine).where(
+                    and_(
+                        Medicine.hospital_id == hospital_uuid,
+                        Medicine.is_active == True,
+                        func.lower(func.coalesce(Medicine.sku, "")) == code.lower(),
+                    )
+                )
+            )
+        ).scalar_one_or_none()
+        if row:
+            return row
+
+    name = (med.medicine_name or "").strip()
+    if name:
+        row = (
+            await db.execute(
+                select(Medicine).where(
+                    and_(
+                        Medicine.hospital_id == hospital_uuid,
+                        Medicine.is_active == True,
+                        or_(
+                            func.lower(Medicine.generic_name) == name.lower(),
+                            func.lower(func.coalesce(Medicine.brand_name, "")) == name.lower(),
+                        ),
+                    )
+                )
+            )
+        ).scalar_one_or_none()
+        if row:
+            return row
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=(
+            f"Medicine not found in pharmacy inventory: {med.medicine_name!r}. "
+            "Use GET /api/v1/simple-prescription/doctor/medicines/search and prescribe by medicine_id."
+        ),
+    )
+
+
+def _medicine_line_json(medicine: Medicine, med: PrescriptionMedicineCreate, timing_json) -> dict:
+    return {
+        "medicine_id": str(medicine.id),
+        "medicine_code": getattr(medicine, "sku", None),
+        "brand_name": medicine.brand_name,
+        "generic_name": medicine.generic_name,
+        "strength": medicine.strength,
+        "dosage_form": medicine.dosage_form,
+        "manufacturer": medicine.manufacturer,
+        "quantity": med.quantity,
+        "dosage_text": med.dosage_text,
+        "frequency": med.frequency,
+        "timing": timing_json,
+        "before_food": med.before_food,
+        "after_food": med.after_food,
+        "duration_days": med.duration_days,
+        "route": med.route,
+        "instructions": med.instructions,
+    }
+
+
+async def _build_medications_json_from_request(
+    db: AsyncSession,
+    hospital_uuid: uuid.UUID,
+    medicines: List[PrescriptionMedicineCreate],
+) -> list[dict]:
+    today = date.today()
+    medications_json: list[dict] = []
+    for med in medicines:
+        timing_json = (
+            med.timing.model_dump() if med.timing is not None else None
+        )
+        medicine = await _resolve_pharmacy_medicine(db, hospital_uuid, med)
+        total_stock = await _available_medicine_qty(db, medicine, hospital_uuid, today)
+        if total_stock < med.quantity:
+            label = medicine.brand_name or medicine.generic_name
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Insufficient stock for {label}. "
+                    f"Available: {total_stock}, Required: {med.quantity}"
+                ),
+            )
+        medications_json.append(_medicine_line_json(medicine, med, timing_json))
+    return medications_json
+
+
+def _medicine_out_from_json(m: dict) -> PrescriptionMedicineOut:
+    timing = m.get("timing") if isinstance(m.get("timing"), dict) else {}
+    return PrescriptionMedicineOut(
+        medicine_id=m.get("medicine_id"),
+        medicine_code=m.get("medicine_code"),
+        medicine_name=(m.get("brand_name") or m.get("generic_name") or "Medicine"),
+        generic_name=m.get("generic_name"),
+        brand_name=m.get("brand_name"),
+        strength=m.get("strength"),
+        dosage_form=m.get("dosage_form"),
+        dose=str(m.get("dosage_text") or m.get("dosage") or ""),
+        frequency=str(m.get("frequency") or ""),
+        quantity=int(m.get("quantity") or 0),
+        duration_days=int(m.get("duration_days") or 0),
+        route=str(m.get("route") or "ORAL"),
+        morning=bool(timing.get("morning")),
+        afternoon=bool(timing.get("afternoon")),
+        night=bool(timing.get("night")),
+        times=timing.get("times"),
+        before_food=bool(m.get("before_food")),
+        after_food=bool(m.get("after_food")),
+        instructions=m.get("instructions"),
+    )
+
+
+def _prescription_detail_out(prescription: Prescription) -> PrescriptionDetailOut:
+    pid = str(prescription.id)
+    patient = prescription.patient
+    doctor = prescription.doctor
+    pname = ""
+    pref = ""
+    if patient and patient.user:
+        pname = f"{patient.user.first_name} {patient.user.last_name}".strip()
+        pref = patient.patient_id or ""
+    dname = "Dr. Unknown"
+    if doctor and doctor.user:
+        dname = f"Dr. {doctor.user.first_name} {doctor.user.last_name}".strip()
+    meds = [
+        _medicine_out_from_json(m)
+        for m in (prescription.medications or [])
+        if isinstance(m, dict)
+    ]
+    return PrescriptionDetailOut(
+        prescription_id=pid,
+        prescription_number=prescription.prescription_number,
+        patient_ref=pref,
+        patient_name=pname,
+        doctor_name=dname,
+        prescription_date=prescription.prescription_date or "",
+        diagnosis=prescription.diagnosis,
+        symptoms=prescription.symptoms,
+        medicines=meds,
+        general_instructions=prescription.general_instructions,
+        diet_instructions=prescription.diet_instructions,
+        follow_up_date=prescription.follow_up_date,
+        is_dispensed=bool(prescription.is_dispensed),
+        dispensed_at=prescription.dispensed_at,
+        is_digitally_signed=bool(prescription.is_digitally_signed),
+        created_at=prescription.created_at.isoformat() if prescription.created_at else "",
+        pdf_url=f"/api/v1/simple-prescription/prescriptions/{pid}/pdf",
+    )
+
+
+async def _load_prescription_scoped(
+    db: AsyncSession,
+    prescription_id: str,
+    hospital_id: uuid.UUID,
+) -> Prescription:
+    try:
+        rx_uuid = uuid.UUID(prescription_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid prescription_id",
+        )
+    result = await db.execute(
+        select(Prescription)
+        .where(
+            and_(
+                Prescription.id == rx_uuid,
+                Prescription.hospital_id == hospital_id,
+            )
+        )
+        .options(
+            selectinload(Prescription.patient).selectinload(PatientProfile.user),
+            selectinload(Prescription.doctor).selectinload(DoctorProfile.user),
+        )
+    )
+    prescription = result.scalar_one_or_none()
+    if not prescription:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Prescription not found",
+        )
+    return prescription
+
+
+def _assert_doctor_owns_prescription(prescription: Prescription, user_context: dict) -> None:
+    if user_context.get("role") != UserRole.DOCTOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied - Doctor role required",
+        )
+    doc_user_id = str(prescription.doctor.user_id) if prescription.doctor else None
+    if doc_user_id != user_context.get("user_id"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied - You can only edit your own prescriptions",
+        )
 
 
 @router.get("/doctor/medicines/search", response_model=List[MedicineSearchResult])
@@ -380,92 +700,10 @@ async def create_simple_prescription(
             detail=f"Patient not found: {prescription_data.patient_ref}"
         )
     
-    # Validate medicines: if medicine_id is provided, enforce pharmacy + stock;
-    # if only medicine_name is provided, accept as free-text (no stock check).
     hospital_uuid = uuid.UUID(user_context["hospital_id"])
-    today = date.today()
-    medications_json = []
-    for med in prescription_data.medicines:
-        timing_json = med.timing.dict() if med.timing is not None else None
-
-        medicine_id = getattr(med, "medicine_id", None)
-        if medicine_id:
-            # Linked to pharmacy medicine: validate and check stock
-            medicine_result = await db.execute(
-                select(Medicine).where(
-                    and_(
-                        Medicine.id == uuid.UUID(medicine_id),
-                        Medicine.hospital_id == hospital_uuid,
-                        Medicine.is_active == True,
-                    )
-                )
-            )
-            medicine = medicine_result.scalar_one_or_none()
-            if not medicine:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Medicine not found or inactive: {medicine_id}",
-                )
-            # Available = sum(qty_on_hand - qty_reserved) for non-expired batches
-            stock_result = await db.execute(
-                select(func.coalesce(func.sum(StockBatch.qty_on_hand - StockBatch.qty_reserved), 0)).where(
-                    and_(
-                        StockBatch.medicine_id == medicine.id,
-                        StockBatch.hospital_id == hospital_uuid,
-                        StockBatch.expiry_date > today,
-                        StockBatch.qty_on_hand > 0,
-                    )
-                )
-            )
-            total_stock = int(stock_result.scalar() or 0)
-            if total_stock < med.quantity:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Insufficient stock for {medicine.brand_name or medicine.generic_name}. Available: {total_stock}, Required: {med.quantity}",
-                )
-
-            medications_json.append(
-                {
-                    "medicine_id": str(medicine.id),
-                    "medicine_code": getattr(medicine, "sku", None),
-                    "brand_name": medicine.brand_name,
-                    "generic_name": medicine.generic_name,
-                    "strength": medicine.strength,
-                    "dosage_form": medicine.dosage_form,
-                    "manufacturer": medicine.manufacturer,
-                    "quantity": med.quantity,
-                    "dosage_text": med.dosage_text,
-                    "frequency": med.frequency,
-                    "timing": timing_json,
-                    "before_food": med.before_food,
-                    "after_food": med.after_food,
-                    "duration_days": med.duration_days,
-                    "route": med.route,
-                    "instructions": med.instructions,
-                }
-            )
-        else:
-            # Free-text medicine (no pharmacy record / stock check)
-            medications_json.append(
-                {
-                    "medicine_id": None,
-                    "medicine_code": None,
-                    "brand_name": med.medicine_name,
-                    "generic_name": med.medicine_name,
-                    "strength": None,
-                    "dosage_form": None,
-                    "manufacturer": None,
-                    "quantity": med.quantity,
-                    "dosage_text": med.dosage_text,
-                    "frequency": med.frequency,
-                    "timing": timing_json,
-                    "before_food": med.before_food,
-                    "after_food": med.after_food,
-                    "duration_days": med.duration_days,
-                    "route": med.route,
-                    "instructions": med.instructions,
-                }
-            )
+    medications_json = await _build_medications_json_from_request(
+        db, hospital_uuid, prescription_data.medicines
+    )
     
     # Generate prescription number
     prescription_number = generate_prescription_number()
@@ -583,6 +821,95 @@ async def get_doctor_prescriptions(
         ))
     
     return results
+
+
+@router.get(
+    "/doctor/prescriptions/{prescription_id}",
+    response_model=PrescriptionDetailOut,
+    summary="Get prescription detail (doctor, own only)",
+)
+async def get_doctor_prescription_detail(
+    prescription_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> PrescriptionDetailOut:
+    """Full prescription for edit form: medicines with dose, frequency, morning/afternoon/night, before/after meals."""
+    user_context = get_user_context(current_user)
+    await get_doctor_profile(user_context, db)
+    if not user_context.get("hospital_id"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Hospital context required")
+    prescription = await _load_prescription_scoped(
+        db, prescription_id, uuid.UUID(user_context["hospital_id"])
+    )
+    _assert_doctor_owns_prescription(prescription, user_context)
+    return _prescription_detail_out(prescription)
+
+
+@router.patch(
+    "/doctor/prescriptions/{prescription_id}",
+    response_model=PrescriptionDetailOut,
+    summary="Edit prescription (doctor, before dispense)",
+)
+async def update_doctor_prescription(
+    prescription_id: str,
+    body: PrescriptionUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> PrescriptionDetailOut:
+    """
+    Update an existing prescription (doctor only, not yet dispensed).
+
+    Supports editing diagnosis, symptoms, instructions, follow-up date, and the full medicine list
+    (name/dose/frequency, morning/afternoon/night, before/after lunch via ``before_food``/``after_food``).
+    Each medicine must exist in pharmacy inventory with sufficient stock.
+    """
+    user_context = get_user_context(current_user)
+    await get_doctor_profile(user_context, db)
+    if not user_context.get("hospital_id"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Hospital context required")
+    hospital_uuid = uuid.UUID(user_context["hospital_id"])
+
+    prescription = await _load_prescription_scoped(db, prescription_id, hospital_uuid)
+    _assert_doctor_owns_prescription(prescription, user_context)
+
+    if prescription.is_dispensed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot edit a prescription that has already been dispensed",
+        )
+
+    data = body.model_dump(exclude_unset=True)
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields to update",
+        )
+
+    if "diagnosis" in data:
+        prescription.diagnosis = data["diagnosis"]
+    if "symptoms" in data:
+        prescription.symptoms = data["symptoms"]
+    if "general_instructions" in data:
+        prescription.general_instructions = data["general_instructions"]
+    if "diet_instructions" in data:
+        prescription.diet_instructions = data["diet_instructions"]
+    if "follow_up_date" in data:
+        prescription.follow_up_date = data["follow_up_date"]
+    if "prescription_date" in data:
+        prescription.prescription_date = data["prescription_date"]
+    if "medicines" in data:
+        if not body.medicines:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="medicines must contain at least one item",
+            )
+        prescription.medications = await _build_medications_json_from_request(
+            db, hospital_uuid, body.medicines
+        )
+
+    await db.commit()
+    await db.refresh(prescription)
+    return _prescription_detail_out(prescription)
 
 
 # ============================================================================
@@ -971,79 +1298,42 @@ async def get_patient_prescriptions(
 # COMMON ENDPOINTS - Get Prescription Details
 # ============================================================================
 
-@router.get("/prescriptions/{prescription_id}")
+@router.get(
+    "/prescriptions/{prescription_id}",
+    response_model=PrescriptionDetailOut,
+    summary="Get prescription detail (doctor / patient / pharmacist)",
+)
 async def get_prescription_details(
     prescription_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
-):
+    db: AsyncSession = Depends(get_db_session),
+) -> PrescriptionDetailOut:
     """
-    Get detailed prescription information.
-    
-    Access Control:
-    - **Who can access:** Doctors (own), Pharmacists/Receptionists (hospital), Patients (own)
+    Get detailed prescription (structured medicines with timing for UI and PDF).
+
+    Access: Doctor (own), Patient (own), Pharmacist / Receptionist / Hospital Admin (hospital).
     """
     user_context = get_user_context(current_user)
-    
-    # Get prescription
-    prescription_result = await db.execute(
-        select(Prescription)
-        .where(
-            and_(
-                Prescription.id == uuid.UUID(prescription_id),
-                Prescription.hospital_id == user_context["hospital_id"]
-            )
-        )
-        .options(
-            selectinload(Prescription.patient).selectinload(PatientProfile.user),
-            selectinload(Prescription.doctor).selectinload(DoctorProfile.user)
-        )
+    if not user_context.get("hospital_id"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Hospital context required")
+
+    prescription = await _load_prescription_scoped(
+        db, prescription_id, uuid.UUID(user_context["hospital_id"])
     )
-    
-    prescription = prescription_result.scalar_one_or_none()
-    if not prescription:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Prescription not found"
-        )
-    
-    # Check access: Doctor own; Pharmacist/Admin all; Patient own
-    if user_context["role"] == UserRole.DOCTOR:
-        if str(prescription.doctor.user_id) != user_context["user_id"]:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied - You can only view your own prescriptions"
-            )
-    elif user_context["role"] == UserRole.PATIENT:
+
+    role = user_context["role"]
+    if role == UserRole.DOCTOR:
+        _assert_doctor_owns_prescription(prescription, user_context)
+    elif role == UserRole.PATIENT:
         if str(prescription.patient.user_id) != user_context["user_id"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied - You can only view your own prescriptions"
+                detail="Access denied - You can only view your own prescriptions",
             )
-    elif user_context["role"] not in [UserRole.PHARMACIST, UserRole.HOSPITAL_ADMIN, UserRole.RECEPTIONIST]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
-    
-    return {
-        "prescription_id": str(prescription.id),
-        "prescription_number": prescription.prescription_number,
-        "patient_ref": prescription.patient.patient_id,
-        "patient_name": f"{prescription.patient.user.first_name} {prescription.patient.user.last_name}",
-        "doctor_name": f"Dr. {prescription.doctor.user.first_name} {prescription.doctor.user.last_name}",
-        "prescription_date": prescription.prescription_date,
-        "diagnosis": prescription.diagnosis,
-        "symptoms": prescription.symptoms,
-        "medicines": prescription.medications,
-        "general_instructions": prescription.general_instructions,
-        "diet_instructions": prescription.diet_instructions,
-        "follow_up_date": prescription.follow_up_date,
-        "is_dispensed": prescription.is_dispensed,
-        "dispensed_at": prescription.dispensed_at,
-        "is_digitally_signed": prescription.is_digitally_signed,
-        "created_at": prescription.created_at.isoformat()
-    }
+    elif role not in [UserRole.PHARMACIST, UserRole.HOSPITAL_ADMIN, UserRole.RECEPTIONIST]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    return _prescription_detail_out(prescription)
 
 
 # ============================================================================
