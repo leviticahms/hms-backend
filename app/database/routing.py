@@ -28,6 +28,8 @@ PLATFORM_ONLY_PREFIXES: tuple[str, ...] = (
     # OPD appointment workflow lives in the platform DB because receptionist and patient
     # booking create patients/appointments there for patient auth and shared doctor visibility.
     "/api/v1/receptionist",
+    # Subscription + plan flags live on the platform DB (`hospital_subscriptions`, `subscription_plans`).
+    "/api/v1/hospital-admin/platform-settings",
     # Doctors / departments directory reads from tenant DB when `tenant_database_name` is set
     # (staff + DoctorProfile live there). Keep appointment slot math on platform below.
     "/api/v1/appointments/available-slots",

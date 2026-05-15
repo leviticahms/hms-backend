@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 # Order: first matching rule wins (most specific patterns first).
 _RESOURCE_RULES: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"/platform-settings/features"), "Subscription"),
+    (re.compile(r"/platform-settings"), "Subscription"),
     (re.compile(r"/reports/bed-occupancy"), "Report"),
     (re.compile(r"/reports/department-performance"), "Report"),
     (re.compile(r"/reports/revenue-summary"), "Report"),

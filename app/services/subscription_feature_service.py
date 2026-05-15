@@ -12,7 +12,7 @@ from app.core.plan_features import (
     DEFAULT_FEATURES_BY_PLAN,
     normalize_plan_name,
 )
-from app.models.tenant import HospitalSubscription, SubscriptionPlanModel
+from app.models.tenant import Hospital, HospitalSubscription, SubscriptionPlanModel
 
 
 async def _load_plan_row(
@@ -53,6 +53,35 @@ async def get_plan_info_for_hospital(
     if not plan:
         return None, None, feats
     return plan.name, plan.display_name, feats
+
+
+async def get_hospital_platform_settings_bundle(
+    db: AsyncSession, hospital_id: uuid.UUID
+) -> dict:
+    """
+    Registry + subscription summary for Hospital Admin "Platform Settings" UI.
+    Caller must use platform AsyncSession.
+    """
+    hosp = await db.get(Hospital, hospital_id)
+    sub = (
+        await db.execute(
+            select(HospitalSubscription).where(HospitalSubscription.hospital_id == hospital_id)
+        )
+    ).scalar_one_or_none()
+    pname, display, feats = await get_plan_info_for_hospital(db, hospital_id)
+    end_iso = None
+    if sub and sub.end_date:
+        end_iso = sub.end_date.isoformat() if hasattr(sub.end_date, "isoformat") else str(sub.end_date)
+    return {
+        "hospital_id": str(hospital_id),
+        "hospital_name": hosp.name if hosp else None,
+        "tenant_database_name": (hosp.tenant_database_name if hosp else None) or None,
+        "subscription_status": sub.status if sub else None,
+        "subscription_end_date": end_iso,
+        "plan_name": pname,
+        "plan_display_name": display,
+        "features": feats,
+    }
 
 
 async def is_feature_enabled(

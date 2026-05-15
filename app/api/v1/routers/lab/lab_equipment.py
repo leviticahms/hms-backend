@@ -88,6 +88,59 @@ async def get_equipment_list(
         )
 
 
+# Static `/equipment/logs` must be registered before `/equipment/{equipment_id}` or "logs"
+# is parsed as a UUID path parameter (422).
+@router.get("/equipment/logs", response_model=MaintenanceLogListResponse)
+async def get_all_maintenance_logs(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=100),
+    maintenance_type: Optional[MaintenanceType] = Query(None),
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+    current_user: User = Depends(require_roles(LAB_GET_ROLES)),
+    db: AsyncSession = Depends(get_db_session),
+):
+    try:
+        lab = LabService(db, current_user.hospital_id)
+        data = await lab.get_maintenance_logs(
+            page=page,
+            limit=limit,
+            maintenance_type=maintenance_type.value if maintenance_type else None,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return MaintenanceLogListResponse(
+            logs=[MaintenanceLogResponse.from_service_dict(x) for x in data["logs"]],
+            pagination=data["pagination"],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "LOGS_FETCH_FAILED", "message": str(e)},
+        )
+
+
+@router.get("/equipment/logs/{log_id}", response_model=MaintenanceLogResponse)
+async def get_maintenance_log(
+    log_id: uuid.UUID,
+    current_user: User = Depends(require_roles(LAB_GET_ROLES)),
+    db: AsyncSession = Depends(get_db_session),
+):
+    try:
+        lab = LabService(db, current_user.hospital_id)
+        d = await lab.get_maintenance_log_by_id(log_id)
+        return MaintenanceLogResponse.from_service_dict(d)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "LOG_FETCH_FAILED", "message": str(e)},
+        )
+
+
 @router.get("/equipment/{equipment_id}", response_model=EquipmentResponse)
 async def get_equipment(
     equipment_id: uuid.UUID,
@@ -159,38 +212,6 @@ async def update_equipment_status(
         )
 
 
-@router.get("/equipment/logs", response_model=MaintenanceLogListResponse)
-async def get_all_maintenance_logs(
-    page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=100),
-    maintenance_type: Optional[MaintenanceType] = Query(None),
-    date_from: Optional[datetime] = Query(None),
-    date_to: Optional[datetime] = Query(None),
-    current_user: User = Depends(require_roles(LAB_GET_ROLES)),
-    db: AsyncSession = Depends(get_db_session),
-):
-    try:
-        lab = LabService(db, current_user.hospital_id)
-        data = await lab.get_maintenance_logs(
-            page=page,
-            limit=limit,
-            maintenance_type=maintenance_type.value if maintenance_type else None,
-            date_from=date_from,
-            date_to=date_to,
-        )
-        return MaintenanceLogListResponse(
-            logs=[MaintenanceLogResponse.from_service_dict(x) for x in data["logs"]],
-            pagination=data["pagination"],
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"code": "LOGS_FETCH_FAILED", "message": str(e)},
-        )
-
-
 @router.get("/equipment/{equipment_id}/logs", response_model=MaintenanceLogListResponse)
 async def get_equipment_logs(
     equipment_id: uuid.UUID,
@@ -256,23 +277,4 @@ async def create_maintenance_log(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"code": "LOG_CREATION_FAILED", "message": str(e)},
-        )
-
-
-@router.get("/equipment/logs/{log_id}", response_model=MaintenanceLogResponse)
-async def get_maintenance_log(
-    log_id: uuid.UUID,
-    current_user: User = Depends(require_roles(LAB_GET_ROLES)),
-    db: AsyncSession = Depends(get_db_session),
-):
-    try:
-        lab = LabService(db, current_user.hospital_id)
-        d = await lab.get_maintenance_log_by_id(log_id)
-        return MaintenanceLogResponse.from_service_dict(d)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"code": "LOG_FETCH_FAILED", "message": str(e)},
         )

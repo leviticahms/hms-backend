@@ -17,8 +17,11 @@ from app.api.deps import (
 )
 from app.core.database import get_platform_db_session, resolve_tenant_database_name_for_hospital
 from app.dependencies.auth import require_hospital_context
-from app.schemas.plan_features import HospitalFeatureFlagsOut
-from app.services.subscription_feature_service import get_plan_info_for_hospital
+from app.schemas.plan_features import HospitalFeatureFlagsOut, HospitalPlatformSettingsOut
+from app.services.subscription_feature_service import (
+    get_hospital_platform_settings_bundle,
+    get_plan_info_for_hospital,
+)
 from app.services.hospital_admin_service import HospitalAdminService
 from app.models.user import User, AuditLog
 from app.core.enums import UserRole
@@ -68,7 +71,27 @@ async def get_hospital_admin_service(
 
 # ============================================================================
 # PLATFORM SETTINGS — subscription feature flags (Dashboard / module visibility)
+# Reads platform registry (`hospitals`, `hospital_subscriptions`, `subscription_plans`).
 # ============================================================================
+
+
+@router.get(
+    "/platform-settings",
+    response_model=HospitalPlatformSettingsOut,
+    tags=["Hospital Admin - Platform Settings"],
+)
+async def get_hospital_platform_settings(
+    _user: User = Depends(require_hospital_admin()),
+    context: Dict[str, Any] = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """
+    Combined platform view: hospital registry row, subscription status, and effective plan features.
+    Use this for a settings overview; use `/platform-settings/features` if you only need flags.
+    """
+    hid = uuid.UUID(context["hospital_id"])
+    data = await get_hospital_platform_settings_bundle(db, hid)
+    return HospitalPlatformSettingsOut(**data)
 
 
 @router.get(
