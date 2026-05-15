@@ -1773,6 +1773,26 @@ class ClinicalService:
             "note": "All patients in your hospital (available for admission and currently admitted)"
         }
     
+    async def _resolve_ipd_patient_display(self, admission: Admission) -> tuple[str, str]:
+        """Resolve PAT-... and display name from tenant row or platform (OPD patients often platform-only)."""
+        p = admission.patient
+        if p is not None:
+            u = getattr(p, "user", None)
+            if u is not None:
+                name = f"{(u.first_name or '').strip()} {(u.last_name or '').strip()}".strip()
+                return p.patient_id, name or (getattr(u, "email", None) or p.patient_id)
+        if self.platform_db is not None:
+            pp = await self.platform_db.get(PatientProfile, admission.patient_id)
+            if pp is not None:
+                u = getattr(pp, "user", None)
+                if u is None and pp.user_id:
+                    u = await self.platform_db.get(User, pp.user_id)
+                if u is not None:
+                    name = f"{(u.first_name or '').strip()} {(u.last_name or '').strip()}".strip()
+                    return pp.patient_id, name or (getattr(u, "email", None) or pp.patient_id)
+                return pp.patient_id, pp.patient_id
+        return "UNKNOWN", "Unknown patient"
+
     # ============================================================================
     # IPD PATIENT MANAGEMENT
     # ============================================================================
@@ -1785,42 +1805,71 @@ class ClinicalService:
         # Get user profile
         user_profile = await self.get_ipd_user_profile(user_context)
         
-        # Build query for active admissions in user's department
+        hid = uuid.UUID(str(user_context["hospital_id"]))
         page = filters.get("page", 1)
         limit = filters.get("limit", 20)
         offset = (page - 1) * limit
-        
-        query = select(Admission).where(
-            and_(
-                Admission.hospital_id == user_context["hospital_id"],
-                Admission.department_id == user_profile.department_id,
-                Admission.is_active == True
+
+        if filters.get("all_hospital"):
+            query = (
+                select(Admission)
+                .where(
+                    Admission.hospital_id == hid,
+                    Admission.is_active == True,
+                )
+                .options(
+                    selectinload(Admission.patient).selectinload(PatientProfile.user),
+                    selectinload(Admission.doctor),
+                    selectinload(Admission.department),
+                )
+                .order_by(desc(Admission.admission_date))
             )
-        ).options(
-            selectinload(Admission.patient).selectinload(PatientProfile.user),
-            selectinload(Admission.doctor),
-            selectinload(Admission.department)
-        ).order_by(desc(Admission.admission_date))
-        
-        # Apply filters
+            count_query = select(func.count(Admission.id)).where(
+                Admission.hospital_id == hid,
+                Admission.is_active == True,
+            )
+        else:
+            # Match admissions by department id OR same department name (handles duplicate/re-seeded dept rows).
+            dept_match = [Admission.department_id == user_profile.department_id]
+            dnorm = (user_profile.department.name or "").strip().lower()
+            if dnorm:
+                dept_match.append(func.lower(func.trim(Department.name)) == dnorm)
+
+            query = (
+                select(Admission)
+                .join(Department, Admission.department_id == Department.id)
+                .where(
+                    Admission.hospital_id == hid,
+                    Department.hospital_id == hid,
+                    Admission.is_active == True,
+                    or_(*dept_match),
+                )
+                .options(
+                    selectinload(Admission.patient).selectinload(PatientProfile.user),
+                    selectinload(Admission.doctor),
+                    selectinload(Admission.department),
+                )
+                .order_by(desc(Admission.admission_date))
+            )
+
+            count_query = (
+                select(func.count(Admission.id))
+                .join(Department, Admission.department_id == Department.id)
+                .where(
+                    Admission.hospital_id == hid,
+                    Department.hospital_id == hid,
+                    Admission.is_active == True,
+                    or_(*dept_match),
+                )
+            )
+
         if filters.get("ward"):
             query = query.where(Admission.ward == filters["ward"])
-        
-        # Get total count
-        count_query = select(func.count(Admission.id)).where(
-            and_(
-                Admission.hospital_id == user_context["hospital_id"],
-                Admission.department_id == user_profile.department_id,
-                Admission.is_active == True
-            )
-        )
-        if filters.get("ward"):
             count_query = count_query.where(Admission.ward == filters["ward"])
-        
+
         total_result = await self.db.execute(count_query)
         total_patients = total_result.scalar() or 0
         
-        # Get paginated admissions
         admissions_result = await self.db.execute(query.offset(offset).limit(limit))
         admissions = admissions_result.scalars().all()
         
@@ -1828,10 +1877,8 @@ class ClinicalService:
         from app.schemas.clinical import IPDPatientOut
         patient_list = []
         for admission in admissions:
-            # Calculate length of stay
             length_of_stay = (datetime.now(timezone.utc) - admission.admission_date).days
             
-            # Get latest nursing assessment for condition
             latest_assessment = await self.db.execute(
                 select(MedicalRecord.vital_signs)
                 .where(
@@ -1849,15 +1896,28 @@ class ClinicalService:
             if assessment_data:
                 current_condition = assessment_data.get("general_condition", "Unknown")
             
+            pref, pname = await self._resolve_ipd_patient_display(admission)
+            doc = admission.doctor
+            attending = (
+                f"Dr. {doc.first_name} {doc.last_name}".strip()
+                if doc is not None
+                else "Dr. Unknown"
+            )
+            dept_nm = (
+                admission.department.name
+                if getattr(admission, "department", None) is not None
+                else user_profile.department.name
+            )
+            
             patient_list.append(IPDPatientOut(
-                patient_ref=admission.patient.patient_id,
-                patient_name=f"{admission.patient.user.first_name} {admission.patient.user.last_name}",
+                patient_ref=pref,
+                patient_name=pname,
                 admission_number=admission.admission_number,
                 admission_date=admission.admission_date.date().isoformat(),
                 admission_type=admission.admission_type,
-                department_name=admission.department.name,
-                attending_doctor=f"Dr. {admission.doctor.first_name} {admission.doctor.last_name}",
-                assigned_nurse=None,  # TODO: Implement nurse assignment
+                department_name=dept_nm,
+                attending_doctor=attending,
+                assigned_nurse=None,
                 ward=admission.ward,
                 room_number=admission.room_number,
                 bed_number=admission.bed_number,
@@ -1869,7 +1929,12 @@ class ClinicalService:
             ))
         
         return {
-            "department": user_profile.department.name,
+            "department": (
+                "All departments"
+                if filters.get("all_hospital")
+                else user_profile.department.name
+            ),
+            "all_hospital": bool(filters.get("all_hospital")),
             "ward_filter": filters.get("ward"),
             "patients": patient_list,
             "pagination": {

@@ -102,6 +102,10 @@ async def get_ipd_patients(
     limit: int = Query(20, ge=1, le=100),
     ward: Optional[str] = Query(None),
     condition: Optional[str] = Query(None),
+    all_hospital: bool = Query(
+        False,
+        description="If true, return active admissions for the entire hospital (not only the caller's department).",
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
@@ -118,7 +122,8 @@ async def get_ipd_patients(
         "page": page,
         "limit": limit,
         "ward": ward,
-        "condition": condition
+        "condition": condition,
+        "all_hospital": all_hospital,
     }
     result = await clinical_service.get_ipd_patients(filters, current_user)
     return success_response(message="Operation completed successfully", data=result)
