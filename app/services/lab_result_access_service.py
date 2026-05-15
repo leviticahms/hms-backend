@@ -45,6 +45,30 @@ def _is_mobile_client_agent(device_browser: str) -> bool:
     return any(k in u for k in ("mobile", "android", "iphone", "ipad", "okhttp"))
 
 
+def _phone_dashboard(v: str | None) -> str:
+    s = (v or "").strip()
+    return s if s else "N/A"
+
+
+def _last_access_dashboard(v: str | None) -> str:
+    s = (v or "").strip()
+    return s if s else "Never"
+
+
+def _access_log_report_type(action: str) -> str:
+    """Label for UI ``REPORT TYPE`` column (no dedicated DB column)."""
+    a = (action or "").strip().upper()
+    if not a:
+        return "Lab results"
+    if "PDF" in a or "DOWNLOAD" in a:
+        return "Full report (PDF)"
+    if "SHARE" in a or "EMAIL" in a or "SENT" in a:
+        return "Shared report"
+    if "VIEW" in a or "OPEN" in a or "PORTAL" in a:
+        return "Online view"
+    return (action or "").strip()
+
+
 class LabResultAccessService:
     def __init__(self, db: AsyncSession, hospital_id):
         self.db = db
@@ -77,19 +101,23 @@ class LabResultAccessService:
                 patient_ref=r.patient_ref,
                 patient_name=r.patient_name,
                 email=r.email,
-                phone=r.phone or "",
-                last_access=r.last_access or "",
+                phone=_phone_dashboard(r.phone),
+                last_access=_last_access_dashboard(r.last_access),
                 access_count=r.access_count,
-                status=r.status,
+                status=str(r.status or "").strip().upper() or "ACTIVE",
+                access_code=r.access_code,
+                access_type=str(r.access_type or "VIEW_ONLY").strip().upper() or "VIEW_ONLY",
             )
             for r in p_recs
         ]
         logs = [
             ResultAccessLogRow(
+                patient_ref=r.patient_ref,
                 patient_name=r.patient_name,
                 accessed_by=r.accessed_by,
                 access_time=r.access_time,
                 action=r.action,
+                report_type=_access_log_report_type(r.action),
                 ip_address=r.ip_address,
                 device_browser=r.device_browser,
             )
@@ -104,11 +132,15 @@ class LabResultAccessService:
                 if q in p.patient_name.lower() or q in p.patient_ref.lower() or q in p.email.lower()
             ]
             logs = [
-                l for l in logs if q in l.patient_name.lower() or q in l.accessed_by.lower()
+                l
+                for l in logs
+                if q in l.patient_name.lower()
+                or q in l.accessed_by.lower()
+                or (l.patient_ref and q in l.patient_ref.lower())
             ]
         if status:
             s = status.strip().upper()
-            patients = [p for p in patients if p.status == s]
+            patients = [p for p in patients if str(p.status).strip().upper() == s]
 
         return ResultAccessDashboardResponse(
             meta=ResultAccessMeta(
@@ -135,7 +167,7 @@ class LabResultAccessService:
             patient_name=display_name,
             doctor_name=None,
             email=payload.email,
-            phone="",
+            phone=(payload.phone or "").strip(),
             access_type=payload.access_type,
             status="ACTIVE",
             access_count=0,

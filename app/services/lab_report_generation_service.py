@@ -35,6 +35,18 @@ def _normalize_template(value: str) -> str:
     return v if v in _ALLOWED_TEMPLATES else "STANDARD"
 
 
+def _template_ui_label(tpl: str) -> str:
+    """Human-readable ``report_type`` / subtitle for UI."""
+    key = _normalize_template(tpl)
+    return {
+        "STANDARD": "Standard lab report",
+        "COMPREHENSIVE": "Comprehensive report",
+        "DOCTOR_SUMMARY": "Doctor summary",
+        "PATIENT_FRIENDLY": "Patient-friendly report",
+        "CUSTOM": "Custom report",
+    }.get(key, key.replace("_", " ").title())
+
+
 def _registration_completed(reg: LabTestRegistration) -> bool:
     return str(reg.status or "").strip().upper() == "COMPLETED"
 
@@ -80,11 +92,13 @@ class LabReportGenerationService:
                 if q in r.patient_name.lower()
                 or q in r.report_id.lower()
                 or q in r.test_type.lower()
+                or (r.patient_ref and q in r.patient_ref.lower())
+                or q in (r.report_type or "").lower()
             ]
         summary = ReportGenerationSummary(
             total_reports=len(rows),
-            ready_reports=sum(1 for r in rows if r.status == "READY"),
-            pending_review=sum(1 for r in rows if r.status == "PENDING_REVIEW"),
+            ready_reports=sum(1 for r in rows if str(r.status).strip().upper() == "READY"),
+            pending_review=sum(1 for r in rows if str(r.status).strip().upper() == "PENDING_REVIEW"),
             test_types=len({r.test_type for r in rows}),
         )
         return ReportGenerationListResponse(
@@ -175,6 +189,10 @@ class LabReportGenerationService:
             message="Report generated successfully.",
             report_id=rid,
             status="READY",
+            patient_ref=patient_ref or None,
+            patient_name=patient_name,
+            test_type=test_type,
+            template=tpl,
         )
 
     async def update_report(
@@ -210,13 +228,20 @@ class LabReportGenerationService:
             LabReportRecord.report_id == report_id,
         )
         rec = (await self.db.execute(stmt)).scalar_one_or_none()
+        tpl = _normalize_template(template)
+        stored_tpl = _normalize_template(str(rec.template)) if rec else tpl
+        st = str(rec.status) if rec else ""
         return ReportPreviewResponse(
             report_id=report_id,
             title=f"Lab Report - {report_id}",
+            patient_ref=(rec.patient_ref or "") if rec else "",
             patient_name=rec.patient_name if rec else "",
+            doctor_name=rec.doctor_name if rec else None,
             test_type=rec.test_type if rec else "",
-            status=rec.status if rec else "",
-            template=_normalize_template(template),  # type: ignore[arg-type]
+            status=st,
+            template=stored_tpl,  # type: ignore[arg-type]
+            report_type=_template_ui_label(stored_tpl),
+            completion_date=rec.completion_date if rec else None,
             preview_text="",
         )
 
@@ -233,10 +258,14 @@ class LabReportGenerationService:
         return [
             ReportGenerationRow(
                 report_id=r.report_id,
+                patient_ref=r.patient_ref,
                 patient_name=r.patient_name,
+                doctor_name=r.doctor_name,
                 test_type=r.test_type,
+                template=_normalize_template(str(r.template)),
+                report_type=_template_ui_label(str(r.template)),
                 completion_date=r.completion_date,
-                status=r.status,
+                status=str(r.status or "").strip().upper() or "DRAFT",
                 verified_by=r.verified_by,
             ) for r in recs
         ]

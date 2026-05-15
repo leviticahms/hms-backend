@@ -18,11 +18,20 @@ _REPORT_TEMPLATES = frozenset(
 
 
 class ReportGenerationRow(BaseModel):
+    """One row in the report generation list (matches lab UI columns)."""
+
     report_id: str
+    patient_ref: Optional[str] = None
     patient_name: str
+    doctor_name: Optional[str] = None
     test_type: str
+    template: str = Field(default="STANDARD", description="Report template key (STANDARD, COMPREHENSIVE, …).")
+    report_type: str = Field(
+        default="",
+        description="Human-readable template label for tables and filters.",
+    )
     completion_date: date
-    status: ReportStatus
+    status: str = Field(..., description="READY | PENDING_REVIEW | DRAFT (or other DB values).")
     verified_by: Optional[str] = None
 
 
@@ -130,15 +139,26 @@ class GenerateReportResponse(BaseModel):
     message: str
     report_id: str
     status: ReportStatus
+    patient_ref: Optional[str] = None
+    patient_name: Optional[str] = None
+    test_type: Optional[str] = None
+    template: Optional[str] = None
 
 
 class ReportPreviewResponse(BaseModel):
     report_id: str
     title: str
+    patient_ref: str = ""
     patient_name: str
+    doctor_name: Optional[str] = None
     test_type: str
-    status: ReportStatus
+    status: str = ""
     template: ReportTemplate
+    report_type: str = Field(
+        default="",
+        description="Human label for UI (aligned with template / report kind).",
+    )
+    completion_date: Optional[date] = None
     preview_text: str
 
 

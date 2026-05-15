@@ -2970,6 +2970,11 @@ class HospitalAdminService:
         """Get paginated list of patients for non-medical admin oversight"""
         from app.models.patient import PatientProfile
         from app.models.user import User
+
+        # OPD/receptionist registers patients on the platform DB; tenant holds staff/wards.
+        # When ``platform_db`` is wired, read patient directory from platform (same UUIDs as tenant copies).
+        patient_db = self.platform_db if self.platform_db is not None else self.db
+        appt_db = patient_db
         
         offset = (page - 1) * limit
         
@@ -3011,12 +3016,12 @@ class HospitalAdminService:
                 )
             )
         
-        total_result = await self.db.execute(count_query)
+        total_result = await patient_db.execute(count_query)
         total = total_result.scalar()
         
         # Get paginated results
         query = query.offset(offset).limit(limit).order_by(PatientProfile.created_at.desc())
-        result = await self.db.execute(query)
+        result = await patient_db.execute(query)
         patients = result.scalars().all()
         
         # Format response - EXCLUDE MEDICAL DATA
@@ -3032,7 +3037,7 @@ class HospitalAdminService:
                     )
                 ).subquery()
             )
-            appointment_count_result = await self.db.execute(appointment_count_query)
+            appointment_count_result = await appt_db.execute(appointment_count_query)
             appointment_count = appointment_count_result.scalar() or 0
             
             patient_list.append({
@@ -3085,44 +3090,60 @@ class HospitalAdminService:
         """Activate or deactivate patient account (non-medical admin action)"""
         from app.models.patient import PatientProfile
         from app.models.user import User
-        
-        # Get patient profile
-        result = await self.db.execute(
-            select(PatientProfile).options(selectinload(PatientProfile.user)).where(
+        from app.services.patient_tenant_bridge import upsert_tenant_user_from_platform_user
+
+        stmt = (
+            select(PatientProfile)
+            .options(selectinload(PatientProfile.user).selectinload(User.roles))
+            .where(
                 and_(
                     PatientProfile.id == patient_id,
-                    PatientProfile.hospital_id == self.hospital_id
+                    PatientProfile.hospital_id == self.hospital_id,
                 )
             )
         )
+        result = await self.db.execute(stmt)
         patient = result.scalar_one_or_none()
-        
+        from_platform = False
+        if patient is None and self.platform_db is not None:
+            result_pf = await self.platform_db.execute(stmt)
+            patient = result_pf.scalar_one_or_none()
+            from_platform = patient is not None
+
         if not patient:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found"}
             )
-        
+
         # Check if user has patient role
-        user_roles = [role.name for role in patient.user.roles]
-        if UserRole.PATIENT not in user_roles:
+        user_roles = [role.name for role in (patient.user.roles or [])]
+        if UserRole.PATIENT.value not in user_roles:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "NOT_PATIENT_USER", "message": "User is not a patient"}
             )
-        
+
         # Update user account status
         old_status = patient.user.is_active
         patient.user.is_active = is_active
         patient.user.updated_at = datetime.utcnow()
-        
+
         if not is_active:
             patient.user.status = UserStatus.BLOCKED.value
         else:
             patient.user.status = UserStatus.ACTIVE.value
-        
-        await self.db.commit()
-        await self._mirror_platform_user_if_configured(patient.user.id)
+
+        if from_platform:
+            await self.platform_db.commit()
+            if self.platform_db is not self.db:
+                await upsert_tenant_user_from_platform_user(
+                    self.db, patient.user, UserRole.PATIENT.value
+                )
+                await self.db.commit()
+        else:
+            await self.db.commit()
+            await self._mirror_platform_user_if_configured(patient.user.id)
         
         status_text = "activated" if is_active else "deactivated"
         
