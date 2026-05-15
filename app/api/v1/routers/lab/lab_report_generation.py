@@ -17,6 +17,8 @@ from app.schemas.lab_report_generation import (
     ReadyTestsResponse,
     ReportGenerationListResponse,
     ReportPreviewResponse,
+    UpdateReportGenerationRequest,
+    UpdateReportGenerationResponse,
 )
 from app.services.lab_report_generation_service import LabReportGenerationService
 
@@ -63,6 +65,25 @@ async def generate_report(
 ) -> GenerateReportResponse:
     svc = LabReportGenerationService(db, current_user.hospital_id)
     return await svc.generate(request)
+
+
+@router.put(
+    "/{report_id}",
+    response_model=UpdateReportGenerationResponse,
+    summary="Update report metadata",
+    description=(
+        "Partial update of a generated report row (patient display, template, status, etc.). "
+        "RBAC: LAB_TECH and HOSPITAL_ADMIN."
+    ),
+)
+async def update_report_generation(
+    report_id: str,
+    body: UpdateReportGenerationRequest,
+    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    db: AsyncSession = Depends(get_db_session),
+) -> UpdateReportGenerationResponse:
+    svc = LabReportGenerationService(db, current_user.hospital_id)
+    return await svc.update_report(report_id, body)
 
 
 @router.get("/{report_id}/preview", response_model=ReportPreviewResponse)

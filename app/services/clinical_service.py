@@ -23,6 +23,7 @@ from app.utils.receptionist_serializers import (
     build_receptionist_patient_full_payload,
     serialize_opd_appointment_full,
 )
+from app.services.patient_tenant_bridge import resolve_patient_profile_id_for_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -128,9 +129,10 @@ async def send_opd_portal_credentials_email_task(
 
 class ClinicalService:
     """Service for clinical operations (OPD, IPD, Nursing)"""
-    
-    def __init__(self, db: AsyncSession):
+
+    def __init__(self, db: AsyncSession, platform_db: Optional[AsyncSession] = None):
         self.db = db
+        self.platform_db = platform_db
         self.security = SecurityManager()
     
     # ============================================================================
@@ -1587,7 +1589,16 @@ class ClinicalService:
         
         # Get doctor profile
         doctor = await self.get_doctor_profile(user_context)
-        
+
+        if self.platform_db and user_context.get("hospital_id"):
+            hid = uuid.UUID(str(user_context["hospital_id"]))
+            await resolve_patient_profile_id_for_tenant(
+                str(admission_data["patient_ref"]).strip(),
+                hid,
+                self.db,
+                self.platform_db,
+            )
+
         # Get patient - First check if patient exists in the hospital
         patient_result = await self.db.execute(
             select(PatientProfile)
@@ -1679,9 +1690,13 @@ class ClinicalService:
         
         # Get doctor profile
         doctor = await self.get_doctor_profile(user_context)
-        
+
+        # OPD patients live on platform; IPD session is tenant when provisioned.
+        patient_db = self.platform_db if self.platform_db is not None else self.db
+        appt_db = patient_db
+
         # Get all patients in the hospital
-        patients_result = await self.db.execute(
+        patients_result = await patient_db.execute(
             select(PatientProfile)
             .where(PatientProfile.hospital_id == user_context["hospital_id"])
             .options(selectinload(PatientProfile.user))
@@ -1711,7 +1726,7 @@ class ClinicalService:
             age = self.calculate_age(patient.date_of_birth) if patient.date_of_birth else 0
             
             # Get latest appointment info if available
-            latest_appointment = await self.db.execute(
+            latest_appointment = await appt_db.execute(
                 select(Appointment)
                 .where(Appointment.patient_id == patient.id)
                 .order_by(desc(Appointment.created_at))

@@ -1,115 +1,23 @@
 """Sales/Dispensing Router - Prescription & OTC sales with FEFO"""
-from fastapi import APIRouter, Depends, Query, Header, status, HTTPException
+from fastapi import APIRouter, Depends, Query, Header, status
 from uuid import uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import selectinload
 from typing import Optional
 from uuid import UUID
 
 from app.core.database import get_platform_db_session
 from app.database.session import get_db_session
 from app.dependencies.auth import require_pharmacy_staff, require_hospital_admin, require_hospital_context
-from app.core.enums import UserRole
-from app.models.user import User, Role, user_roles
-from app.models.patient import PatientProfile
+from app.models.user import User
+from app.services.patient_tenant_bridge import (
+    resolve_patient_profile_id_for_tenant,
+    upsert_tenant_user_from_platform_user,
+)
 from app.services.pharmacy_service import PharmacyService
 from app.schemas.pharmacy import SaleCreate, SaleItemCreate, SaleOut
 from app.schemas.response import SuccessResponse
 
 router = APIRouter(prefix="/sales", tags=["Pharmacy - Sales"])
-
-
-async def _upsert_user_with_roles(
-    db: AsyncSession,
-    user: User,
-    fallback_role: Optional[str] = None,
-) -> None:
-    data = {column.name: getattr(user, column.name) for column in User.__table__.columns}
-    existing_user = await db.get(User, user.id)
-    if existing_user:
-        for key, value in data.items():
-            if key != "id":
-                setattr(existing_user, key, value)
-    else:
-        db.add(User(**data))
-    await db.flush()
-
-    loaded_roles = user.__dict__.get("roles") or []
-    role_names = [getattr(role, "name", None) for role in loaded_roles if getattr(role, "name", None)]
-    if fallback_role and fallback_role not in role_names:
-        role_names.append(fallback_role)
-
-    for role_name in role_names:
-        role_result = await db.execute(select(Role).where(Role.name == role_name))
-        tenant_role = role_result.scalar_one_or_none()
-        if not tenant_role:
-            tenant_role = Role(
-                id=uuid4(),
-                name=role_name,
-                display_name=role_name.replace("_", " ").title(),
-                description="Mirrored for tenant pharmacy access",
-                is_system_role=True,
-                level=1 if role_name == UserRole.PATIENT.value else 50,
-            )
-            db.add(tenant_role)
-            await db.flush()
-        await db.execute(
-            pg_insert(user_roles)
-            .values(user_id=user.id, role_id=tenant_role.id)
-            .on_conflict_do_nothing(index_elements=["user_id", "role_id"])
-        )
-    await db.flush()
-
-
-async def _resolve_patient_ref(
-    patient_ref: str,
-    hospital_id: UUID,
-    tenant_db: AsyncSession,
-    platform_db: AsyncSession,
-) -> UUID:
-    ref = str(patient_ref).strip()
-    result = await tenant_db.execute(
-        select(PatientProfile.id).where(
-            PatientProfile.patient_id == ref,
-            PatientProfile.hospital_id == hospital_id,
-        ).limit(1)
-    )
-    profile_id = result.scalar_one_or_none()
-    if profile_id:
-        return profile_id
-
-    platform_result = await platform_db.execute(
-        select(PatientProfile)
-        .where(
-            PatientProfile.patient_id == ref,
-            PatientProfile.hospital_id == hospital_id,
-        )
-        .options(selectinload(PatientProfile.user))
-        .limit(1)
-    )
-    platform_patient = platform_result.scalar_one_or_none()
-    if not platform_patient:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Patient not found with patient_ref: {patient_ref}",
-        )
-
-    platform_user = platform_patient.user or await platform_db.get(User, platform_patient.user_id)
-    if platform_user:
-        await _upsert_user_with_roles(tenant_db, platform_user, UserRole.PATIENT.value)
-
-    patient_data = {column.name: getattr(platform_patient, column.name) for column in PatientProfile.__table__.columns}
-    existing_patient = await tenant_db.get(PatientProfile, platform_patient.id)
-    if existing_patient:
-        for key, value in patient_data.items():
-            if key != "id":
-                setattr(existing_patient, key, value)
-    else:
-        tenant_db.add(PatientProfile(**patient_data))
-    await tenant_db.flush()
-    return platform_patient.id
 
 
 @router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
@@ -126,14 +34,14 @@ async def create_sale(
     """
     # Auto-generate idempotency key if not provided (so request always works)
     key = idempotency_key or str(uuid4())
-    await _upsert_user_with_roles(db, current_user)
+    await upsert_tenant_user_from_platform_user(db, current_user)
     service = PharmacyService(db)
     sale_data_dict = sale_data.model_dump()
     sale_data_dict.pop("idempotency_key", None)  # Use header value, avoid duplicate
     patient_ref = sale_data_dict.pop("patient_ref", None)
     # Resolve patient_ref to patient_id (PatientProfile.id) if provided
     if patient_ref:
-        sale_data_dict["patient_id"] = await _resolve_patient_ref(
+        sale_data_dict["patient_id"] = await resolve_patient_profile_id_for_tenant(
             patient_ref,
             current_user.hospital_id,
             db,
@@ -168,7 +76,9 @@ async def list_sales(
     hospital_id = UUID(context["hospital_id"])
     resolved_patient_id = patient_id
     if not resolved_patient_id and patient_ref:
-        resolved_patient_id = await _resolve_patient_ref(patient_ref, hospital_id, db, platform_db)
+        resolved_patient_id = await resolve_patient_profile_id_for_tenant(
+            patient_ref, hospital_id, db, platform_db
+        )
     sales = await service.get_sales(hospital_id, resolved_patient_id, status_filter, from_date, to_date, skip, limit)
     sales_data = []
     for s in sales:
@@ -217,7 +127,7 @@ async def complete_sale(
     Complete sale - deducts stock atomically using FEFO.
     CRITICAL: Uses SELECT FOR UPDATE for concurrency safety.
     """
-    await _upsert_user_with_roles(db, current_user)
+    await upsert_tenant_user_from_platform_user(db, current_user)
     service = PharmacyService(db)
     result = await service.complete_sale(sale_id, current_user.hospital_id, current_user.id)
     await db.commit()
@@ -232,7 +142,7 @@ async def void_sale(
     db: AsyncSession = Depends(get_db_session)
 ):
     """Void completed sale. Admin only"""
-    await _upsert_user_with_roles(db, current_user)
+    await upsert_tenant_user_from_platform_user(db, current_user)
     service = PharmacyService(db)
     sale = await service.void_sale(sale_id, current_user.hospital_id, current_user.id, reason)
     await db.commit()

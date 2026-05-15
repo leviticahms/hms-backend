@@ -23,6 +23,8 @@ from app.schemas.lab_report_generation import (
     ReportGenerationRow,
     ReportGenerationSummary,
     ReportPreviewResponse,
+    UpdateReportGenerationRequest,
+    UpdateReportGenerationResponse,
 )
 
 _ALLOWED_TEMPLATES = {"STANDARD", "COMPREHENSIVE", "DOCTOR_SUMMARY", "PATIENT_FRIENDLY", "CUSTOM"}
@@ -33,10 +35,35 @@ def _normalize_template(value: str) -> str:
     return v if v in _ALLOWED_TEMPLATES else "STANDARD"
 
 
+def _registration_completed(reg: LabTestRegistration) -> bool:
+    return str(reg.status or "").strip().upper() == "COMPLETED"
+
+
 class LabReportGenerationService:
     def __init__(self, db: AsyncSession, hospital_id):
         self.db = db
         self.hospital_id = hospital_id
+
+    async def _find_lab_test_registration(self, sid: str) -> Optional[LabTestRegistration]:
+        raw = (sid or "").strip()
+        if not raw:
+            return None
+        stmt = select(LabTestRegistration).where(
+            LabTestRegistration.hospital_id == self.hospital_id,
+            LabTestRegistration.test_id == raw,
+        )
+        reg = (await self.db.execute(stmt)).scalar_one_or_none()
+        if reg is not None:
+            return reg
+        try:
+            uid = uuid.UUID(raw)
+        except (ValueError, AttributeError):
+            return None
+        stmt2 = select(LabTestRegistration).where(
+            LabTestRegistration.hospital_id == self.hospital_id,
+            LabTestRegistration.id == uid,
+        )
+        return (await self.db.execute(stmt2)).scalar_one_or_none()
 
     async def list_reports(
         self,
@@ -104,26 +131,23 @@ class LabReportGenerationService:
             doctor_name = ready.doctor_name
             test_type = ready.test_type
         else:
-            # UI often passes ``test_id`` from test registration (e.g. REG-...), not only ``lab_report_ready_tests``.
-            reg_stmt = select(LabTestRegistration).where(
-                LabTestRegistration.hospital_id == self.hospital_id,
-                LabTestRegistration.test_id == sid,
-            )
-            reg = (await self.db.execute(reg_stmt)).scalar_one_or_none()
+            reg = await self._find_lab_test_registration(sid)
             if reg is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=(
                         f"No ready test or registered lab test found for source_test_id={sid!r}. "
-                        "Use GET /lab/report-generation/ready-tests for ready rows, or a valid test registration id."
+                        "Use GET /lab/report-generation/ready-tests for ready rows, or pass "
+                        "lab_test_registrations.test_id (e.g. REG-...) or the registration row UUID."
                     ),
                 )
-            if reg.status != "COMPLETED":
+            if not _registration_completed(reg):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=(
                         f"Registered test {sid!r} has status {reg.status!r}. "
-                        "Set status to COMPLETED via PATCH /api/v1/lab/test-registration/{test_id}/status before generating a report."
+                        "Set status to COMPLETED via PATCH /api/v1/lab/test-registration/{test_id}/status "
+                        "before generating a report."
                     ),
                 )
             patient_name = reg.patient_name
@@ -132,7 +156,7 @@ class LabReportGenerationService:
             test_type = reg.test_type
 
         rid = f"REP-{uuid.uuid4().hex[:12].upper()}"
-        tpl = _normalize_template(payload.template)
+        tpl = _normalize_template(str(payload.template))
         rec = LabReportRecord(
             hospital_id=self.hospital_id,
             report_id=rid,
@@ -151,6 +175,33 @@ class LabReportGenerationService:
             message="Report generated successfully.",
             report_id=rid,
             status="READY",
+        )
+
+    async def update_report(
+        self, report_id: str, payload: UpdateReportGenerationRequest
+    ) -> UpdateReportGenerationResponse:
+        rid = (report_id or "").strip()
+        if not rid:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="report_id is required")
+        stmt = select(LabReportRecord).where(
+            LabReportRecord.hospital_id == self.hospital_id,
+            LabReportRecord.report_id == rid,
+        )
+        rec = (await self.db.execute(stmt)).scalar_one_or_none()
+        if rec is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Report {rid!r} not found for this hospital.",
+            )
+        data = payload.model_dump(exclude_unset=True, exclude_none=True)
+        for key, value in data.items():
+            if hasattr(rec, key):
+                setattr(rec, key, value)
+        await self.db.commit()
+        await self.db.refresh(rec)
+        return UpdateReportGenerationResponse(
+            message="Report updated successfully.",
+            report_id=rec.report_id,
         )
 
     async def preview(self, report_id: str, *, template: str = "STANDARD") -> ReportPreviewResponse:
