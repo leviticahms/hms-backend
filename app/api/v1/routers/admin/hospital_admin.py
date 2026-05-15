@@ -17,9 +17,22 @@ from app.api.deps import (
 )
 from app.core.database import get_platform_db_session, resolve_tenant_database_name_for_hospital
 from app.dependencies.auth import require_hospital_context
-from app.schemas.plan_features import HospitalFeatureFlagsOut, HospitalPlatformSettingsOut
+from app.schemas.plan_features import (
+    HospitalFeatureFlagsOut,
+    HospitalRegistryPlatformOut,
+    HospitalModulesOut,
+    HospitalPlanQuotasOut,
+    HospitalPlatformSettingsOut,
+    HospitalSubscriptionDetailOut,
+    HospitalUsageVsLimitsOut,
+)
 from app.services.subscription_feature_service import (
+    get_hospital_modules_bundle,
+    get_hospital_plan_quotas_bundle,
     get_hospital_platform_settings_bundle,
+    get_hospital_registry_platform_bundle,
+    get_hospital_subscription_detail_bundle,
+    get_hospital_usage_vs_limits_bundle,
     get_plan_info_for_hospital,
 )
 from app.services.hospital_admin_service import HospitalAdminService
@@ -72,26 +85,8 @@ async def get_hospital_admin_service(
 # ============================================================================
 # PLATFORM SETTINGS — subscription feature flags (Dashboard / module visibility)
 # Reads platform registry (`hospitals`, `hospital_subscriptions`, `subscription_plans`).
+# Register static sub-paths before `/platform-settings` overview.
 # ============================================================================
-
-
-@router.get(
-    "/platform-settings",
-    response_model=HospitalPlatformSettingsOut,
-    tags=["Hospital Admin - Platform Settings"],
-)
-async def get_hospital_platform_settings(
-    _user: User = Depends(require_hospital_admin()),
-    context: Dict[str, Any] = Depends(require_hospital_context),
-    db: AsyncSession = Depends(get_platform_db_session),
-):
-    """
-    Combined platform view: hospital registry row, subscription status, and effective plan features.
-    Use this for a settings overview; use `/platform-settings/features` if you only need flags.
-    """
-    hid = uuid.UUID(context["hospital_id"])
-    data = await get_hospital_platform_settings_bundle(db, hid)
-    return HospitalPlatformSettingsOut(**data)
 
 
 @router.get(
@@ -115,6 +110,105 @@ async def get_hospital_subscription_features(
         plan_display_name=display,
         features=feats,
     )
+
+
+@router.get(
+    "/platform-settings/subscription",
+    response_model=HospitalSubscriptionDetailOut,
+    tags=["Hospital Admin - Platform Settings"],
+)
+async def get_hospital_platform_subscription_detail(
+    _user: User = Depends(require_hospital_admin()),
+    context: Dict[str, Any] = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """Subscription lifecycle row from `hospital_subscriptions` (status, dates, trial, usage JSON)."""
+    hid = uuid.UUID(context["hospital_id"])
+    data = await get_hospital_subscription_detail_bundle(db, hid)
+    return HospitalSubscriptionDetailOut(**data)
+
+
+@router.get(
+    "/platform-settings/plan",
+    response_model=HospitalPlanQuotasOut,
+    tags=["Hospital Admin - Platform Settings"],
+)
+async def get_hospital_platform_plan_quotas(
+    _user: User = Depends(require_hospital_admin()),
+    context: Dict[str, Any] = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """Current plan tier limits and pricing from `subscription_plans` (joined via subscription)."""
+    hid = uuid.UUID(context["hospital_id"])
+    data = await get_hospital_plan_quotas_bundle(db, hid)
+    return HospitalPlanQuotasOut(**data)
+
+
+@router.get(
+    "/platform-settings/hospital",
+    response_model=HospitalRegistryPlatformOut,
+    tags=["Hospital Admin - Platform Settings"],
+)
+async def get_hospital_platform_registry_row(
+    _user: User = Depends(require_hospital_admin()),
+    context: Dict[str, Any] = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """Platform registry profile for this tenant (`hospitals` row)."""
+    hid = uuid.UUID(context["hospital_id"])
+    data = await get_hospital_registry_platform_bundle(db, hid)
+    return HospitalRegistryPlatformOut(**data)
+
+
+@router.get(
+    "/platform-settings/modules",
+    response_model=HospitalModulesOut,
+    tags=["Hospital Admin - Platform Settings"],
+)
+async def get_hospital_platform_modules(
+    _user: User = Depends(require_hospital_admin()),
+    context: Dict[str, Any] = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """Module list with human labels and effective on/off state (same keys as `/features`)."""
+    hid = uuid.UUID(context["hospital_id"])
+    data = await get_hospital_modules_bundle(db, hid)
+    return HospitalModulesOut(**data)
+
+
+@router.get(
+    "/platform-settings/usage",
+    response_model=HospitalUsageVsLimitsOut,
+    tags=["Hospital Admin - Platform Settings"],
+)
+async def get_hospital_platform_usage_vs_limits(
+    _user: User = Depends(require_hospital_admin()),
+    context: Dict[str, Any] = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """`current_usage` from subscription JSON plus resolved plan quota caps."""
+    hid = uuid.UUID(context["hospital_id"])
+    data = await get_hospital_usage_vs_limits_bundle(db, hid)
+    return HospitalUsageVsLimitsOut(**data)
+
+
+@router.get(
+    "/platform-settings",
+    response_model=HospitalPlatformSettingsOut,
+    tags=["Hospital Admin - Platform Settings"],
+)
+async def get_hospital_platform_settings(
+    _user: User = Depends(require_hospital_admin()),
+    context: Dict[str, Any] = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    """
+    Combined platform view: hospital registry row, subscription status, and effective plan features.
+    Use this for a settings overview; use `/platform-settings/features` if you only need flags.
+    """
+    hid = uuid.UUID(context["hospital_id"])
+    data = await get_hospital_platform_settings_bundle(db, hid)
+    return HospitalPlatformSettingsOut(**data)
 
 
 # ============================================================================
