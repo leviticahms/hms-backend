@@ -1,8 +1,12 @@
 """
 Receptionist-facing directory and appointment lookup APIs.
 
-These endpoints power front-desk dropdowns and management tables while keeping
-the data in the same platform DB used by receptionist appointment scheduling.
+These endpoints power front-desk dropdowns and management tables.
+
+Doctor and department listings use ``get_db_session`` (tenant DB when the hospital
+has ``tenant_database_name``), matching where staff and profiles are stored.
+Appointment queue / slot helpers that read platform OPD rows still use
+``get_platform_db_session``.
 """
 from __future__ import annotations
 
@@ -16,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import require_receptionist
-from app.core.database import get_platform_db_session
+from app.core.database import get_db_session, get_platform_db_session
 from app.core.enums import AppointmentStatus, UserRole
 from app.core.response_utils import success_response
 from app.models.doctor import DoctorProfile
@@ -210,7 +214,7 @@ async def get_all_doctors(
     availability: Optional[str] = Query(None, description="Available / In Consultation / Unavailable"),
     keyword: Optional[str] = Query(None, description="Optional search keyword"),
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     doctors = await _doctor_query(
@@ -228,7 +232,7 @@ async def get_all_doctors(
 async def search_doctors(
     keyword: str = Query(..., min_length=1),
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     doctors = await _doctor_query(db, hospital_id, keyword=keyword)
@@ -239,7 +243,7 @@ async def search_doctors(
 async def get_doctor_dropdown(
     department: Optional[str] = Query(None, description="Optional department name/code/UUID"),
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     doctors = await _doctor_query(db, hospital_id, department=department, status_filter="ACTIVE")
@@ -261,7 +265,7 @@ async def get_doctor_dropdown(
 @directory_router.get("/doctors/statistics", tags=[DOCTOR_TAG])
 async def get_doctor_statistics(
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     doctors = await _doctor_query(db, hospital_id)
@@ -282,7 +286,7 @@ async def get_doctor_statistics(
 async def get_doctor_by_id(
     doctor_id: str,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     try:
@@ -406,7 +410,7 @@ async def get_all_departments(
     emergencyAvailable: Optional[bool] = Query(None, description="Filter emergency-ready departments"),
     keyword: Optional[str] = Query(None),
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     departments = await _department_query(
@@ -426,7 +430,7 @@ async def get_all_departments(
 async def search_departments(
     keyword: str = Query(..., min_length=1),
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     departments = await _department_query(db, hospital_id, keyword=keyword)
@@ -439,7 +443,7 @@ async def search_departments(
 @directory_router.get("/departments/dropdown", tags=[DEPARTMENT_TAG])
 async def get_department_dropdown(
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     departments = await _department_query(db, hospital_id, status_filter="Active")
@@ -459,7 +463,7 @@ async def get_department_dropdown(
 @directory_router.get("/departments/statistics", tags=[DEPARTMENT_TAG])
 async def get_department_statistics(
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     departments = await _department_query(db, hospital_id)
@@ -481,7 +485,7 @@ async def get_department_statistics(
 async def get_department_by_id(
     department_id: str,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     try:
@@ -499,7 +503,7 @@ async def get_department_by_id(
 async def get_department_doctors(
     department_id: str,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     doctors = await _doctor_query(db, hospital_id, department=department_id)
@@ -510,7 +514,7 @@ async def get_department_doctors(
 async def get_department_nurses(
     department_id: str,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     try:
@@ -545,7 +549,7 @@ async def get_department_nurses(
 async def get_department_beds(
     department_id: str,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     try:
@@ -585,7 +589,7 @@ async def get_available_slots(
     doctorName: Optional[str] = Query(None, description="Doctor display name"),
     doctor_name: Optional[str] = Query(None, description="Doctor display name"),
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     raw_id = (doctorId or doctor_id or "").strip()
@@ -638,7 +642,7 @@ async def _appointments_for_date(db: AsyncSession, hospital_id: uuid.UUID, appoi
 async def get_appointment_queue(
     date: Optional[str] = Query(None, description="YYYY-MM-DD, defaults to today"),
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     target_date = date or date_type.today().isoformat()
@@ -652,7 +656,7 @@ async def get_appointment_queue(
 async def get_appointment_status_summary(
     date: Optional[str] = Query(None, description="YYYY-MM-DD, defaults to today"),
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     target_date = date or date_type.today().isoformat()
