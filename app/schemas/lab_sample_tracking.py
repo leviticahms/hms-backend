@@ -9,7 +9,6 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
-SampleStatus = Literal["COLLECTED", "IN_TRANSIT", "IN_LAB", "PROCESSED", "COMPLETED"]
 SampleAction = Literal["MARK_COLLECTED", "MARK_IN_TRANSIT", "START_PROCESSING", "COMPLETE_TEST"]
 
 
@@ -20,7 +19,10 @@ class SampleTrackingRow(BaseModel):
     test_type: str
     sample_type: str
     collection_time: str
-    status: SampleStatus
+    status: str = Field(
+        ...,
+        description="Workflow status (tracking table or derived from test registration).",
+    )
     current_location: str
 
 
@@ -52,6 +54,6 @@ class SampleActionRequest(BaseModel):
 class SampleActionResponse(BaseModel):
     message: str
     barcode: str
-    status: SampleStatus
+    status: str
     current_location: str
 
