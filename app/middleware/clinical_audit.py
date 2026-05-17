@@ -108,25 +108,30 @@ class ClinicalAuditMiddleware(BaseHTTPMiddleware):
         ip = request.client.host if request.client else None
         ua = request.headers.get("User-Agent", "")[:500]
 
-        async with AsyncSessionLocal() as db:
-            await db.execute(
-                text("""
-                    INSERT INTO clinical_access_audit_log
-                        (id, hospital_id, accessed_by, patient_id, resource, action,
-                         ip_address, user_agent, accessed_at)
-                    VALUES
-                        (:id, :hospital_id, :accessed_by, :patient_id, :resource,
-                         :action, :ip_address, :user_agent, NOW())
-                """),
-                {
-                    "id": str(uuid.uuid4()),
-                    "hospital_id": hospital_id,
-                    "accessed_by": user_id,
-                    "patient_id": patient_ref,
-                    "resource": request.url.path[:100],
-                    "action": request.method,
-                    "ip_address": ip,
-                    "user_agent": ua,
-                }
-            )
-            await db.commit()
+        try:
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    text("""
+                        INSERT INTO clinical_access_audit_log
+                            (id, hospital_id, accessed_by, patient_id, resource, action,
+                            ip_address, user_agent, accessed_at)
+                        VALUES
+                            (:id, :hospital_id, :accessed_by, :patient_id, :resource,
+                            :action, :ip_address, :user_agent, NOW())
+                    """),
+                    {
+                        "id": str(uuid.uuid4()),
+                        "hospital_id": hospital_id,
+                        "accessed_by": user_id,
+                        "patient_id": patient_ref,
+                        "resource": request.url.path[:100],
+                        "action": request.method,
+                        "ip_address": ip,
+                        "user_agent": ua,
+                    }
+                )
+                await db.commit()
+        except Exception as e:
+           logger.warning(f"Audit logging skipped: {e}")
+        
+        

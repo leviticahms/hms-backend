@@ -16,12 +16,13 @@ from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 
 from app.models.user import User, Role
-from app.models.hospital import Department, Ward
+from app.models.hospital import Department, StaffDepartmentAssignment, Ward
 from app.models.tenant import Hospital
 from app.models.patient import PatientProfile
 from app.models.doctor import DoctorProfile
 from app.core.enums import UserRole, UserStatus
 from app.core.security import SecurityManager
+from app.models.hospital import StaffDepartmentAssignment
 
 logger = logging.getLogger(__name__)
 
@@ -1761,6 +1762,73 @@ class HospitalAdminService:
             md["department_name"] = department.name
             if doctor_profile:
                 doctor_profile.department_id = department.id
+                assignment_result = await self.db.execute(
+                    select(StaffDepartmentAssignment).where(
+                        and_(
+                            StaffDepartmentAssignment.staff_id == user.id,
+                            StaffDepartmentAssignment.hospital_id == self.hospital_id,
+                        )
+                    )
+                )
+
+                assignment = assignment_result.scalar_one_or_none()
+
+                print("ASSIGNMENT:", assignment)
+
+                if not assignment:
+                    print("CREATING STAFF DEPARTMENT ASSIGNMENT")
+
+                    assignment = StaffDepartmentAssignment(
+                        id=uuid.uuid4(),
+                        hospital_id=self.hospital_id,
+                        staff_id=user.id,
+                        department_id=department.id,
+                        is_primary=True,
+                        effective_from=datetime.utcnow(),
+                        notes="Auto-created during doctor update",
+                        is_active=True,
+                    )
+
+                    self.db.add(assignment)
+
+                else:
+                    print("UPDATING EXISTING ASSIGNMENT")
+
+                    assignment.department_id = department.id
+                    assignment.is_active = True
+                print("DOCTOR UPDATE METHOD HIT")
+                print("USER ID:", user.id)
+                print("DEPARTMENT ID:", department.id)
+                assignment_result = await self.db.execute(
+                    select(StaffDepartmentAssignment).where(
+                        and_(
+                            StaffDepartmentAssignment.staff_id == user.id,
+                            StaffDepartmentAssignment.hospital_id == self.hospital_id,
+                        )
+                    )
+                )
+                assignment = assignment_result.scalar_one_or_none()
+                print("ASSIGNMENT:", assignment)
+                if not assignment:
+                    print("CREATING NEW ASSIGNMENT")
+                    self.db.add(
+                        StaffDepartmentAssignment(
+                            print("ASSIGNMENT ADDED TO SESSION"),
+                            id=uuid.uuid4(),
+                            hospital_id=self.hospital_id,
+                            staff_id=user.id,
+                            department_id=department.id,
+                            is_primary=True,
+                            effective_from=datetime.utcnow(),
+                            notes="Auto-created during doctor update",
+                            is_active=True,
+                        )
+                    )
+                else:
+                    assignment.department_id = department.id
+                    assignment.is_active = True
+
+                    
             updated_fields.append("department_name")
 
         mapping = {
@@ -2289,6 +2357,18 @@ class HospitalAdminService:
         )
         
         self.db.add(doctor_profile)
+        assignment = StaffDepartmentAssignment(
+            id=uuid.uuid4(),
+            hospital_id=self.hospital_id,
+            staff_id=user.id,
+            department_id=department.id,
+            is_primary=True,
+            effective_from=datetime.utcnow(),
+            notes="Auto-created during doctor creation",
+            is_active=True,
+        )
+
+        self.db.add(assignment)
         await self.db.commit()
         
         return {

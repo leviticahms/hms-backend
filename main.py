@@ -22,7 +22,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError, DBAPIError
 
 from app.core.config import settings
 from app.core.logging_config import configure_logging, get_logger
-from app.database.session import init_database, close_database, get_db_session, get_async_engine
+from app.database.session import init_database, close_database, get_async_engine
 from app.middleware.tenant_isolation import TenantIsolationMiddleware
 from app.middleware.clinical_audit import ClinicalAuditMiddleware
 from app.middleware.hospital_admin_audit import HospitalAdminAuditMiddleware
@@ -1027,3 +1027,5 @@ if __name__ == "__main__":
         reload=settings.DEBUG,
         log_level=settings.LOG_LEVEL.lower()
     )
+
+print("MAIN FILE:", __file__)

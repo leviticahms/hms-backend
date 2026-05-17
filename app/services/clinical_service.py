@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc, func, asc
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
+from app.models.doctor import DoctorProfile
+from datetime import datetime
 
 from app.models.user import User, Role, user_roles
 from app.models.patient import PatientProfile, Appointment, MedicalRecord, Admission
@@ -129,6 +131,7 @@ async def send_opd_portal_credentials_email_task(
 
 class ClinicalService:
     """Service for clinical operations (OPD, IPD, Nursing)"""
+<<<<<<< HEAD
 
     def __init__(self, db: AsyncSession, platform_db: Optional[AsyncSession] = None):
         self.db = db
@@ -257,6 +260,13 @@ class ClinicalService:
                         return dept
 
         return await self._department_from_user_metadata(user)
+=======
+    
+    def __init__(self, platform_db,tenant_db):
+        self.platform_db = platform_db
+        self.tenant_db = tenant_db
+        self.db = tenant_db
+>>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
     
     # ============================================================================
     # USER CONTEXT AND VALIDATION
@@ -316,9 +326,9 @@ class ClinicalService:
         await self.validate_receptionist_access(user_context)
         
         # Get receptionist user and their department assignment
-        receptionist_result = await self.db.execute(
+        receptionist_result = await self.platform_db.execute(
             select(User)
-            .where(User.id == user_context["user_id"])
+            .where(User.id == uuid.UUID(str(user_context["user_id"])))
         )
         receptionist_user = receptionist_result.scalar_one_or_none()
         if not receptionist_user:
@@ -332,20 +342,32 @@ class ClinicalService:
                 detail="Receptionist user not found. Please contact administrator."
             )
             
+<<<<<<< HEAD
         assignment = await self._get_primary_staff_assignment(
             user_context["user_id"],
             user_context.get("hospital_id"),
+=======
+        # Get department assignment
+        assignment_result = await self.platform_db.execute(
+            select(StaffDepartmentAssignment)
+            .where(
+                and_(
+                    StaffDepartmentAssignment.staff_id == uuid.UUID(str(user_context["user_id"])),
+                    StaffDepartmentAssignment.is_active == True,
+                )
+            )
+>>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
         )
 
         # Legacy/fallback compatibility:
         # some setups have ReceptionistProfile metadata but no StaffDepartmentAssignment row
         # in the current routed DB.
         if not assignment:
-            rp_result = await self.db.execute(
+            rp_result = await self.tenant_db.execute(
                 select(ReceptionistProfile)
                 .where(
                     and_(
-                        ReceptionistProfile.user_id == user_context["user_id"],
+                        ReceptionistProfile.user_id == uuid.UUID(str(user_context["user_id"])),
                         ReceptionistProfile.hospital_id == receptionist_user.hospital_id,
                     )
                 )
@@ -367,7 +389,7 @@ class ClinicalService:
                 if md_id_raw:
                     try:
                         md_id = uuid.UUID(str(md_id_raw))
-                        dres = await self.db.execute(
+                        dres = await self.platform_db.execute(
                             select(Department).where(Department.id == md_id)
                         )
                         dept_obj = dres.scalar_one_or_none()
@@ -445,7 +467,7 @@ class ClinicalService:
             )
         
         # Check if phone already exists
-        existing_phone = await self.db.execute(
+        existing_phone = await self.platform_db.execute(
             select(User).where(and_(User.phone == phone_norm, User.hospital_id == hospital_id_uuid))
         )
         if existing_phone.first():
@@ -457,7 +479,7 @@ class ClinicalService:
         # Check if email already exists (if provided)
         email_norm = (patient_data.get("email") or "").strip().lower() if patient_data.get("email") else None
         if email_norm:
-            existing_email = await self.db.execute(
+            existing_email = await self.platform_db.execute(
                 select(User).where(and_(User.email == email_norm, User.hospital_id == hospital_id_uuid))
             )
             if existing_email.first():
@@ -514,11 +536,11 @@ class ClinicalService:
         )
         
         # Add user to database first
-        self.db.add(user)
-        await self.db.flush()  # Flush to get the user ID
+        self.platform_db.add(user)
+        await self.platform_db.flush()  # Flush to get the user ID
         
         # Assign PATIENT role (must succeed or patient portal login fails with AUTH_002).
-        role_result = await self.db.execute(
+        role_result = await self.platform_db.execute(
             select(Role).where(Role.name == UserRole.PATIENT.value)
         )
         role = role_result.scalar_one_or_none()
@@ -530,10 +552,10 @@ class ClinicalService:
                 description="Patient Role",
                 level=10,
             )
-            self.db.add(role)
-            await self.db.flush()
+            self.platform_db.add(role)
+            await self.platform_db.flush()
 
-        await self.db.execute(
+        await self.platform_db.execute(
             user_roles.insert().values(
                 user_id=user.id,
                 role_id=role.id,
@@ -573,12 +595,12 @@ class ClinicalService:
             emergency_contact_relation=patient_data.get("emergency_contact_relation"),
         )
         
-        self.db.add(patient_profile)
-        await self.db.flush()
+        self.tenant_db.add(patient_profile)
+        await self.tenant_db.flush()
         
         hospital_name = None
         try:
-            hospital_result = await self.db.execute(
+            hospital_result = await self.platform_db.execute(
                 select(Hospital).where(Hospital.id == hospital_id_uuid)
             )
             hospital = hospital_result.scalar_one_or_none()
@@ -587,7 +609,13 @@ class ClinicalService:
         except Exception:
             hospital_name = None
 
-        await self.db.commit()
+        try:
+            await self.platform_db.commit()
+            await self.tenant_db.commit()
+        except:
+            await self.platform_db.rollback()
+            await self.tenant_db.rollback()
+            raise
 
         result = {
             "patient_ref": patient_ref,
@@ -645,7 +673,7 @@ class ClinicalService:
         if not hospital_id_str:
             from app.utils.hospital_id_resolve import resolve_effective_hospital_id
 
-            resolved = await resolve_effective_hospital_id(self.db, current_user)
+            resolved = await resolve_effective_hospital_id(self.platform_db, current_user)
             if resolved:
                 hospital_id_str = str(resolved)
         if not hospital_id_str:
@@ -673,7 +701,7 @@ class ClinicalService:
                 detail="No fields to update. Send at least one profile field or password.",
             )
 
-        result = await self.db.execute(
+        result = await self.tenant_db.execute(
             select(PatientProfile)
             .where(
                 and_(
@@ -681,7 +709,6 @@ class ClinicalService:
                     PatientProfile.hospital_id == hospital_id_uuid,
                 )
             )
-            .options(selectinload(PatientProfile.user).selectinload(User.roles))
         )
         profile = result.scalar_one_or_none()
         if not profile or not profile.user:
@@ -705,7 +732,7 @@ class ClinicalService:
             phone_norm = str(phone_norm).strip()
             if not phone_norm:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="phone cannot be empty")
-            dup_phone = await self.db.execute(
+            dup_phone = await self.platform_db.execute(
                 select(User.id).where(
                     and_(
                         User.phone == phone_norm,
@@ -729,7 +756,7 @@ class ClinicalService:
                     detail="email cannot be removed; omit the field to leave unchanged.",
                 )
             email_norm = str(raw_em).strip().lower()
-            dup_em = await self.db.execute(
+            dup_em = await self.platform_db.execute(
                 select(User.id).where(
                     and_(
                         User.email == email_norm,
@@ -831,16 +858,20 @@ class ClinicalService:
 
         hospital_name = None
         try:
-            hops = await self.db.execute(select(Hospital).where(Hospital.id == hospital_id_uuid))
+            hops = await self.platform_db.execute(select(Hospital).where(Hospital.id == hospital_id_uuid))
             hrow = hops.scalar_one_or_none()
             if hrow:
                 hospital_name = hrow.name
         except Exception:
             hospital_name = None
 
-        await self.db.commit()
-        await self.db.refresh(profile)
-        await self.db.refresh(pu)
+        try:
+            await self.platform_db.commit()
+            await self.tenant_db.commit()
+        except:
+            await self.platform_db.rollback()
+            await self.tenant_db.rollback()
+            raise
 
         out = self._receptionist_patient_detail_dict(profile)
         out["patient_ref"] = profile.patient_id
@@ -871,7 +902,7 @@ class ClinicalService:
         if not hospital_id_str:
             from app.utils.hospital_id_resolve import resolve_effective_hospital_id
 
-            resolved = await resolve_effective_hospital_id(self.db, current_user)
+            resolved = await resolve_effective_hospital_id(self.platform_db, current_user)
             if resolved:
                 hospital_id_str = str(resolved)
         if not hospital_id_str:
@@ -881,7 +912,7 @@ class ClinicalService:
             )
         hospital_id_uuid = uuid.UUID(hospital_id_str)
         pr = (patient_ref or "").strip()
-        result = await self.db.execute(
+        result = await self.tenant_db.execute(
             select(PatientProfile)
             .where(
                 and_(
@@ -889,7 +920,6 @@ class ClinicalService:
                     PatientProfile.hospital_id == hospital_id_uuid,
                 )
             )
-            .options(selectinload(PatientProfile.user))
         )
         patient = result.scalar_one_or_none()
         if not patient:
@@ -909,7 +939,7 @@ class ClinicalService:
         name = (patient_name or "").strip()
 
         if ref:
-            patient_result = await self.db.execute(
+            patient_result = await self.tenant_db.execute(
                 select(PatientProfile)
                 .where(
                     and_(
@@ -917,14 +947,12 @@ class ClinicalService:
                         PatientProfile.hospital_id == hospital_id_uuid,
                     )
                 )
-                .options(selectinload(PatientProfile.user))
             )
             patient = patient_result.scalar_one_or_none()
             if not patient:
-                patient_result = await self.db.execute(
+                patient_result = await self.tenant_db.execute(
                     select(PatientProfile)
                     .where(PatientProfile.patient_id == ref)
-                    .options(selectinload(PatientProfile.user))
                 )
                 patient = patient_result.scalar_one_or_none()
                 if patient and patient.hospital_id is None:
@@ -957,7 +985,6 @@ class ClinicalService:
                     full == norm,
                 )
             )
-            .options(selectinload(PatientProfile.user))
         )
         rows = patient_result.scalars().all()
         if len(rows) == 1:
@@ -1027,7 +1054,7 @@ class ClinicalService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="doctor_id must be a valid UUID",
                 )
-            doctor_result = await self.db.execute(
+            doctor_result = await self.platform_db.execute(
                 select(User)
                 .join(user_roles, User.id == user_roles.c.user_id)
                 .join(Role, user_roles.c.role_id == Role.id)
@@ -1041,7 +1068,7 @@ class ClinicalService:
             )
             doctor = doctor_result.scalar_one_or_none()
             if not doctor:
-                profile_result = await self.db.execute(
+                profile_result = await self.tenant_db.execute(
                     select(DoctorProfile)
                     .where(
                         and_(
@@ -1067,7 +1094,7 @@ class ClinicalService:
         if department is None:
             department = await self.get_primary_department_for_doctor(doctor.id, hospital_id_uuid)
         else:
-            in_dept = await self.db.execute(
+            in_dept = await self.tenant_db.execute(
                 select(StaffDepartmentAssignment.id).where(
                     and_(
                         StaffDepartmentAssignment.staff_id == doctor.id,
@@ -1133,7 +1160,7 @@ class ClinicalService:
                 detail="Time slot is not available",
             )
 
-        conflict_check = await self.db.execute(
+        conflict_check = await self.tenant_db.execute(
             select(Appointment).where(
                 and_(
                     Appointment.doctor_id == doctor.id,
@@ -1151,7 +1178,7 @@ class ClinicalService:
                 detail="Doctor is not available at this time. Please choose a different time slot.",
             )
 
-        dp_result = await self.db.execute(
+        dp_result = await self.tenant_db.execute(
             select(DoctorProfile).where(
                 and_(
                     DoctorProfile.user_id == doctor.id,
@@ -1191,11 +1218,11 @@ class ClinicalService:
             consultation_fee=consultation_fee,
             status=AppointmentStatus.CONFIRMED,
             created_by_role=UserRole.RECEPTIONIST,
-            created_by_user=user_context["user_id"],
+            created_by_user=uuid.UUID(str(user_context["user_id"])),
         )
 
-        self.db.add(appointment)
-        await self.db.commit()
+        self.tenant_db.add(appointment)
+        await self.tenant_db.commit()
 
         return {
             "appointment_ref": appointment_ref,
@@ -1230,7 +1257,7 @@ class ClinicalService:
                 Appointment.appointment_date == today
             )
         ).options(
-            selectinload(Appointment.patient).selectinload(PatientProfile.user),
+            selectinload(Appointment.patient),
             selectinload(Appointment.doctor),
             selectinload(Appointment.department)
         ).order_by(asc(Appointment.appointment_time))
@@ -1308,7 +1335,7 @@ class ClinicalService:
                 )
             )
             .options(
-                selectinload(Appointment.patient).selectinload(PatientProfile.user),
+                selectinload(Appointment.patient),
                 selectinload(Appointment.doctor),
                 selectinload(Appointment.department),
             )
@@ -1336,7 +1363,7 @@ class ClinicalService:
                 )
             )
             .options(
-                selectinload(Appointment.patient).selectinload(PatientProfile.user),
+                selectinload(Appointment.patient),
                 selectinload(Appointment.doctor),
                 selectinload(Appointment.department)
             )
@@ -1564,7 +1591,7 @@ class ClinicalService:
                 )
             )
             .options(
-                selectinload(Appointment.patient).selectinload(PatientProfile.user),
+                selectinload(Appointment.patient),
                 selectinload(Appointment.doctor)
             )
         )
@@ -1723,9 +1750,12 @@ class ClinicalService:
                     PatientProfile.hospital_id == user_context["hospital_id"]
                 )
             )
+<<<<<<< HEAD
             .options(selectinload(PatientProfile.user))
             .order_by(desc(PatientProfile.created_at))
             .limit(1)
+=======
+>>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
         )
         
         patient = patient_result.scalars().first()
@@ -1736,7 +1766,7 @@ class ClinicalService:
             )
         
         # Check if patient is already admitted
-        existing_admission = await self.db.execute(
+        existing_admission = await self.tenant_db.execute(
             select(Admission)
             .where(
                 and_(
@@ -1765,7 +1795,7 @@ class ClinicalService:
             hospital_id=user_context["hospital_id"],
             patient_id=patient.id,
             doctor_id=doctor.id,
-            department_id=doctor.department_id,
+            department_id=doctor.department.id,
             admission_number=admission_number,
             admission_type=admission_data["admission_type"],
             admission_date=datetime.now(timezone.utc),
@@ -1778,8 +1808,8 @@ class ClinicalService:
             is_active=True
         )
         
-        self.db.add(admission)
-        await self.db.commit()
+        self.tenant_db.add(admission)
+        await self.tenant_db.commit()
         
         return {
             "admission_number": admission_number,
@@ -1818,7 +1848,6 @@ class ClinicalService:
         patients_result = await patient_db.execute(
             select(PatientProfile)
             .where(PatientProfile.hospital_id == user_context["hospital_id"])
-            .options(selectinload(PatientProfile.user))
             .order_by(PatientProfile.created_at.desc())
             .limit(50)  # Limit to recent 50 patients
         )
@@ -1943,6 +1972,7 @@ class ClinicalService:
                 )
                 .order_by(desc(Admission.admission_date))
             )
+<<<<<<< HEAD
             count_query = select(func.count(Admission.id)).where(
                 Admission.hospital_id == hid,
                 Admission.is_active == True,
@@ -1982,6 +2012,15 @@ class ClinicalService:
                 )
             )
 
+=======
+        ).options(
+            selectinload(Admission.patient),
+            selectinload(Admission.doctor),
+            selectinload(Admission.department)
+        ).order_by(desc(Admission.admission_date))
+        
+        # Apply filters
+>>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
         if filters.get("ward"):
             query = query.where(Admission.ward == filters["ward"])
             count_query = count_query.where(Admission.ward == filters["ward"])
@@ -2222,8 +2261,8 @@ class ClinicalService:
             is_finalized=True
         )
         
-        self.db.add(assessment_record)
-        await self.db.commit()
+        self.tenant_db.add(assessment_record)
+        await self.tenant_db.commit()
         
         return {
             "assessment_id": str(assessment_record.id),
@@ -2403,7 +2442,34 @@ class ClinicalService:
     
     async def get_admission_by_number_with_department_check(self, admission_number: str, user_profile) -> Admission:
         """Get admission with department access control"""
+<<<<<<< HEAD
         return await self._fetch_admission_for_ipd_department(admission_number, user_profile)
+=======
+        result = await self.db.execute(
+            select(Admission)
+            .where(
+                and_(
+                    Admission.admission_number == admission_number,
+                    Admission.hospital_id == user_profile.hospital_id,
+                    Admission.department_id == user_profile.department_id  # Department-based access
+                )
+            )
+            .options(
+                selectinload(Admission.patient),
+                selectinload(Admission.doctor),
+                selectinload(Admission.department)
+            )
+        )
+        
+        admission = result.scalar_one_or_none()
+        if not admission:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Admission {admission_number} not found in your department"
+            )
+        
+        return admission
+>>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
     
     # ============================================================================
     # HELPER METHODS FOR IPD
@@ -2456,9 +2522,9 @@ class ClinicalService:
     async def get_doctor_profile(self, user_context: dict):
         """Get doctor profile with department information"""
         # Get doctor user and their department assignment
-        doctor_result = await self.db.execute(
+        doctor_result = await self.platform_db.execute(
             select(User)
-            .where(User.id == user_context["user_id"])
+            .where(User.id == uuid.UUID(str(user_context["user_id"])))
         )
         doctor_user = doctor_result.scalars().first()
         
@@ -2467,6 +2533,7 @@ class ClinicalService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Doctor user not found. Please contact administrator."
             )
+<<<<<<< HEAD
 
         department = await self._resolve_ipd_department(
             doctor_user,
@@ -2476,6 +2543,47 @@ class ClinicalService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Doctor department assignment not found. Please contact administrator.",
+=======
+            
+        # Get department assignment
+        assignment_result = await self.tenant_db.execute(
+            select(StaffDepartmentAssignment)
+            .options(
+                selectinload(StaffDepartmentAssignment.department),
+                selectinload(StaffDepartmentAssignment.staff)
+            )
+            .where(
+                and_(
+                    StaffDepartmentAssignment.staff_id == uuid.UUID(str(user_context["user_id"])),
+                    StaffDepartmentAssignment.hospital_id == uuid.UUID(str(user_context["hospital_id"])),
+                    StaffDepartmentAssignment.is_active == True,
+                )
+            )
+        )
+        assignments = assignment_result.scalars().all()
+        assignment = assignments[0] if assignments else None
+        print("========== DOCTOR PROFILE DEBUG ==========")
+        print("USER_ID:", user_context["user_id"])
+        print("HOSPITAL_ID:", user_context["hospital_id"])
+        print("ASSIGNMENT:", assignment)
+
+        if assignment:
+            print("ASSIGNMENT ID:", assignment.id)
+            print("DEPARTMENT ID:", assignment.department_id)
+            print("IS ACTIVE:", assignment.is_active)
+            print("DEPARTMENT:", assignment.department)
+        print("==========================================")
+        
+        if not assignment or not assignment.department:
+            print("========== DOCTOR DEBUG ==========")
+            print("USER ID:", uuid.UUID(str(user_context["user_id"])))
+            print("USING DB:", self.tenant_db)
+
+            print("ASSIGNMENT RESULT:", assignment)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Doctor not assigned to any department."
+>>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
             )
 
         # Create a mock object that has the same interface as the old DoctorProfile
@@ -2504,16 +2612,24 @@ class ClinicalService:
             # Get nurse user and their department assignment
             nurse_result = await self.db.execute(
                 select(User)
-                .where(User.id == user_context["user_id"])
+                .where(User.id == uuid.UUID(str(user_context["user_id"])))
             )
             nurse_user = nurse_result.scalars().first()
             
             if not nurse_user:
                 return None
+<<<<<<< HEAD
 
             department = await self._resolve_ipd_department(
                 nurse_user,
                 user_context.get("hospital_id"),
+=======
+                
+            # Get department assignment
+            assignment_result = await self.db.execute(
+                select(StaffDepartmentAssignment)
+                .where(StaffDepartmentAssignment.staff_id == uuid.UUID(str(user_context["user_id"])))
+>>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
             )
             if not department:
                 return None
@@ -2892,7 +3008,34 @@ class ClinicalService:
     
     async def get_admission_by_number_with_department_check(self, admission_number: str, user_profile) -> Admission:
         """Get admission with department access control"""
+<<<<<<< HEAD
         return await self._fetch_admission_for_ipd_department(admission_number, user_profile)
+=======
+        result = await self.db.execute(
+            select(Admission)
+            .where(
+                and_(
+                    Admission.admission_number == admission_number,
+                    Admission.hospital_id == user_profile.hospital_id,
+                    Admission.department_id == user_profile.department_id  # Department-based access
+                )
+            )
+            .options(
+                selectinload(Admission.patient),
+                selectinload(Admission.doctor),
+                selectinload(Admission.department)
+            )
+        )
+        
+        admission = result.scalar_one_or_none()
+        if not admission:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Admission {admission_number} not found in your department"
+            )
+        
+        return admission
+>>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 
     # ============================================================================
     # HELPER METHODS

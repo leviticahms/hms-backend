@@ -4,16 +4,18 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
+import logging
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import and_, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-
 from app.models.doctor import DoctorProfile, Prescription, PrescriptionNotification
 from app.models.patient import Admission, Appointment, MedicalRecord, PatientProfile
 from app.models.telemedicine import TelemedNotification
 from app.models.user import User
 from app.core.enums import AdmissionType
+from app.models.hospital import Department, StaffDepartmentAssignment
 from app.schemas.doctor_sidebar import (
     DoctorAppointmentOut,
     DoctorInpatientVisitOut,
@@ -578,23 +580,145 @@ async def ensure_doctor_profile_row(db: AsyncSession, user: User) -> None:
     Ensure doctor_profiles exists — same bootstrap as `/simple-prescription` (department assignment required).
     Call before profile GET/PATCH when no row yet.
     """
-    from app.api.v1.routers.doctor.simple_prescription import get_doctor_profile
-    from app.core.enums import UserRole
+    logger.info(f"Ensuring doctor profile for user {user.id}, hospital {user.hospital_id}")
+    
+    if not user.hospital_id:
+        logger.error(f"User {user.id} has no hospital_id assigned")
+        raise ValueError(f"User {user.id} has no hospital_id assigned. Please assign a hospital to this user first.")
+    
+    department_id = None
 
-    user_roles = [r.name for r in user.roles] if user.roles else []
-    if UserRole.DOCTOR.value not in user_roles:
+    # Check for existing profile
+    existing_profile = await db.execute(
+        select(DoctorProfile).where(DoctorProfile.user_id == user.id)
+    )
+    doctor_profile = existing_profile.scalar_one_or_none()
+
+    if doctor_profile:
+        logger.info(f"Doctor profile already exists for user {user.id}")
         return
-    user_context = {
-        "user_id": str(user.id),
-        "hospital_id": str(user.hospital_id) if user.hospital_id else None,
-        "role": UserRole.DOCTOR.value,
-        "all_roles": user_roles,
-    }
-    await get_doctor_profile(user_context, db)
-    q = DoctorProfile.user_id == user.id
-    if user.hospital_id is not None:
-        q = and_(q, DoctorProfile.hospital_id == user.hospital_id)
-    return q
+
+    # Check for active department assignments - get first one if multiple
+    assignment_result = await db.execute(
+        select(StaffDepartmentAssignment).where(
+            and_(
+                StaffDepartmentAssignment.staff_id == user.id,
+                StaffDepartmentAssignment.is_active == True,
+            )
+        )
+    )
+    assignments = assignment_result.scalars().all()
+    
+    if assignments:
+        # Use the first active assignment
+        assignment = assignments[0]
+        department_id = assignment.department_id
+        logger.info(f"Found active department assignment {department_id} for user {user.id}")
+        
+        # If there are multiple active assignments, deactivate the extras
+        if len(assignments) > 1:
+            logger.warning(f"Found {len(assignments)} active assignments for user {user.id}. Keeping first, deactivating others.")
+            for extra_assignment in assignments[1:]:
+                extra_assignment.is_active = False
+            await db.commit()
+
+    if not department_id:
+        # Check for any department assignment (including inactive) - get first one
+        any_assignment_result = await db.execute(
+            select(StaffDepartmentAssignment).where(
+                StaffDepartmentAssignment.staff_id == user.id
+            )
+        )
+        existing_assignments = any_assignment_result.scalars().all()
+        
+        if existing_assignments:
+            # Use the first existing assignment (most recent or primary)
+            existing_any = existing_assignments[0]
+            if existing_any and existing_any.department_id:
+                # Reactivate existing assignment instead of creating new
+                logger.info(f"Reactivating existing department assignment {existing_any.department_id} for user {user.id}")
+                existing_any.is_active = True
+                existing_any.effective_from = datetime.now(timezone.utc)
+                await db.commit()
+                department_id = existing_any.department_id
+        else:
+            # Find any department in the hospital
+            logger.info(f"Looking for department with hospital_id: {user.hospital_id}")
+            department_result = await db.execute(
+                select(Department).where(Department.hospital_id == user.hospital_id)
+            )
+            department = department_result.scalars().first()
+
+            if not department:
+                # Auto-create a default department for the hospital
+                logger.warning(f"No department found for hospital_id: {user.hospital_id}. Creating default department.")
+                
+                default_department = Department(
+                    id=uuid.uuid4(),
+                    name="General Medicine",
+                    code="GENMED",
+                    description="Auto-created default department for the hospital",
+                    hospital_id=user.hospital_id,
+                    is_active=True,
+                    is_emergency=False,
+                    is_icu=False,
+                    bed_capacity=0,
+                    is_24x7=False,
+                    settings={},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc)
+                )
+                db.add(default_department)
+                await db.commit()
+                await db.refresh(default_department)
+                department = default_department
+                logger.info(f"Created default department {department.id} for hospital {user.hospital_id}")
+
+            # Create new assignment
+            assignment = StaffDepartmentAssignment(
+                id=uuid.uuid4(),
+                hospital_id=user.hospital_id,
+                staff_id=user.id,
+                department_id=department.id,
+                is_primary=True,
+                effective_from=datetime.now(timezone.utc),
+                notes="Auto-created from sidebar fallback",
+                is_active=True,
+            )
+            db.add(assignment)
+            await db.commit()
+            department_id = department.id
+            logger.info(f"Created new department assignment {department_id} for user {user.id}")
+
+    # Create doctor profile with ALL required fields
+    new_profile = DoctorProfile(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        hospital_id=user.hospital_id,
+        department_id=department_id,
+        doctor_id=f"DOC-{str(user.id)[:8]}",
+        medical_license_number=f"ML-{str(user.id)[:8]}-{datetime.now(timezone.utc).strftime('%Y%m')}",
+        designation="General Physician",
+        specialization="General Medicine",
+        consultation_fee=500.00,
+        follow_up_fee=300.00,
+        consultation_type="BOTH",
+        availability_time="9 AM - 5 PM",
+        languages_spoken=["English"],
+        is_accepting_new_patients=True,
+        is_available_for_emergency=False,
+        experience_years=0,
+        qualifications=[],
+        certifications=[],
+        medical_associations=[],
+        bio="",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        is_active=True
+    )
+    db.add(new_profile)
+    await db.commit()
+    logger.info(f"Created doctor profile {new_profile.id} for user {user.id}")
 
 
 async def get_doctor_sidebar_profile(db: AsyncSession, user: User) -> Optional[DoctorProfileOut]:

@@ -83,6 +83,7 @@ try:
     from app.api.v1.routers.doctor.doctor_patient_records import router as doctor_patient_records_router
     from app.api.v1.routers.doctor.doctor_reports_analytics import router as doctor_reports_router
     from app.api.v1.routers.doctor.doctor_treatment_plans import router as doctor_treatment_router
+    from app.api.v1.routers.doctor.simple_prescription import router as simple_prescription_router
     from app.api.v1.routers.doctor.doctor_sidebar import router as doctor_sidebar_router
     from app.api.v1.routers.doctor.simple_prescription import router as simple_prescription_router
 
@@ -92,63 +93,110 @@ try:
     api_router.include_router(doctor_patient_records_router)
     api_router.include_router(doctor_reports_router)
     api_router.include_router(doctor_treatment_router)
+<<<<<<< HEAD
     api_router.include_router(doctor_sidebar_router)
     # Pharmacy-linked prescriptions: doctor search/create, pharmacist dispense, patient PDF/list.
     api_router.include_router(simple_prescription_router)
     logger.info("✓ Doctor routers loaded (sidebar + simple-prescription / pharmacy medicines)")
+=======
+    api_router.include_router(simple_prescription_router)
+    api_router.include_router(doctor_sidebar_router)
+    logger.info("✓ Doctor routers loaded (sidebar + simple-prescription)")
+>>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 except ImportError as e:
     logger.error(f"✗ Failed to load doctor routers: {e}")
 
 # ============================================================================
 # 5. PATIENT MODULE
 # ============================================================================
+
+# ---------------- IPD MANAGEMENT ----------------
 try:
-    from app.api.v1.routers.patient.patient_appointment_booking import router as patient_booking_router
-    from app.api.v1.routers.patient.patient_medical_history import router as medical_history_router
-    from app.api.v1.routers.patient.patient_document_storage import router as document_storage_router
-    from app.api.v1.routers.patient.patient_discharge_summary import router as discharge_summary_router
-    from app.api.v1.routers.patient.ipd_management import router as ipd_management_router
-    from app.api.v1.routers.patient.patient_dashboard import router as patient_dashboard_router
-    from app.api.v1.routers.patient.patient_billing import router as patient_billing_router
-    from app.api.v1.routers.patient.patient_profile import router as patient_profile_router
-    from app.api.v1.routers.patient.patient_lab_tests import router as patient_lab_tests_router
-    from app.api.v1.routers.patient.patient_messaging import router as patient_messaging_router
-    
-    api_router.include_router(patient_booking_router)
-    api_router.include_router(patient_dashboard_router)
-    api_router.include_router(patient_billing_router)
-    api_router.include_router(patient_profile_router)
-    api_router.include_router(patient_lab_tests_router)
-    api_router.include_router(patient_messaging_router)
-    api_router.include_router(medical_history_router)
-    api_router.include_router(document_storage_router)
-    api_router.include_router(discharge_summary_router)
+    from app.api.v1.routers.patient.ipd_management import (
+        router as ipd_management_router
+    )
+
     api_router.include_router(ipd_management_router)
-    logger.info("✓ Patient routers loaded")
-except ImportError as e:
-    logger.error(f"✗ Failed to load patient routers: {e}")
+
+    print("✓ IPD ROUTER LOADED")
+
+except Exception as e:
+    import traceback
+
+    print("✗ IPD ROUTER FAILED")
+    print(e)
+
+    traceback.print_exc()
+
+
+# ---------------- PATIENT DASHBOARD ----------------
+try:
+    from app.api.v1.routers.patient.patient_dashboard import (
+        router as patient_dashboard_router
+    )
+
+    api_router.include_router(patient_dashboard_router)
+
+    print("✓ PATIENT DASHBOARD ROUTER LOADED")
+
+except Exception as e:
+    print("✗ PATIENT DASHBOARD ROUTER FAILED")
+    print(e)
+
+
+# ---------------- PATIENT PROFILE ----------------
+try:
+    from app.api.v1.routers.patient.patient_profile import (
+        router as patient_profile_router
+    )
+
+    api_router.include_router(patient_profile_router)
+
+    print("✓ PATIENT PROFILE ROUTER LOADED")
+
+except Exception as e:
+    print("✗ PATIENT PROFILE ROUTER FAILED")
+    print(e)
+
+
+# ---------------- PATIENT BILLING ----------------
+try:
+    from app.api.v1.routers.patient.patient_billing import (
+        router as patient_billing_router
+    )
+
+    api_router.include_router(patient_billing_router)
+
+    print("✓ PATIENT BILLING ROUTER LOADED")
+
+except Exception as e:
+    print("✗ PATIENT BILLING ROUTER FAILED")
+    print(e)
 
 # ============================================================================
-# 6. STAFF MANAGEMENT
+# 6. STAFF MANAGEMENT (Receptionist + OPD)
 # ============================================================================
 try:
     from app.api.v1.routers.management.nurse_management import router as nurse_management_router
     from app.api.v1.routers.management.receptionist_management import router as receptionist_management_router
+    print("RECEPTIONIST ROUTER IMPORTED")
+    
     from app.api.v1.routers.management.staff_doctor_schedules import (
         router as staff_doctor_schedules_router,
     )
-    from app.api.v1.routers.management.receptionist_directory import (
-        appointments_router as receptionist_appointment_directory_router,
-        directory_router as receptionist_directory_router,
+    from app.api.v1.routers.management.opd_management import (
+        router as opd_management_router,
+        doctors_router as opd_doctors_router,
     )
     api_router.include_router(nurse_management_router)
     api_router.include_router(receptionist_management_router)
-    api_router.include_router(receptionist_directory_router)
-    api_router.include_router(receptionist_appointment_directory_router)
+    print("RECEPTIONIST ROUTER INCLUDED")
     api_router.include_router(staff_doctor_schedules_router)
-    logger.info("✓ Management routers loaded")
-except ImportError as e:
-    logger.error(f"✗ Failed to load management routers: {e}")
+    api_router.include_router(opd_management_router)
+    api_router.include_router(opd_doctors_router)
+    logger.info("✓ Management routers loaded (includes OPD)")
+except Exception as e:
+    logger.exception(f"✗ Failed to load management routers: {e}")
 
 # ============================================================================
 # 7. SURGERY MODULE
@@ -157,8 +205,8 @@ try:
     from app.api.v1.routers.surgery.routes import router as surgery_router
     api_router.include_router(surgery_router)
     logger.info("✓ Surgery router loaded")
-except ImportError as e:
-    logger.error(f"✗ Failed to load surgery router: {e}")
+except Exception as e:
+    logger.exception(f"Receptionist router failed: {e}")
 
 # ============================================================================
 # 8. PHARMACY MODULE

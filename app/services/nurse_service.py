@@ -107,9 +107,26 @@ class NurseService:
                     Admission.department_id == assignment.department_id,
                 )
             )
-            .options(selectinload(Admission.patient).selectinload(PatientProfile.user))
+            .options(selectinload(Admission.patient))
         )
         admission = res.scalar_one_or_none()
+        print("========== DEBUG ADMISSION ==========")
+        print("REQUESTED:", admission_number)
+        print("NURSE DEPARTMENT:", assignment.department_id)
+
+        all_admissions = await self.tenant_db.execute(
+            select(
+                Admission.admission_number,
+                Admission.department_id,
+                Admission.is_active
+            )
+        )
+    
+        print("ALL ADMISSIONS:")
+        for row in all_admissions.fetchall():
+            print(row)
+
+        print("====================================")
         if not admission:
             raise HTTPException(status_code=404, detail="Admission not found in nurse department")
         return admission
@@ -148,7 +165,7 @@ class NurseService:
                 )
             )
             .order_by(desc(Admission.created_at))
-            .options(selectinload(Admission.patient).selectinload(PatientProfile.user))
+            .options(selectinload(Admission.patient))
         )
         admission = res.scalars().first()
         if not admission:
@@ -182,6 +199,34 @@ class NurseService:
                     setattr(profile, k, dep_id)
                 else:
                     setattr(profile, k, v)
+            await self.tenant_db.commit()
+            assignment_q = await self.tenant_db.execute(
+                select(StaffDepartmentAssignment).where(
+                    and_(
+                        StaffDepartmentAssignment.staff_id == current_user.id,
+                        StaffDepartmentAssignment.hospital_id == current_user.hospital_id,
+                    )
+                )
+            )
+
+            assignment = assignment_q.scalars().first()
+
+            if assignment:
+                assignment.department_id = dep_id
+                assignment.is_active = True
+            else:
+                assignment = StaffDepartmentAssignment(
+                    id=uuid.uuid4(),
+                    hospital_id=current_user.hospital_id,
+                    staff_id=current_user.id,
+                    department_id=dep_id,
+                    is_primary=True,
+                    is_active=True,
+                )
+                self.tenant_db.add(assignment)
+                self.tenant_db.add(profile)
+                await self.tenant_db.commit()
+
             await self.tenant_db.commit()
             await self._mirror_upsert(NurseProfile, profile.id, _model_values_raw(profile))
             return _serialize_model(profile)
@@ -325,14 +370,14 @@ class NurseService:
                     Admission.is_active == True,
                 )
             )
-            .options(selectinload(Admission.patient).selectinload(PatientProfile.user), selectinload(Admission.doctor))
+            .options(selectinload(Admission.patient),selectinload(Admission.doctor))
             .order_by(desc(Admission.created_at))
         )
         rows = []
         for a in res.scalars().all():
             d = _serialize_model(a)
             d["patient_name"] = (
-                f"{a.patient.user.first_name} {a.patient.user.last_name}".strip()
+                a.patient.patient_id
                 if a.patient and a.patient.user
                 else None
             )
@@ -388,7 +433,8 @@ class NurseService:
         )
         self.tenant_db.add(rec)
         await self.tenant_db.commit()
-        await self._mirror_upsert(MedicalRecord, rec_id, _model_values_raw(rec))
+        # DO NOT MIRROR CLINICAL RECORDS TO PLATFORM DB
+        #await self._mirror_upsert(MedicalRecord, rec_id, _model_values_raw(rec))
         return _serialize_model(rec)
 
     async def get_vitals(self, admission_number: str, current_user: User) -> List[Dict[str, Any]]:
@@ -434,7 +480,6 @@ class NurseService:
         )
         self.tenant_db.add(rec)
         await self.tenant_db.commit()
-        await self._mirror_upsert(MedicalRecord, rec_id, _model_values_raw(rec))
         return _serialize_model(rec)
 
     async def get_medications(self, admission_number: str, current_user: User) -> List[Dict[str, Any]]:
@@ -542,7 +587,7 @@ class NurseService:
         )
         self.tenant_db.add(rec)
         await self.tenant_db.commit()
-        await self._mirror_upsert(MedicalRecord, rec_id, _model_values_raw(rec))
+        await self._mirror_upsert(rec_id, _model_values_raw(rec))
         return _serialize_model(rec)
 
     async def create_note(self, payload: Dict[str, Any], current_user: User) -> Dict[str, Any]:
@@ -580,7 +625,7 @@ class NurseService:
         )
         self.tenant_db.add(rec)
         await self.tenant_db.commit()
-        await self._mirror_upsert(MedicalRecord, rec_id, _model_values_raw(rec))
+        await self._mirror_upsert(rec_id, _model_values_raw(rec))
         return _serialize_model(rec)
 
     async def list_notes(self, admission_number: str, current_user: User) -> List[Dict[str, Any]]:
@@ -638,8 +683,8 @@ class NurseService:
         admission.discharge_date = now
         admission.is_active = False
         await self.tenant_db.commit()
-        await self._mirror_upsert(DischargeSummary, ds_id, _model_values_raw(summary))
-        await self._mirror_upsert(Admission, admission.id, _model_values_raw(admission))
+        await self._mirror_upsert(ds_id, _model_values_raw(summary))
+        await self._mirror_upsert(admission.id, _model_values_raw(admission))
         return _serialize_model(summary)
 
     async def list_discharge_support(self, current_user: User) -> List[Dict[str, Any]]:
@@ -653,8 +698,7 @@ class NurseService:
                     Admission.is_active == True,
                 )
             )
-            .options(selectinload(Admission.patient).selectinload(PatientProfile.user), selectinload(Admission.doctor))
-            .order_by(desc(Admission.created_at))
+            .options(selectinload(Admission.patient), selectinload(Admission.doctor))
         )
         rows: List[Dict[str, Any]] = []
         for a in res.scalars().all():
