@@ -1026,9 +1026,11 @@ class NurseService:
             settings=payload.get("settings", {}),
         )
         self.tenant_db.add(bed)
+        response = _serialize_model(bed)
+        bed_mirror = _model_values_raw(bed)
         await self.tenant_db.commit()
-        await self._mirror_upsert(Bed, bed_id, _model_values_raw(bed))
-        return _serialize_model(bed)
+        await self._mirror_upsert(Bed, bed_id, bed_mirror)
+        return response
 
     async def list_lab_tests(self, current_user: User, admission_number: Optional[str]) -> List[Dict[str, Any]]:
         if admission_number:
@@ -1173,10 +1175,13 @@ class NurseService:
         admission.discharge_summary_id = ds_id
         admission.discharge_date = now
         admission.is_active = False
+        response = _serialize_model(summary)
+        summary_mirror = _model_values_raw(summary)
+        admission_mirror = _model_values_raw(admission)
         await self.tenant_db.commit()
-        await self._mirror_upsert(DischargeSummary, ds_id, _model_values_raw(summary))
-        await self._mirror_upsert(Admission, admission.id, _model_values_raw(admission))
-        return _serialize_model(summary)
+        await self._mirror_upsert(DischargeSummary, ds_id, summary_mirror)
+        await self._mirror_upsert(Admission, admission.id, admission_mirror)
+        return response
 
     async def list_discharge_support(self, current_user: User) -> List[Dict[str, Any]]:
         admissions = await self._list_admissions_for_nurse(current_user, active_only=True)
@@ -1368,10 +1373,11 @@ class NurseService:
         for key, value in merged.items():
             if key in valid_cols and value is not None:
                 setattr(summary, key, value)
+        response = _serialize_model(summary)
+        summary_mirror = _model_values_raw(summary)
         await self.tenant_db.commit()
-        await self.tenant_db.refresh(summary)
-        await self._mirror_upsert(DischargeSummary, summary.id, _model_values_raw(summary))
-        return _serialize_model(summary)
+        await self._mirror_upsert(DischargeSummary, summary.id, summary_mirror)
+        return response
 
     async def get_discharge_summary(self, admission_number: str, current_user: User) -> Dict[str, Any]:
         admission = await self._resolve_admission(admission_number, current_user)
