@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 from sqlalchemy import and_, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+from app.services.patient_resolve import clinical_db_sessions, load_patient_by_ref
 from app.models.doctor import DoctorProfile, Prescription, PrescriptionNotification
 from app.models.patient import Admission, Appointment, MedicalRecord, PatientProfile
 from app.models.telemedicine import TelemedNotification
@@ -31,94 +33,105 @@ from app.schemas.doctor_sidebar import (
 )
 
 
-async def _prescription_doctor_ids(db: AsyncSession, user: User, hospital_id: uuid.UUID) -> List[uuid.UUID]:
-    """prescriptions.doctor_id FK -> doctor_profiles.id; include user.id only for legacy rows."""
+async def _doctor_scope_ids(
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+    user: User,
+    hospital_id: uuid.UUID,
+) -> List[uuid.UUID]:
+    """
+    Appointments/admissions use users.id; prescriptions may use doctor_profiles.id.
+    Collect scope IDs from tenant + platform DB.
+    """
     ids: List[uuid.UUID] = [user.id]
-    r = await db.execute(
-        select(DoctorProfile.id).where(
-            DoctorProfile.user_id == user.id,
-            DoctorProfile.hospital_id == hospital_id,
+    for session in clinical_db_sessions(tenant_db, platform_db):
+        r = await session.execute(
+            select(DoctorProfile.id).where(
+                DoctorProfile.user_id == user.id,
+                DoctorProfile.hospital_id == hospital_id,
+            )
         )
-    )
-    row = r.scalar_one_or_none()
-    if row and row not in ids:
-        ids.append(row)
+        row = r.scalar_one_or_none()
+        if row and row not in ids:
+            ids.append(row)
     return ids
 
 
-async def _doctor_scope_ids(db: AsyncSession, user: User, hospital_id: uuid.UUID) -> List[uuid.UUID]:
-    """
-    Some environments contain legacy rows with doctor_profile.id while
-    newer rows use users.id. Return both IDs for robust doctor scoping.
-    """
-    return await _prescription_doctor_ids(db, user, hospital_id)
-
-
 async def list_prescriptions_for_doctor(
-    db: AsyncSession,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
     user: User,
     hospital_id: uuid.UUID,
     patient_ref: Optional[str] = None,
     is_dispensed: Optional[bool] = None,
     limit: int = 50,
 ) -> List[DoctorPrescriptionSummaryOut]:
-    doc_ids = await _prescription_doctor_ids(db, user, hospital_id)
-    conditions: List = [
-        Prescription.hospital_id == hospital_id,
-        Prescription.doctor_id.in_(doc_ids),
-    ]
+    doc_ids = await _doctor_scope_ids(tenant_db, platform_db, user, hospital_id)
+    patient_uuid: Optional[uuid.UUID] = None
     if patient_ref:
-        pr = await db.execute(
-            select(PatientProfile.id).where(
-                and_(
-                    PatientProfile.patient_id == patient_ref,
-                    PatientProfile.hospital_id == hospital_id,
+        try:
+            patient_uuid = (
+                await load_patient_by_ref(
+                    patient_ref, hospital_id, tenant_db, platform_db
+                )
+            ).id
+        except Exception:
+            return []
+
+    seen: set[uuid.UUID] = set()
+    out: List[DoctorPrescriptionSummaryOut] = []
+    cap = min(limit, 100)
+
+    for session in clinical_db_sessions(tenant_db, platform_db):
+        conditions: List = [
+            Prescription.hospital_id == hospital_id,
+            Prescription.doctor_id.in_(doc_ids),
+        ]
+        if patient_uuid:
+            conditions.append(Prescription.patient_id == patient_uuid)
+        if is_dispensed is not None:
+            conditions.append(Prescription.is_dispensed == is_dispensed)
+
+        result = await session.execute(
+            select(Prescription)
+            .where(and_(*conditions))
+            .options(selectinload(Prescription.patient).selectinload(PatientProfile.user))
+            .order_by(desc(Prescription.created_at))
+            .limit(cap)
+        )
+        rows = result.scalars().all()
+        for p in rows:
+            if p.id in seen:
+                continue
+            seen.add(p.id)
+            patient = p.patient
+            name = ""
+            pref = ""
+            if patient and patient.user:
+                name = f"{patient.user.first_name} {patient.user.last_name}".strip()
+                pref = patient.patient_id or ""
+            meds = p.medications or []
+            out.append(
+                DoctorPrescriptionSummaryOut(
+                    prescription_id=str(p.id),
+                    prescription_number=p.prescription_number,
+                    patient_ref=pref,
+                    patient_name=name,
+                    prescription_date=p.prescription_date,
+                    diagnosis=p.diagnosis,
+                    total_medicines=len(meds) if isinstance(meds, list) else 0,
+                    is_dispensed=bool(p.is_dispensed),
+                    created_at=p.created_at.isoformat() if p.created_at else "",
                 )
             )
-        )
-        pid = pr.scalar_one_or_none()
-        if pid:
-            conditions.append(Prescription.patient_id == pid)
-        else:
-            return []
-    if is_dispensed is not None:
-        conditions.append(Prescription.is_dispensed == is_dispensed)
-
-    result = await db.execute(
-        select(Prescription)
-        .where(and_(*conditions))
-        .options(selectinload(Prescription.patient).selectinload(PatientProfile.user))
-        .order_by(desc(Prescription.created_at))
-        .limit(min(limit, 100))
-    )
-    rows = result.scalars().all()
-    out: List[DoctorPrescriptionSummaryOut] = []
-    for p in rows:
-        patient = p.patient
-        name = ""
-        pref = ""
-        if patient and patient.user:
-            name = f"{patient.user.first_name} {patient.user.last_name}".strip()
-            pref = patient.patient_id or ""
-        meds = p.medications or []
-        out.append(
-            DoctorPrescriptionSummaryOut(
-                prescription_id=str(p.id),
-                prescription_number=p.prescription_number,
-                patient_ref=pref,
-                patient_name=name,
-                prescription_date=p.prescription_date,
-                diagnosis=p.diagnosis,
-                total_medicines=len(meds) if isinstance(meds, list) else 0,
-                is_dispensed=bool(p.is_dispensed),
-                created_at=p.created_at.isoformat() if p.created_at else "",
-            )
-        )
+            if len(out) >= cap:
+                return out
     return out
 
 
 async def create_prescription_for_doctor(
-    db: AsyncSession,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
     user: User,
     hospital_id: uuid.UUID,
     payload: DoctorPrescriptionCreateRequest,
@@ -127,22 +140,16 @@ async def create_prescription_for_doctor(
     if not patient_ref:
         raise ValueError("patient is required")
 
-    pr = await db.execute(
-        select(PatientProfile)
-        .where(
-            and_(
-                PatientProfile.hospital_id == hospital_id,
-                PatientProfile.patient_id == patient_ref,
-            )
-        )
-        .options(selectinload(PatientProfile.user))
+    patient = await load_patient_by_ref(
+        patient_ref,
+        hospital_id,
+        tenant_db,
+        platform_db,
+        ensure_on_tenant=True,
     )
-    patient = pr.scalar_one_or_none()
-    if not patient:
-        raise ValueError("Patient not found")
 
-    doc_ids = await _prescription_doctor_ids(db, user, hospital_id)
-    doctor_fk = doc_ids[-1] if doc_ids else user.id
+    doc_ids = await _doctor_scope_ids(tenant_db, platform_db, user, hospital_id)
+    doctor_fk = doc_ids[-1] if len(doc_ids) > 1 else user.id
     token = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     prescription_number = f"RX-{token}-{str(user.id).split('-')[0]}"
     medication_item = {
@@ -165,9 +172,9 @@ async def create_prescription_for_doctor(
         diagnosis=None,
         is_dispensed=False,
     )
-    db.add(rec)
-    await db.commit()
-    await db.refresh(rec)
+    tenant_db.add(rec)
+    await tenant_db.commit()
+    await tenant_db.refresh(rec)
 
     pname = ""
     if patient.user:
@@ -186,112 +193,135 @@ async def create_prescription_for_doctor(
 
 
 async def list_appointments_for_doctor(
-    db: AsyncSession,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
     user: User,
     hospital_id: uuid.UUID,
     limit: int = 100,
 ) -> List[DoctorAppointmentOut]:
-    scope_ids = await _doctor_scope_ids(db, user, hospital_id)
-    r = await db.execute(
-        select(Appointment)
-        .where(
-            and_(
-                Appointment.hospital_id == hospital_id,
-                Appointment.doctor_id.in_(scope_ids),
-            )
-        )
-        .options(selectinload(Appointment.patient).selectinload(PatientProfile.user))
-        .order_by(desc(Appointment.created_at))
-        .limit(min(limit, 200))
-    )
-    rows = r.scalars().all()
+    scope_ids = await _doctor_scope_ids(tenant_db, platform_db, user, hospital_id)
+    seen: set[uuid.UUID] = set()
     out: List[DoctorAppointmentOut] = []
-    for a in rows:
-        patient = a.patient
-        pref = patient.patient_id if patient else ""
-        pname = ""
-        if patient and patient.user:
-            pname = f"{patient.user.first_name} {patient.user.last_name}".strip()
-        out.append(
-            DoctorAppointmentOut(
-                appointment_ref=a.appointment_ref,
-                patient_ref=pref or "",
-                patient_name=pname,
-                appointment_date=a.appointment_date,
-                appointment_time=a.appointment_time,
-                appointment_type=a.appointment_type,
-                status=a.status,
-                chief_complaint=a.chief_complaint,
-                notes=a.notes,
+    cap = min(limit, 200)
+
+    for session in clinical_db_sessions(tenant_db, platform_db):
+        r = await session.execute(
+            select(Appointment)
+            .where(
+                and_(
+                    Appointment.hospital_id == hospital_id,
+                    Appointment.doctor_id.in_(scope_ids),
+                )
             )
+            .options(selectinload(Appointment.patient).selectinload(PatientProfile.user))
+            .order_by(desc(Appointment.created_at))
+            .limit(cap)
         )
+        for a in r.scalars().all():
+            if a.id in seen:
+                continue
+            seen.add(a.id)
+            patient = a.patient
+            pref = patient.patient_id if patient else ""
+            pname = ""
+            if patient and patient.user:
+                pname = f"{patient.user.first_name} {patient.user.last_name}".strip()
+            out.append(
+                DoctorAppointmentOut(
+                    appointment_ref=a.appointment_ref,
+                    patient_ref=pref or "",
+                    patient_name=pname,
+                    appointment_date=a.appointment_date,
+                    appointment_time=a.appointment_time,
+                    appointment_type=a.appointment_type,
+                    status=a.status,
+                    chief_complaint=a.chief_complaint,
+                    notes=a.notes,
+                )
+            )
+            if len(out) >= cap:
+                return out
     return out
 
 
 async def list_lab_results_for_doctor(
-    db: AsyncSession,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
     user: User,
     hospital_id: uuid.UUID,
     limit: int = 50,
 ) -> List[DoctorLabResultItemOut]:
-    scope_ids = await _doctor_scope_ids(db, user, hospital_id)
-    result = await db.execute(
-        select(MedicalRecord)
-        .where(
-            and_(
-                MedicalRecord.hospital_id == hospital_id,
-                MedicalRecord.doctor_id.in_(scope_ids),
-            )
-        )
-        .options(selectinload(MedicalRecord.patient).selectinload(PatientProfile.user))
-        .order_by(desc(MedicalRecord.created_at))
-        .limit(200)
-    )
-    records = result.scalars().all()
+    scope_ids = await _doctor_scope_ids(tenant_db, platform_db, user, hospital_id)
+    seen: set[uuid.UUID] = set()
     out: List[DoctorLabResultItemOut] = []
-    for mr in records:
-        lab = mr.lab_orders or []
-        if not lab:
-            continue
-        patient = mr.patient
-        name = ""
-        pref = ""
-        if patient and patient.user:
-            name = f"{patient.user.first_name} {patient.user.last_name}".strip()
-            pref = patient.patient_id or ""
-        out.append(
-            DoctorLabResultItemOut(
-                medical_record_id=str(mr.id),
-                patient_ref=pref,
-                patient_name=name,
-                recorded_at=mr.created_at.isoformat() if mr.created_at else None,
-                lab_orders=list(lab) if isinstance(lab, list) else [lab],
+
+    for session in clinical_db_sessions(tenant_db, platform_db):
+        result = await session.execute(
+            select(MedicalRecord)
+            .where(
+                and_(
+                    MedicalRecord.hospital_id == hospital_id,
+                    MedicalRecord.doctor_id.in_(scope_ids),
+                )
             )
+            .options(selectinload(MedicalRecord.patient).selectinload(PatientProfile.user))
+            .order_by(desc(MedicalRecord.created_at))
+            .limit(200)
         )
-        if len(out) >= limit:
-            break
+        records = result.scalars().all()
+        for mr in records:
+            if mr.id in seen:
+                continue
+            seen.add(mr.id)
+            lab = mr.lab_orders or []
+            if not lab:
+                continue
+            patient = mr.patient
+            name = ""
+            pref = ""
+            if patient and patient.user:
+                name = f"{patient.user.first_name} {patient.user.last_name}".strip()
+                pref = patient.patient_id or ""
+            out.append(
+                DoctorLabResultItemOut(
+                    medical_record_id=str(mr.id),
+                    patient_ref=pref,
+                    patient_name=name,
+                    recorded_at=mr.created_at.isoformat() if mr.created_at else None,
+                    lab_orders=list(lab) if isinstance(lab, list) else [lab],
+                )
+            )
+            if len(out) >= limit:
+                return out
     return out
 
 
 async def review_lab_result_for_doctor(
-    db: AsyncSession,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
     user: User,
     hospital_id: uuid.UUID,
     medical_record_id: uuid.UUID,
     payload: DoctorLabReviewRequest,
 ) -> bool:
-    scope_ids = await _doctor_scope_ids(db, user, hospital_id)
-    r = await db.execute(
-        select(MedicalRecord).where(
-            and_(
-                MedicalRecord.id == medical_record_id,
-                MedicalRecord.hospital_id == hospital_id,
-                MedicalRecord.doctor_id.in_(scope_ids),
+    scope_ids = await _doctor_scope_ids(tenant_db, platform_db, user, hospital_id)
+    mr = None
+    owning_session: Optional[AsyncSession] = None
+    for session in clinical_db_sessions(tenant_db, platform_db):
+        r = await session.execute(
+            select(MedicalRecord).where(
+                and_(
+                    MedicalRecord.id == medical_record_id,
+                    MedicalRecord.hospital_id == hospital_id,
+                    MedicalRecord.doctor_id.in_(scope_ids),
+                )
             )
         )
-    )
-    mr = r.scalar_one_or_none()
-    if not mr:
+        mr = r.scalar_one_or_none()
+        if mr:
+            owning_session = session
+            break
+    if not mr or not owning_session:
         return False
 
     now = datetime.now(timezone.utc).isoformat()
@@ -310,18 +340,19 @@ async def review_lab_result_for_doctor(
         else:
             updated.append(item)
     mr.lab_orders = updated
-    await db.commit()
+    await owning_session.commit()
     return True
 
 
 async def list_inpatient_visits_for_doctor(
-    db: AsyncSession,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
     user: User,
     hospital_id: uuid.UUID,
     active_only: bool = False,
     limit: int = 100,
 ) -> List[DoctorInpatientVisitOut]:
-    scope_ids = await _doctor_scope_ids(db, user, hospital_id)
+    scope_ids = await _doctor_scope_ids(tenant_db, platform_db, user, hospital_id)
     conditions = [
         Admission.hospital_id == hospital_id,
         Admission.doctor_id.in_(scope_ids),
@@ -330,62 +361,78 @@ async def list_inpatient_visits_for_doctor(
     if active_only:
         conditions.append(Admission.is_active == True)
 
-    result = await db.execute(
-        select(Admission)
-        .where(and_(*conditions))
-        .options(selectinload(Admission.patient).selectinload(PatientProfile.user))
-        .order_by(desc(Admission.admission_date))
-        .limit(min(limit, 200))
-    )
-    admissions = result.scalars().all()
+    seen: set[uuid.UUID] = set()
     out: List[DoctorInpatientVisitOut] = []
-    for adm in admissions:
-        patient = adm.patient
-        pname = ""
-        pref = ""
-        if patient and patient.user:
-            pname = f"{patient.user.first_name} {patient.user.last_name}".strip()
-            pref = patient.patient_id or ""
-        adm_date = adm.admission_date
-        date_str = adm_date.date().isoformat() if adm_date else ""
-        status_val = adm.status if hasattr(adm, "status") else "UNKNOWN"
-        out.append(
-            DoctorInpatientVisitOut(
-                admission_id=str(adm.id),
-                admission_number=adm.admission_number,
-                patient_ref=pref,
-                patient_name=pname,
-                admission_date=date_str,
-                admission_type=adm.admission_type,
-                status=str(status_val),
-                ward=adm.ward,
-                room_number=adm.room_number,
-                bed_number=adm.bed_number,
-                chief_complaint=adm.chief_complaint or "",
-                is_active=bool(adm.is_active),
-            )
+    cap = min(limit, 200)
+
+    for session in clinical_db_sessions(tenant_db, platform_db):
+        result = await session.execute(
+            select(Admission)
+            .where(and_(*conditions))
+            .options(selectinload(Admission.patient).selectinload(PatientProfile.user))
+            .order_by(desc(Admission.admission_date))
+            .limit(cap)
         )
+        admissions = result.scalars().all()
+        for adm in admissions:
+            if adm.id in seen:
+                continue
+            seen.add(adm.id)
+            patient = adm.patient
+            pname = ""
+            pref = ""
+            if patient and patient.user:
+                pname = f"{patient.user.first_name} {patient.user.last_name}".strip()
+                pref = patient.patient_id or ""
+            adm_date = adm.admission_date
+            date_str = adm_date.date().isoformat() if adm_date else ""
+            status_val = adm.status if hasattr(adm, "status") else "UNKNOWN"
+            out.append(
+                DoctorInpatientVisitOut(
+                    admission_id=str(adm.id),
+                    admission_number=adm.admission_number,
+                    patient_ref=pref,
+                    patient_name=pname,
+                    admission_date=date_str,
+                    admission_type=adm.admission_type,
+                    status=str(status_val),
+                    ward=adm.ward,
+                    room_number=adm.room_number,
+                    bed_number=adm.bed_number,
+                    chief_complaint=adm.chief_complaint or "",
+                    is_active=bool(adm.is_active),
+                )
+            )
+            if len(out) >= cap:
+                return out
     return out
 
 
 async def update_inpatient_vitals_for_doctor(
-    db: AsyncSession,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
     user: User,
     hospital_id: uuid.UUID,
     admission_id: uuid.UUID,
     vitals: DoctorInpatientVitalsUpdate,
 ) -> bool:
-    scope_ids = await _doctor_scope_ids(db, user, hospital_id)
-    ar = await db.execute(
-        select(Admission).where(
-            and_(
-                Admission.id == admission_id,
-                Admission.hospital_id == hospital_id,
-                Admission.doctor_id.in_(scope_ids),
+    scope_ids = await _doctor_scope_ids(tenant_db, platform_db, user, hospital_id)
+    admission = None
+    db = tenant_db
+    for session in clinical_db_sessions(tenant_db, platform_db):
+        ar = await session.execute(
+            select(Admission).where(
+                and_(
+                    Admission.id == admission_id,
+                    Admission.hospital_id == hospital_id,
+                    Admission.doctor_id.in_(scope_ids),
+                )
             )
         )
-    )
-    admission = ar.scalar_one_or_none()
+        admission = ar.scalar_one_or_none()
+        if admission:
+            db = session
+            break
     if not admission:
         return False
 

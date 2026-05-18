@@ -66,10 +66,13 @@ async def sidebar_appointments(
     limit: int = Query(100, ge=1, le=200),
     user: User = Depends(require_doctor()),
     ctx: Dict = Depends(require_hospital_context),
-    db: AsyncSession = Depends(get_db_session),
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     hid = _hospital_uuid(ctx)
-    return await sidebar_svc.list_appointments_for_doctor(db, user, hid, limit=limit)
+    return await sidebar_svc.list_appointments_for_doctor(
+        tenant_db, platform_db, user, hid, limit=limit
+    )
 
 
 @router.get(
@@ -83,12 +86,19 @@ async def sidebar_prescriptions(
     limit: int = Query(50, ge=1, le=100),
     user: User = Depends(require_doctor()),
     ctx: Dict = Depends(require_hospital_context),
-    db: AsyncSession = Depends(get_db_session),
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """Doctor-scoped prescriptions; same data as `/simple-prescription/doctor/prescriptions`."""
     hid = _hospital_uuid(ctx)
     return await sidebar_svc.list_prescriptions_for_doctor(
-        db, user, hid, patient_ref=patient_ref, is_dispensed=is_dispensed, limit=limit
+        tenant_db,
+        platform_db,
+        user,
+        hid,
+        patient_ref=patient_ref,
+        is_dispensed=is_dispensed,
+        limit=limit,
     )
 
 
@@ -102,11 +112,14 @@ async def sidebar_create_prescription(
     body: DoctorPrescriptionCreateRequest,
     user: User = Depends(require_doctor()),
     ctx: Dict = Depends(require_hospital_context),
-    db: AsyncSession = Depends(get_db_session),
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     hid = _hospital_uuid(ctx)
     try:
-        return await sidebar_svc.create_prescription_for_doctor(db, user, hid, body)
+        return await sidebar_svc.create_prescription_for_doctor(
+            tenant_db, platform_db, user, hid, body
+        )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -120,11 +133,14 @@ async def sidebar_lab_results(
     limit: int = Query(50, ge=1, le=100),
     user: User = Depends(require_doctor()),
     ctx: Dict = Depends(require_hospital_context),
-    db: AsyncSession = Depends(get_db_session),
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """Medical records authored by this doctor with non-empty `lab_orders`."""
     hid = _hospital_uuid(ctx)
-    return await sidebar_svc.list_lab_results_for_doctor(db, user, hid, limit=limit)
+    return await sidebar_svc.list_lab_results_for_doctor(
+        tenant_db, platform_db, user, hid, limit=limit
+    )
 
 
 @router.put(
@@ -137,11 +153,13 @@ async def sidebar_review_lab_result(
     body: DoctorLabReviewRequest,
     user: User = Depends(require_doctor()),
     ctx: Dict = Depends(require_hospital_context),
-    db: AsyncSession = Depends(get_db_session),
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     hid = _hospital_uuid(ctx)
     ok = await sidebar_svc.review_lab_result_for_doctor(
-        db,
+        tenant_db,
+        platform_db,
         user,
         hid,
         _parse_uuid(medical_record_id, "medical_record_id"),
@@ -161,12 +179,13 @@ async def sidebar_inpatient_visits(
     limit: int = Query(100, ge=1, le=200),
     user: User = Depends(require_doctor()),
     ctx: Dict = Depends(require_hospital_context),
-    db: AsyncSession = Depends(get_db_session),
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """IPD admissions where this doctor is the admitting doctor."""
     hid = _hospital_uuid(ctx)
     return await sidebar_svc.list_inpatient_visits_for_doctor(
-        db, user, hid, active_only=active_only, limit=limit
+        tenant_db, platform_db, user, hid, active_only=active_only, limit=limit
     )
 
 
@@ -180,11 +199,13 @@ async def sidebar_update_inpatient_vitals(
     body: DoctorInpatientVitalsUpdate,
     user: User = Depends(require_doctor()),
     ctx: Dict = Depends(require_hospital_context),
-    db: AsyncSession = Depends(get_db_session),
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     hid = _hospital_uuid(ctx)
     ok = await sidebar_svc.update_inpatient_vitals_for_doctor(
-        db,
+        tenant_db,
+        platform_db,
         user,
         hid,
         _parse_uuid(admission_id, "admission_id"),
