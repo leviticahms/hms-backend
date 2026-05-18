@@ -19,6 +19,7 @@ from app.api.deps import (
     get_db_session, get_current_user, require_doctor, 
     get_service_context, require_doctor_context
 )
+from app.core.database import get_platform_db_session
 from app.models.user import User
 from app.services.doctor_service import DoctorService
 from app.schemas.doctor import (
@@ -28,6 +29,13 @@ from app.schemas.doctor import (
 from app.core.response_utils import success_response
 
 router = APIRouter(prefix="/doctor-management", tags=["Doctor Portal - Schedule Management"])
+
+
+def _doctor_service(
+    db: AsyncSession,
+    platform_db: AsyncSession,
+) -> DoctorService:
+    return DoctorService(db, platform_db)
 
 
 # ============================================================================
@@ -59,7 +67,8 @@ class CreateMedicalRecordRequest(BaseModel):
 async def get_weekly_schedule(
     week_start: Optional[str] = Query(None, pattern="^\\d{4}-\\d{2}-\\d{2}$"),
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get doctor's weekly schedule with appointments.
@@ -67,15 +76,15 @@ async def get_weekly_schedule(
     Access Control:
     - Only Doctors can access their schedule
     """
-    doctor_service = DoctorService(db)
-    result = await doctor_service.get_weekly_schedule(week_start, current_user)
+    result = await _doctor_service(db, platform_db).get_weekly_schedule(week_start, current_user)
     return success_response(message="Weekly schedule retrieved successfully", data=result)
 
 
 @router.get("/schedule/slots")
 async def get_schedule_slots(
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get doctor's schedule slots configuration.
@@ -83,8 +92,7 @@ async def get_schedule_slots(
     Access Control:
     - Only Doctors can access their schedule slots
     """
-    doctor_service = DoctorService(db)
-    result = await doctor_service.get_schedule_slots(current_user)
+    result = await _doctor_service(db, platform_db).get_schedule_slots(current_user)
     return success_response(message="Schedule slots retrieved successfully", data=result)
 
 
@@ -93,10 +101,10 @@ async def get_schedule_slot_details(
     schedule_id: str,
     current_user: User = Depends(require_doctor()),
     db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """Get a single schedule slot by id (for edit forms)."""
-    doctor_service = DoctorService(db)
-    result = await doctor_service.get_schedule_slot_by_id(schedule_id, current_user)
+    result = await _doctor_service(db, platform_db).get_schedule_slot_by_id(schedule_id, current_user)
     return success_response(message="Schedule slot retrieved successfully", data=result)
 
 
@@ -104,7 +112,8 @@ async def get_schedule_slot_details(
 async def create_schedule_slot(
     request: ScheduleCreate,
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Create a date-specific schedule slot for doctor.
@@ -112,8 +121,7 @@ async def create_schedule_slot(
     Access Control:
     - Only Doctors can create their schedule slots
     """
-    doctor_service = DoctorService(db)
-    result = await doctor_service.create_schedule_slot(request.model_dump(), current_user)
+    result = await _doctor_service(db, platform_db).create_schedule_slot(request.model_dump(), current_user)
     return success_response(message="Schedule slot created successfully", data=result)
 
 
@@ -122,7 +130,8 @@ async def update_schedule_slot(
     schedule_id: str,
     request: ScheduleUpdate,
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Update existing schedule slot.
@@ -130,8 +139,9 @@ async def update_schedule_slot(
     Access Control:
     - Only Doctors can update their own schedule slots
     """
-    doctor_service = DoctorService(db)
-    result = await doctor_service.update_schedule_slot(schedule_id, request.model_dump(exclude_unset=True), current_user)
+    result = await _doctor_service(db, platform_db).update_schedule_slot(
+        schedule_id, request.model_dump(exclude_unset=True), current_user
+    )
     return success_response(message="Schedule slot updated successfully", data=result)
 
 
@@ -139,7 +149,8 @@ async def update_schedule_slot(
 async def delete_schedule_slot(
     schedule_id: str,
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Delete schedule slot.
@@ -147,8 +158,7 @@ async def delete_schedule_slot(
     Access Control:
     - Only Doctors can delete their own schedule slots
     """
-    doctor_service = DoctorService(db)
-    result = await doctor_service.delete_schedule_slot(schedule_id, current_user)
+    result = await _doctor_service(db, platform_db).delete_schedule_slot(schedule_id, current_user)
     return success_response(message="Schedule slot deleted successfully", data=result)
 
 

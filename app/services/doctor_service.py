@@ -28,8 +28,87 @@ DEFAULT_APPOINTMENT_SLOT_MINUTES = 30
 class DoctorService:
     """Service for doctor operations"""
     
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, platform_db: Optional[AsyncSession] = None):
         self.db = db
+        self.platform_db = platform_db if platform_db is not None else db
+
+    def _db_sessions(self) -> List[AsyncSession]:
+        seen: set[int] = set()
+        sessions: List[AsyncSession] = []
+        for sess in (self.db, self.platform_db):
+            key = id(sess)
+            if key in seen:
+                continue
+            seen.add(key)
+            sessions.append(sess)
+        return sessions
+
+    async def _schedule_doctor_ids(
+        self, user_id: uuid.UUID, hospital_id: uuid.UUID
+    ) -> List[uuid.UUID]:
+        """Schedules may reference users.id or legacy doctor_profiles.id."""
+        ids: List[uuid.UUID] = [user_id]
+        for session in self._db_sessions():
+            profile_result = await session.execute(
+                select(DoctorProfile.id).where(
+                    and_(
+                        DoctorProfile.user_id == user_id,
+                        DoctorProfile.hospital_id == hospital_id,
+                    )
+                )
+            )
+            profile_id = profile_result.scalar_one_or_none()
+            if profile_id and profile_id not in ids:
+                ids.append(profile_id)
+        return ids
+
+    async def _fetch_active_schedules(
+        self, user_id: uuid.UUID, hospital_id: uuid.UUID
+    ) -> List[DoctorSchedule]:
+        """Load schedule rows from tenant + platform DB (deduped)."""
+        seen: set[uuid.UUID] = set()
+        schedules: List[DoctorSchedule] = []
+        scope_ids = await self._schedule_doctor_ids(user_id, hospital_id)
+        for session in self._db_sessions():
+            result = await session.execute(
+                select(DoctorSchedule)
+                .where(
+                    and_(
+                        DoctorSchedule.hospital_id == hospital_id,
+                        DoctorSchedule.doctor_id.in_(scope_ids),
+                        DoctorSchedule.is_active == True,
+                    )
+                )
+                .order_by(DoctorSchedule.day_of_week, DoctorSchedule.start_time)
+            )
+            for schedule in result.scalars().all():
+                if schedule.id in seen:
+                    continue
+                seen.add(schedule.id)
+                schedules.append(schedule)
+        return schedules
+
+    async def _get_schedule_for_doctor(
+        self,
+        schedule_id: uuid.UUID,
+        user_id: uuid.UUID,
+        hospital_id: uuid.UUID,
+    ) -> Optional[DoctorSchedule]:
+        scope_ids = await self._schedule_doctor_ids(user_id, hospital_id)
+        for session in self._db_sessions():
+            result = await session.execute(
+                select(DoctorSchedule).where(
+                    and_(
+                        DoctorSchedule.id == schedule_id,
+                        DoctorSchedule.hospital_id == hospital_id,
+                        DoctorSchedule.doctor_id.in_(scope_ids),
+                    )
+                )
+            )
+            schedule = result.scalar_one_or_none()
+            if schedule:
+                return schedule
+        return None
 
     class _DepartmentRef:
         def __init__(self, department_id: uuid.UUID, name: str):
@@ -360,24 +439,16 @@ class DoctorService:
         
         end_date = start_date + timedelta(days=6)
         
-        # Get doctor's schedule configuration
-        schedules_result = await self.db.execute(
-            select(DoctorSchedule)
-            .where(
-                and_(
-                    DoctorSchedule.doctor_id == doctor.user_id,
-                    DoctorSchedule.is_active == True
-                )
-            )
-        )
-        schedules = schedules_result.scalars().all()
+        schedules = await self._fetch_active_schedules(doctor.user_id, doctor.hospital_id)
+        scope_ids = await self._schedule_doctor_ids(doctor.user_id, doctor.hospital_id)
         
         # Get appointments for the week
         appointments_result = await self.db.execute(
             select(Appointment)
             .where(
                 and_(
-                    Appointment.doctor_id == doctor.user_id,
+                    Appointment.hospital_id == doctor.hospital_id,
+                    Appointment.doctor_id.in_(scope_ids),
                     Appointment.appointment_date >= start_date.isoformat(),
                     Appointment.appointment_date <= end_date.isoformat()
                 )
@@ -513,18 +584,7 @@ class DoctorService:
         user_context = self.get_user_context(current_user)
         doctor = await self.get_doctor_profile(user_context)
         
-        # Get doctor's schedule configuration
-        schedules_result = await self.db.execute(
-            select(DoctorSchedule)
-            .where(
-                and_(
-                    DoctorSchedule.doctor_id == doctor.user_id,
-                    DoctorSchedule.is_active == True
-                )
-            )
-            .order_by(DoctorSchedule.day_of_week)
-        )
-        schedules = schedules_result.scalars().all()
+        schedules = await self._fetch_active_schedules(doctor.user_id, doctor.hospital_id)
         
         # Format schedules
         schedule_slots = []
@@ -557,15 +617,9 @@ class DoctorService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid schedule_id",
             )
-        schedule_result = await self.db.execute(
-            select(DoctorSchedule).where(
-                and_(
-                    DoctorSchedule.id == sid,
-                    DoctorSchedule.doctor_id == doctor.user_id,
-                )
-            )
+        schedule = await self._get_schedule_for_doctor(
+            sid, doctor.user_id, doctor.hospital_id
         )
-        schedule = schedule_result.scalar_one_or_none()
         if not schedule:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

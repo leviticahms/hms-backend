@@ -12,8 +12,9 @@ BUSINESS RULES:
 - Real-time and historical analytics
 """
 import uuid
+from dataclasses import dataclass
 from typing import List, Optional, Dict, Any, Union
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, time, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc, func, asc, text, case
@@ -22,7 +23,7 @@ from pydantic import BaseModel, Field
 from enum import Enum
 import calendar
 
-from app.core.database import get_db_session
+from app.core.database import get_db_session, get_platform_db_session
 from app.core.security import get_current_user
 from app.models.user import User
 from app.models.patient import PatientProfile, Appointment, MedicalRecord, Admission, DischargeSummary
@@ -340,7 +341,8 @@ def get_user_context(current_user: User) -> dict:
 
 async def get_doctor_profile(user_context: dict, db: AsyncSession):
     """Get doctor profile with department information"""
-    if user_context["role"] != UserRole.DOCTOR:
+    roles = user_context.get("all_roles") or []
+    if UserRole.DOCTOR.value not in roles:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied - Doctor role required"
@@ -430,11 +432,368 @@ async def get_doctor_profile(user_context: dict, db: AsyncSession):
 
 def ensure_doctor_access(user_context: dict):
     """Ensure user is a doctor"""
-    if user_context["role"] != UserRole.DOCTOR:
+    roles = user_context.get("all_roles") or []
+    if UserRole.DOCTOR.value not in roles:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied - Doctor role required"
         )
+
+
+def _clinical_db_sessions(
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+) -> List[AsyncSession]:
+    seen: set[int] = set()
+    sessions: List[AsyncSession] = []
+    for sess in (tenant_db, platform_db):
+        key = id(sess)
+        if key in seen:
+            continue
+        seen.add(key)
+        sessions.append(sess)
+    return sessions
+
+
+def _doctor_user_id(doctor: Any) -> uuid.UUID:
+    """Appointments / medical records FK -> users.id (not doctor_profiles.id)."""
+    return getattr(doctor, "user_id", None) or doctor.id
+
+
+async def _doctor_scope_ids(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    hospital_id: uuid.UUID,
+) -> List[uuid.UUID]:
+    ids: List[uuid.UUID] = [user_id]
+    profile_result = await db.execute(
+        select(DoctorProfile.id).where(
+            and_(
+                DoctorProfile.user_id == user_id,
+                DoctorProfile.hospital_id == hospital_id,
+            )
+        )
+    )
+    profile_id = profile_result.scalar_one_or_none()
+    if profile_id and profile_id not in ids:
+        ids.append(profile_id)
+    return ids
+
+
+def _period_bounds(date_from: date, date_to: date) -> tuple[str, str, datetime, datetime]:
+    """Appointment dates are YYYY-MM-DD strings; clinical rows use timestamptz."""
+    start_s = date_from.isoformat()
+    end_s = date_to.isoformat()
+    start_dt = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+    end_dt = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
+    return start_s, end_s, start_dt, end_dt
+
+
+async def _collect_patient_ids_for_doctor_period(
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+    hospital_id: uuid.UUID,
+    scope_ids: List[uuid.UUID],
+    date_from: date,
+    date_to: date,
+) -> set[uuid.UUID]:
+    """Distinct patients from appointments + medical records + admissions (tenant + platform)."""
+    start_s, end_s, start_dt, end_dt = _period_bounds(date_from, date_to)
+    patient_ids: set[uuid.UUID] = set()
+    appt_status_ok = Appointment.status != AppointmentStatus.CANCELLED.value
+
+    for session in _clinical_db_sessions(tenant_db, platform_db):
+        appt_rows = await session.execute(
+            select(func.distinct(Appointment.patient_id)).where(
+                and_(
+                    Appointment.hospital_id == hospital_id,
+                    Appointment.doctor_id.in_(scope_ids),
+                    Appointment.appointment_date >= start_s,
+                    Appointment.appointment_date <= end_s,
+                    appt_status_ok,
+                )
+            )
+        )
+        patient_ids.update(row[0] for row in appt_rows.all() if row[0])
+
+        record_rows = await session.execute(
+            select(func.distinct(MedicalRecord.patient_id)).where(
+                and_(
+                    MedicalRecord.hospital_id == hospital_id,
+                    MedicalRecord.doctor_id.in_(scope_ids),
+                    MedicalRecord.created_at >= start_dt,
+                    MedicalRecord.created_at <= end_dt,
+                )
+            )
+        )
+        patient_ids.update(row[0] for row in record_rows.all() if row[0])
+
+        admission_rows = await session.execute(
+            select(func.distinct(Admission.patient_id)).where(
+                and_(
+                    Admission.hospital_id == hospital_id,
+                    Admission.doctor_id.in_(scope_ids),
+                    Admission.admission_date >= start_dt,
+                    Admission.admission_date <= end_dt,
+                )
+            )
+        )
+        patient_ids.update(row[0] for row in admission_rows.all() if row[0])
+
+    return patient_ids
+
+
+async def _load_patients_by_ids(
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+    patient_ids: set[uuid.UUID],
+) -> List[PatientProfile]:
+    if not patient_ids:
+        return []
+    seen: set[uuid.UUID] = set()
+    patients: List[PatientProfile] = []
+    id_list = list(patient_ids)
+    for session in _clinical_db_sessions(tenant_db, platform_db):
+        result = await session.execute(
+            select(PatientProfile)
+            .where(PatientProfile.id.in_(id_list))
+            .options(selectinload(PatientProfile.user))
+        )
+        for patient in result.scalars().all():
+            if patient.id in seen:
+                continue
+            seen.add(patient.id)
+            patients.append(patient)
+    return patients
+
+
+@dataclass
+class ReportAnalyticsScope:
+    """Tenant + platform scoped queries for doctor reports."""
+
+    tenant_db: AsyncSession
+    platform_db: AsyncSession
+    doctor: Any
+    hospital_id: uuid.UUID
+    scope_ids: List[uuid.UUID]
+    date_from: date
+    date_to: date
+
+    def sessions(self) -> List[AsyncSession]:
+        return _clinical_db_sessions(self.tenant_db, self.platform_db)
+
+    def appointment_filters(
+        self,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        *,
+        status: Optional[str] = None,
+        exclude_cancelled: bool = False,
+    ) -> List[Any]:
+        d0 = date_from or self.date_from
+        d1 = date_to or self.date_to
+        start_s, end_s, _, _ = _period_bounds(d0, d1)
+        filters: List[Any] = [
+            Appointment.hospital_id == self.hospital_id,
+            Appointment.doctor_id.in_(self.scope_ids),
+            Appointment.appointment_date >= start_s,
+            Appointment.appointment_date <= end_s,
+        ]
+        if status is not None:
+            filters.append(Appointment.status == status)
+        elif exclude_cancelled:
+            filters.append(Appointment.status != AppointmentStatus.CANCELLED.value)
+        return filters
+
+    def prescription_filters(
+        self,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+    ) -> List[Any]:
+        d0 = date_from or self.date_from
+        d1 = date_to or self.date_to
+        start_s, end_s, _, _ = _period_bounds(d0, d1)
+        return [
+            Prescription.hospital_id == self.hospital_id,
+            Prescription.doctor_id.in_(self.scope_ids),
+            Prescription.prescription_date >= start_s,
+            Prescription.prescription_date <= end_s,
+        ]
+
+    def medical_record_filters(
+        self,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+    ) -> List[Any]:
+        d0 = date_from or self.date_from
+        d1 = date_to or self.date_to
+        _, _, start_dt, end_dt = _period_bounds(d0, d1)
+        return [
+            MedicalRecord.hospital_id == self.hospital_id,
+            MedicalRecord.doctor_id.in_(self.scope_ids),
+            MedicalRecord.created_at >= start_dt,
+            MedicalRecord.created_at <= end_dt,
+        ]
+
+    def admission_filters(
+        self,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+    ) -> List[Any]:
+        d0 = date_from or self.date_from
+        d1 = date_to or self.date_to
+        _, _, start_dt, end_dt = _period_bounds(d0, d1)
+        return [
+            Admission.hospital_id == self.hospital_id,
+            Admission.doctor_id.in_(self.scope_ids),
+            Admission.admission_date >= start_dt,
+            Admission.admission_date <= end_dt,
+        ]
+
+    async def count_appointments(
+        self,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        *,
+        status: Optional[str] = None,
+        exclude_cancelled: bool = False,
+    ) -> int:
+        total = 0
+        filters = self.appointment_filters(
+            date_from, date_to, status=status, exclude_cancelled=exclude_cancelled
+        )
+        for session in self.sessions():
+            total += (
+                await session.execute(select(func.count(Appointment.id)).where(and_(*filters)))
+            ).scalar() or 0
+        return total
+
+    async def list_appointments(
+        self,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        *,
+        status: Optional[str] = None,
+        exclude_cancelled: bool = False,
+    ) -> List[Appointment]:
+        seen: set[uuid.UUID] = set()
+        rows: List[Appointment] = []
+        filters = self.appointment_filters(
+            date_from, date_to, status=status, exclude_cancelled=exclude_cancelled
+        )
+        for session in self.sessions():
+            result = await session.execute(select(Appointment).where(and_(*filters)))
+            for appointment in result.scalars().all():
+                if appointment.id in seen:
+                    continue
+                seen.add(appointment.id)
+                rows.append(appointment)
+        return rows
+
+    async def count_prescriptions(
+        self,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+    ) -> int:
+        total = 0
+        filters = self.prescription_filters(date_from, date_to)
+        for session in self.sessions():
+            total += (
+                await session.execute(select(func.count(Prescription.id)).where(and_(*filters)))
+            ).scalar() or 0
+        return total
+
+    async def list_prescriptions(
+        self,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+    ) -> List[Prescription]:
+        seen: set[uuid.UUID] = set()
+        rows: List[Prescription] = []
+        filters = self.prescription_filters(date_from, date_to)
+        for session in self.sessions():
+            result = await session.execute(select(Prescription).where(and_(*filters)))
+            for prescription in result.scalars().all():
+                if prescription.id in seen:
+                    continue
+                seen.add(prescription.id)
+                rows.append(prescription)
+        return rows
+
+    async def count_admissions(
+        self,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+    ) -> int:
+        total = 0
+        filters = self.admission_filters(date_from, date_to)
+        for session in self.sessions():
+            total += (
+                await session.execute(select(func.count(Admission.id)).where(and_(*filters)))
+            ).scalar() or 0
+        return total
+
+    async def count_medical_records(self, **extra_filters: Any) -> int:
+        total = 0
+        filters = list(self.medical_record_filters())
+        filters.extend(extra_filters)
+        for session in self.sessions():
+            total += (
+                await session.execute(select(func.count(MedicalRecord.id)).where(and_(*filters)))
+            ).scalar() or 0
+        return total
+
+    async def diagnosis_counts(self) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        filters = list(self.medical_record_filters())
+        filters.append(MedicalRecord.diagnosis.isnot(None))
+        for session in self.sessions():
+            result = await session.execute(
+                select(MedicalRecord.diagnosis, func.count(MedicalRecord.id))
+                .where(and_(*filters))
+                .group_by(MedicalRecord.diagnosis)
+            )
+            for diagnosis, count in result.all():
+                if diagnosis:
+                    counts[diagnosis] = counts.get(diagnosis, 0) + int(count or 0)
+        return counts
+
+    async def count_department_doctors(self, department_id: uuid.UUID) -> int:
+        total = 0
+        for session in self.sessions():
+            total += (
+                await session.execute(
+                    select(func.count(DoctorProfile.id)).where(
+                        and_(
+                            DoctorProfile.department_id == department_id,
+                            DoctorProfile.hospital_id == self.hospital_id,
+                        )
+                    )
+                )
+            ).scalar() or 0
+        return max(total, 1)
+
+
+async def _build_report_scope(
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+    user_context: dict,
+    current_user: User,
+    date_from: date,
+    date_to: date,
+) -> ReportAnalyticsScope:
+    doctor = await get_doctor_profile(user_context, tenant_db)
+    hospital_id = doctor.hospital_id or current_user.hospital_id
+    if not hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Doctor must be associated with a hospital",
+        )
+    hid = hospital_id if isinstance(hospital_id, uuid.UUID) else uuid.UUID(str(hospital_id))
+    scope_ids = await _doctor_scope_ids(tenant_db, _doctor_user_id(doctor), hid)
+    return ReportAnalyticsScope(
+        tenant_db, platform_db, doctor, hid, scope_ids, date_from, date_to
+    )
 
 
 def get_date_range(period: ReportPeriod, custom_from: str = None, custom_to: str = None) -> tuple:
@@ -524,7 +883,8 @@ async def get_practice_overview(
     custom_date_from: Optional[str] = Query(None),
     custom_date_to: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get comprehensive practice overview with key metrics and trends.
@@ -535,201 +895,106 @@ async def get_practice_overview(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Get date range
+
     date_from, date_to = get_date_range(report_period, custom_date_from, custom_date_to)
-    
-    # Get previous period for comparison
+    scope = await _build_report_scope(
+        tenant_db, platform_db, user_context, current_user, date_from, date_to
+    )
+    doctor = scope.doctor
+
     period_days = (date_to - date_from).days + 1
     prev_date_to = date_from - timedelta(days=1)
     prev_date_from = prev_date_to - timedelta(days=period_days - 1)
-    
-    # Core metrics queries
-    # Total patients seen
-    patients_result = await db.execute(
-        select(func.count(func.distinct(Appointment.patient_id)))
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_date >= date_from.isoformat(),
-                Appointment.appointment_date <= date_to.isoformat(),
-                Appointment.status == AppointmentStatus.COMPLETED
-            )
+
+    total_patients = len(
+        await _collect_patient_ids_for_doctor_period(
+            tenant_db,
+            platform_db,
+            scope.hospital_id,
+            scope.scope_ids,
+            date_from,
+            date_to,
         )
     )
-    total_patients = patients_result.scalar() or 0
-    
-    # Total appointments
-    appointments_result = await db.execute(
-        select(func.count(Appointment.id))
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_date >= date_from.isoformat(),
-                Appointment.appointment_date <= date_to.isoformat()
-            )
-        )
+    total_appointments = await scope.count_appointments()
+    completed_appointments = await scope.count_appointments(
+        status=AppointmentStatus.COMPLETED.value
     )
-    total_appointments = appointments_result.scalar() or 0
-    
-    # Completed appointments for completion rate
-    completed_appointments_result = await db.execute(
-        select(func.count(Appointment.id))
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_date >= date_from.isoformat(),
-                Appointment.appointment_date <= date_to.isoformat(),
-                Appointment.status == AppointmentStatus.COMPLETED
-            )
-        )
+    total_prescriptions = await scope.count_prescriptions()
+    total_admissions = await scope.count_admissions()
+    completion_rate = (
+        (completed_appointments / total_appointments * 100) if total_appointments > 0 else 0
     )
-    completed_appointments = completed_appointments_result.scalar() or 0
-    
-    # Total prescriptions
-    prescriptions_result = await db.execute(
-        select(func.count(Prescription.id))
-        .where(
-            and_(
-                Prescription.doctor_id == doctor.id,
-                Prescription.prescription_date >= date_from.isoformat(),
-                Prescription.prescription_date <= date_to.isoformat()
-            )
-        )
-    )
-    total_prescriptions = prescriptions_result.scalar() or 0
-    
-    # Total admissions
-    admissions_result = await db.execute(
-        select(func.count(Admission.id))
-        .where(
-            and_(
-                Admission.doctor_id == doctor.id,
-                Admission.admission_date >= datetime.combine(date_from, datetime.min.time()),
-                Admission.admission_date <= datetime.combine(date_to, datetime.max.time())
-            )
-        )
-    )
-    total_admissions = admissions_result.scalar() or 0
-    
-    # Calculate completion rate
-    completion_rate = (completed_appointments / total_appointments * 100) if total_appointments > 0 else 0
-    
-    # Get most common diagnoses
-    diagnoses_result = await db.execute(
-        select(MedicalRecord.diagnosis, func.count(MedicalRecord.diagnosis))
-        .where(
-            and_(
-                MedicalRecord.doctor_id == doctor.id,
-                MedicalRecord.created_at >= datetime.combine(date_from, datetime.min.time()),
-                MedicalRecord.created_at <= datetime.combine(date_to, datetime.max.time()),
-                MedicalRecord.diagnosis.isnot(None)
-            )
-        )
-        .group_by(MedicalRecord.diagnosis)
-        .order_by(desc(func.count(MedicalRecord.diagnosis)))
-        .limit(5)
-    )
-    
-    diagnoses_data = diagnoses_result.all()
+
+    diagnosis_map = await scope.diagnosis_counts()
     most_common_diagnoses = [
-        {"diagnosis": diagnosis, "count": count, "percentage": round((count / completed_appointments) * 100, 1) if completed_appointments > 0 else 0}
-        for diagnosis, count in diagnoses_data
+        {
+            "diagnosis": diagnosis,
+            "count": count,
+            "percentage": round((count / completed_appointments) * 100, 1)
+            if completed_appointments > 0
+            else 0,
+        }
+        for diagnosis, count in sorted(diagnosis_map.items(), key=lambda x: x[1], reverse=True)[:5]
     ]
-    
-    # Get most prescribed medications (simplified)
-    prescriptions_with_meds_result = await db.execute(
-        select(Prescription.medications)
-        .where(
-            and_(
-                Prescription.doctor_id == doctor.id,
-                Prescription.prescription_date >= date_from.isoformat(),
-                Prescription.prescription_date <= date_to.isoformat()
-            )
-        )
-    )
-    
-    all_medications = []
-    for prescription_meds in prescriptions_with_meds_result.scalars():
-        if prescription_meds:
-            for med in prescription_meds:
-                if isinstance(med, dict) and med.get('name'):
-                    all_medications.append(med['name'])
-    
-    # Count medication frequency
-    med_counts = {}
+
+    all_medications: List[str] = []
+    for prescription in await scope.list_prescriptions():
+        if prescription.medications:
+            for med in prescription.medications:
+                if isinstance(med, dict) and med.get("name"):
+                    all_medications.append(med["name"])
+    med_counts: Dict[str, int] = {}
     for med in all_medications:
         med_counts[med] = med_counts.get(med, 0) + 1
-    
     most_prescribed_medications = [
-        {"medication": med, "count": count, "percentage": round((count / len(all_medications)) * 100, 1) if all_medications else 0}
+        {
+            "medication": med,
+            "count": count,
+            "percentage": round((count / len(all_medications)) * 100, 1) if all_medications else 0,
+        }
         for med, count in sorted(med_counts.items(), key=lambda x: x[1], reverse=True)[:5]
     ]
-    
-    # Get previous period data for trends (simplified)
-    prev_patients_result = await db.execute(
-        select(func.count(func.distinct(Appointment.patient_id)))
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_date >= prev_date_from.isoformat(),
-                Appointment.appointment_date <= prev_date_to.isoformat(),
-                Appointment.status == AppointmentStatus.COMPLETED
-            )
+
+    prev_total_patients = len(
+        await _collect_patient_ids_for_doctor_period(
+            tenant_db,
+            platform_db,
+            scope.hospital_id,
+            scope.scope_ids,
+            prev_date_from,
+            prev_date_to,
         )
     )
-    prev_total_patients = prev_patients_result.scalar() or 0
-    
-    prev_appointments_result = await db.execute(
-        select(func.count(Appointment.id))
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_date >= prev_date_from.isoformat(),
-                Appointment.appointment_date <= prev_date_to.isoformat()
-            )
-        )
+    prev_total_appointments = await scope.count_appointments(
+        prev_date_from, prev_date_to
     )
-    prev_total_appointments = prev_appointments_result.scalar() or 0
-    
-    prev_prescriptions_result = await db.execute(
-        select(func.count(Prescription.id))
-        .where(
-            and_(
-                Prescription.doctor_id == doctor.id,
-                Prescription.prescription_date >= prev_date_from.isoformat(),
-                Prescription.prescription_date <= prev_date_to.isoformat()
-            )
-        )
+    prev_total_prescriptions = await scope.count_prescriptions(
+        prev_date_from, prev_date_to
     )
-    prev_total_prescriptions = prev_prescriptions_result.scalar() or 0
-    
-    # Calculate trends
+
     patient_trend, _ = calculate_trend(total_patients, prev_total_patients)
     appointment_trend, _ = calculate_trend(total_appointments, prev_total_appointments)
     prescription_trend, _ = calculate_trend(total_prescriptions, prev_total_prescriptions)
-    
+
     return PracticeOverview(
         doctor_name=f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
         department=doctor.department.name,
-        specialization=doctor.specialization,
+        specialization=getattr(doctor, "specialization", "General Medicine"),
         report_period=f"{date_from} to {date_to}",
-        generated_at=datetime.now().isoformat(),
+        generated_at=datetime.now(timezone.utc).isoformat(),
         total_patients_seen=total_patients,
         total_appointments=total_appointments,
         total_prescriptions=total_prescriptions,
         total_admissions=total_admissions,
         appointment_completion_rate=round(completion_rate, 1),
-        average_consultation_time=None,  # Would require additional tracking
-        patient_satisfaction_score=None,  # Would require patient feedback system
+        average_consultation_time=None,
+        patient_satisfaction_score=None,
         most_common_diagnoses=most_common_diagnoses,
         most_prescribed_medications=most_prescribed_medications,
         patient_growth_trend=patient_trend,
         appointment_trend=appointment_trend,
-        prescription_trend=prescription_trend
+        prescription_trend=prescription_trend,
     )
 
 
@@ -743,7 +1008,8 @@ async def get_patient_analytics(
     custom_date_from: Optional[str] = Query(None),
     custom_date_to: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get comprehensive patient analytics and demographics.
@@ -755,30 +1021,30 @@ async def get_patient_analytics(
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
     
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Get date range
-    date_from, date_to = get_date_range(report_period, custom_date_from, custom_date_to)
-    
-    # Get all patients seen in the period
-    patients_in_period_result = await db.execute(
-        select(func.distinct(Appointment.patient_id))
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_date >= date_from.isoformat(),
-                Appointment.appointment_date <= date_to.isoformat(),
-                Appointment.status == AppointmentStatus.COMPLETED
-            )
+    doctor = await get_doctor_profile(user_context, tenant_db)
+    hospital_id = doctor.hospital_id or current_user.hospital_id
+    if not hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Doctor must be associated with a hospital",
         )
+
+    date_from, date_to = get_date_range(report_period, custom_date_from, custom_date_to)
+    doctor_user_id = _doctor_user_id(doctor)
+    scope_ids = await _doctor_scope_ids(tenant_db, doctor_user_id, hospital_id)
+    start_s, end_s, start_dt, end_dt = _period_bounds(date_from, date_to)
+
+    patient_ids_in_period = await _collect_patient_ids_for_doctor_period(
+        tenant_db,
+        platform_db,
+        hospital_id,
+        scope_ids,
+        date_from,
+        date_to,
     )
-    
-    patient_ids_in_period = [row[0] for row in patients_in_period_result.all()]
     total_unique_patients = len(patient_ids_in_period)
-    
+
     if total_unique_patients == 0:
-        # Return empty analytics if no patients
         return PatientAnalytics(
             total_unique_patients=0,
             new_patients=0,
@@ -792,39 +1058,48 @@ async def get_patient_analytics(
             high_risk_patients=0,
             patients_requiring_follow_up=0
         )
-    
-    # Get patient details
-    patients_result = await db.execute(
-        select(PatientProfile)
-        .where(PatientProfile.id.in_(patient_ids_in_period))
-        .options(selectinload(PatientProfile.user))
-    )
-    
-    patients = patients_result.scalars().all()
-    
-    # Analyze new vs returning patients
+
+    patients = await _load_patients_by_ids(tenant_db, platform_db, patient_ids_in_period)
+
     new_patients = 0
     returning_patients = 0
-    
+    appt_status_ok = Appointment.status != AppointmentStatus.CANCELLED.value
+
     for patient in patients:
-        # Check if patient had appointments before this period
-        prev_appointments_result = await db.execute(
-            select(func.count(Appointment.id))
-            .where(
-                and_(
-                    Appointment.patient_id == patient.id,
-                    Appointment.doctor_id == doctor.id,
-                    Appointment.appointment_date < date_from.isoformat()
+        had_prior = False
+        for session in _clinical_db_sessions(tenant_db, platform_db):
+            prev_appt = await session.execute(
+                select(func.count(Appointment.id)).where(
+                    and_(
+                        Appointment.hospital_id == hospital_id,
+                        Appointment.patient_id == patient.id,
+                        Appointment.doctor_id.in_(scope_ids),
+                        Appointment.appointment_date < start_s,
+                        appt_status_ok,
+                    )
                 )
             )
-        )
-        
-        prev_appointments = prev_appointments_result.scalar() or 0
-        
-        if prev_appointments == 0:
-            new_patients += 1
-        else:
+            if (prev_appt.scalar() or 0) > 0:
+                had_prior = True
+                break
+            prev_record = await session.execute(
+                select(func.count(MedicalRecord.id)).where(
+                    and_(
+                        MedicalRecord.hospital_id == hospital_id,
+                        MedicalRecord.patient_id == patient.id,
+                        MedicalRecord.doctor_id.in_(scope_ids),
+                        MedicalRecord.created_at < start_dt,
+                    )
+                )
+            )
+            if (prev_record.scalar() or 0) > 0:
+                had_prior = True
+                break
+
+        if had_prior:
             returning_patients += 1
+        else:
+            new_patients += 1
     
     # Age distribution analysis
     age_groups = {"0-18": 0, "19-30": 0, "31-45": 0, "46-60": 0, "61-75": 0, "75+": 0}
@@ -892,20 +1167,22 @@ async def get_patient_analytics(
         for allergy, count in sorted(allergy_count.items(), key=lambda x: x[1], reverse=True)[:10]
     ]
     
-    # Calculate average visits per patient
-    total_visits_result = await db.execute(
-        select(func.count(Appointment.id))
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.patient_id.in_(patient_ids_in_period),
-                Appointment.appointment_date >= date_from.isoformat(),
-                Appointment.appointment_date <= date_to.isoformat()
+    total_visits = 0
+    patient_id_list = list(patient_ids_in_period)
+    for session in _clinical_db_sessions(tenant_db, platform_db):
+        visits_result = await session.execute(
+            select(func.count(Appointment.id)).where(
+                and_(
+                    Appointment.hospital_id == hospital_id,
+                    Appointment.doctor_id.in_(scope_ids),
+                    Appointment.patient_id.in_(patient_id_list),
+                    Appointment.appointment_date >= start_s,
+                    Appointment.appointment_date <= end_s,
+                    appt_status_ok,
+                )
             )
         )
-    )
-    
-    total_visits = total_visits_result.scalar() or 0
+        total_visits += visits_result.scalar() or 0
     average_visits_per_patient = total_visits / total_unique_patients if total_unique_patients > 0 else 0
     
     # Calculate retention rate (simplified)
@@ -938,7 +1215,8 @@ async def get_appointment_analytics(
     custom_date_from: Optional[str] = Query(None),
     custom_date_to: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get comprehensive appointment analytics and scheduling patterns.
@@ -949,98 +1227,60 @@ async def get_appointment_analytics(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Get date range
+
     date_from, date_to = get_date_range(report_period, custom_date_from, custom_date_to)
-    
-    # Get appointment statistics
-    appointments_result = await db.execute(
-        select(
-            func.count(Appointment.id).label('total'),
-            func.count(case((Appointment.status == AppointmentStatus.COMPLETED, 1))).label('completed'),
-            func.count(case((Appointment.status == AppointmentStatus.CANCELLED, 1))).label('cancelled'),
-            func.count(case((Appointment.status == AppointmentStatus.REQUESTED, 1))).label('no_show')
-        )
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_date >= date_from.isoformat(),
-                Appointment.appointment_date <= date_to.isoformat()
-            )
-        )
+    scope = await _build_report_scope(
+        tenant_db, platform_db, user_context, current_user, date_from, date_to
     )
-    
-    stats = appointments_result.first()
-    total_appointments = stats.total or 0
-    completed_appointments = stats.completed or 0
-    cancelled_appointments = stats.cancelled or 0
-    no_show_appointments = stats.no_show or 0
-    
-    # Calculate rates
+    appointments = await scope.list_appointments()
+
+    total_appointments = len(appointments)
+    completed_appointments = sum(
+        1 for a in appointments if a.status == AppointmentStatus.COMPLETED.value
+    )
+    cancelled_appointments = sum(
+        1 for a in appointments if a.status == AppointmentStatus.CANCELLED.value
+    )
+    no_show_appointments = sum(
+        1
+        for a in appointments
+        if a.status == AppointmentStatus.REQUESTED.value and not a.checked_in_at
+    )
+
     completion_rate = (completed_appointments / total_appointments * 100) if total_appointments > 0 else 0
     cancellation_rate = (cancelled_appointments / total_appointments * 100) if total_appointments > 0 else 0
     no_show_rate = (no_show_appointments / total_appointments * 100) if total_appointments > 0 else 0
-    
-    # Peak appointment hours analysis
-    hour_expr = func.substr(Appointment.appointment_time, 1, 2)
-    hourly_appointments_result = await db.execute(
-        select(
-            hour_expr.label('hour'),
-            func.count(Appointment.id).label('count')
-        )
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_date >= date_from.isoformat(),
-                Appointment.appointment_date <= date_to.isoformat()
-            )
-        )
-        .group_by(hour_expr)
-        .order_by(desc(func.count(Appointment.id)))
-    )
-    
-    hourly_data = hourly_appointments_result.all()
+
+    hourly_counts: Dict[str, int] = {}
+    daily_counts: Dict[int, int] = {}
+    for appointment in appointments:
+        if appointment.appointment_time:
+            hour_key = str(appointment.appointment_time)[:2]
+            hourly_counts[hour_key] = hourly_counts.get(hour_key, 0) + 1
+        if appointment.appointment_date:
+            try:
+                dow = datetime.strptime(appointment.appointment_date, "%Y-%m-%d").weekday()
+                daily_counts[dow] = daily_counts.get(dow, 0) + 1
+            except ValueError:
+                pass
+
     peak_appointment_hours = [
         {
             "hour": f"{hour}:00",
             "appointment_count": count,
-            "percentage": round((count / total_appointments) * 100, 1) if total_appointments > 0 else 0
+            "percentage": round((count / total_appointments) * 100, 1) if total_appointments > 0 else 0,
         }
-        for hour, count in hourly_data[:5]
+        for hour, count in sorted(hourly_counts.items(), key=lambda x: x[1], reverse=True)[:5]
     ]
-    
-    # Peak appointment days analysis
-    # Convert string date to date type and extract day of week (0=Sunday, 1=Monday, etc.)
-    dow_expr = func.extract('dow', func.to_date(Appointment.appointment_date, 'YYYY-MM-DD'))
-    daily_appointments_result = await db.execute(
-        select(
-            dow_expr.label('day_of_week'),
-            func.count(Appointment.id).label('count')
-        )
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_date >= date_from.isoformat(),
-                Appointment.appointment_date <= date_to.isoformat()
-            )
-        )
-        .group_by(dow_expr)
-        .order_by(desc(func.count(Appointment.id)))
-    )
-    
-    daily_data = daily_appointments_result.all()
-    day_names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-    
+
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     peak_appointment_days = [
         {
-            "day": day_names[int(day_num)],
+            "day": day_names[day_num] if 0 <= day_num < 7 else str(day_num),
             "appointment_count": count,
-            "percentage": round((count / total_appointments) * 100, 1) if total_appointments > 0 else 0
+            "percentage": round((count / total_appointments) * 100, 1) if total_appointments > 0 else 0,
         }
-        for day_num, count in daily_data
+        for day_num, count in sorted(daily_counts.items(), key=lambda x: x[1], reverse=True)
     ]
     
     # Consultation time distribution (simplified)
@@ -1084,7 +1324,8 @@ async def get_prescription_analytics(
     custom_date_from: Optional[str] = Query(None),
     custom_date_to: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get comprehensive prescription analytics and medication patterns.
@@ -1095,26 +1336,12 @@ async def get_prescription_analytics(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Get date range
+
     date_from, date_to = get_date_range(report_period, custom_date_from, custom_date_to)
-    
-    # Get prescription statistics
-    prescriptions_result = await db.execute(
-        select(Prescription)
-        .where(
-            and_(
-                Prescription.doctor_id == doctor.id,
-                Prescription.prescription_date >= date_from.isoformat(),
-                Prescription.prescription_date <= date_to.isoformat()
-            )
-        )
+    scope = await _build_report_scope(
+        tenant_db, platform_db, user_context, current_user, date_from, date_to
     )
-    
-    prescriptions = prescriptions_result.scalars().all()
+    prescriptions = await scope.list_prescriptions()
     total_prescriptions = len(prescriptions)
     
     if total_prescriptions == 0:
@@ -1257,7 +1484,8 @@ async def get_clinical_outcomes(
     custom_date_from: Optional[str] = Query(None),
     custom_date_to: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get clinical outcomes and quality metrics analysis.
@@ -1268,27 +1496,17 @@ async def get_clinical_outcomes(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Get date range
+
     date_from, date_to = get_date_range(report_period, custom_date_from, custom_date_to)
-    
-    # Get completed cases
-    completed_cases_result = await db.execute(
-        select(func.count(Appointment.id))
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_date >= date_from.isoformat(),
-                Appointment.appointment_date <= date_to.isoformat(),
-                Appointment.status == AppointmentStatus.COMPLETED
-            )
-        )
+    scope = await _build_report_scope(
+        tenant_db, platform_db, user_context, current_user, date_from, date_to
     )
-    
-    total_cases_treated = completed_cases_result.scalar() or 0
+
+    total_cases_treated = await scope.count_appointments(
+        status=AppointmentStatus.COMPLETED.value
+    )
+    if total_cases_treated == 0:
+        total_cases_treated = await scope.count_medical_records()
     
     if total_cases_treated == 0:
         return ClinicalOutcomes(
@@ -1352,21 +1570,10 @@ async def get_clinical_outcomes(
         }
     ]
     
-    # Follow-up compliance rate
-    # Get patients who were recommended follow-up
-    follow_up_recommended_result = await db.execute(
-        select(func.count(MedicalRecord.id))
-        .where(
-            and_(
-                MedicalRecord.doctor_id == doctor.id,
-                MedicalRecord.created_at >= datetime.combine(date_from, datetime.min.time()),
-                MedicalRecord.created_at <= datetime.combine(date_to, datetime.max.time()),
-                MedicalRecord.follow_up_instructions.isnot(None)
-            )
-        )
+    follow_up_recommended = await scope.count_medical_records(
+        MedicalRecord.follow_up_instructions.isnot(None),
+        MedicalRecord.follow_up_instructions != "",
     )
-    
-    follow_up_recommended = follow_up_recommended_result.scalar() or 0
     follow_up_compliance_rate = 72.0 if follow_up_recommended > 0 else 0.0  # Mock 72% compliance
     
     # Readmission rate (simplified calculation)
@@ -1421,7 +1628,8 @@ async def get_financial_summary(
     custom_date_from: Optional[str] = Query(None),
     custom_date_to: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get financial summary and revenue analytics.
@@ -1432,27 +1640,18 @@ async def get_financial_summary(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Get date range
+
     date_from, date_to = get_date_range(report_period, custom_date_from, custom_date_to)
-    
-    # Get completed appointments for revenue calculation
-    completed_appointments_result = await db.execute(
-        select(Appointment)
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_date >= date_from.isoformat(),
-                Appointment.appointment_date <= date_to.isoformat(),
-                Appointment.status == AppointmentStatus.COMPLETED
-            )
-        )
+    scope = await _build_report_scope(
+        tenant_db, platform_db, user_context, current_user, date_from, date_to
     )
-    
-    completed_appointments = completed_appointments_result.scalars().all()
+    doctor = scope.doctor
+
+    completed_appointments = await scope.list_appointments(
+        status=AppointmentStatus.COMPLETED.value
+    )
+    if not completed_appointments:
+        completed_appointments = await scope.list_appointments(exclude_cancelled=True)
     
     # Calculate revenue
     consultation_revenue = 0.0
@@ -1531,7 +1730,8 @@ async def get_performance_metrics(
     custom_date_from: Optional[str] = Query(None),
     custom_date_to: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get comprehensive performance metrics and KPIs.
@@ -1542,31 +1742,19 @@ async def get_performance_metrics(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Get date range
+
     date_from, date_to = get_date_range(report_period, custom_date_from, custom_date_to)
-    
-    # Get basic statistics
-    appointments_result = await db.execute(
-        select(
-            func.count(Appointment.id).label('total'),
-            func.count(case((Appointment.status == AppointmentStatus.COMPLETED, 1))).label('completed')
-        )
-        .where(
-            and_(
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_date >= date_from.isoformat(),
-                Appointment.appointment_date <= date_to.isoformat()
-            )
-        )
+    scope = await _build_report_scope(
+        tenant_db, platform_db, user_context, current_user, date_from, date_to
     )
-    
-    stats = appointments_result.first()
-    total_appointments = stats.total or 0
-    completed_appointments = stats.completed or 0
+    doctor = scope.doctor
+
+    total_appointments = await scope.count_appointments()
+    completed_appointments = await scope.count_appointments(
+        status=AppointmentStatus.COMPLETED.value
+    )
+    if completed_appointments == 0:
+        completed_appointments = await scope.count_appointments(exclude_cancelled=True)
     
     # Calculate working days
     working_days = (date_to - date_from).days + 1
@@ -1646,7 +1834,8 @@ async def get_comparative_analysis(
     custom_date_from: Optional[str] = Query(None),
     custom_date_to: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get comparative analysis with peers and industry benchmarks.
@@ -1657,25 +1846,15 @@ async def get_comparative_analysis(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Get date range
+
     date_from, date_to = get_date_range(report_period, custom_date_from, custom_date_to)
-    
-    # Get department doctors for comparison
-    dept_doctors_result = await db.execute(
-        select(func.count(DoctorProfile.id))
-        .where(
-            and_(
-                DoctorProfile.department_id == doctor.department_id,
-                DoctorProfile.hospital_id == (user_context.get("hospital_id") or doctor.hospital_id)
-            )
-        )
+    scope = await _build_report_scope(
+        tenant_db, platform_db, user_context, current_user, date_from, date_to
     )
-    
-    total_doctors_in_department = dept_doctors_result.scalar() or 1
+    doctor = scope.doctor
+    dept_id = getattr(doctor, "department_id", None) or doctor.department.id
+
+    total_doctors_in_department = await scope.count_department_doctors(dept_id)
     
     # Mock department and hospital averages
     department_average_metrics = {
@@ -1757,7 +1936,8 @@ async def generate_custom_report(
     report_request: ReportRequest,
     filters: Optional[AnalyticsFilter] = Body(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Generate custom report based on specified parameters.
@@ -1769,90 +1949,94 @@ async def generate_custom_report(
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
     
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Get date range
+    doctor = await get_doctor_profile(user_context, tenant_db)
+
     date_from, date_to = get_date_range(
         report_request.report_period,
         report_request.custom_date_from,
-        report_request.custom_date_to
+        report_request.custom_date_to,
     )
-    
-    # Generate report based on type
+
     report_data = {}
-    
+
     if report_request.report_type == ReportType.PRACTICE_SUMMARY:
-        # Call practice overview endpoint logic
         report_data = await get_practice_overview(
             report_request.report_period,
             report_request.custom_date_from,
             report_request.custom_date_to,
             current_user,
-            db
+            tenant_db,
+            platform_db,
         )
-    
+
     elif report_request.report_type == ReportType.PATIENT_ANALYTICS:
         report_data = await get_patient_analytics(
             report_request.report_period,
             report_request.custom_date_from,
             report_request.custom_date_to,
             current_user,
-            db
+            tenant_db,
+            platform_db,
         )
-    
+
     elif report_request.report_type == ReportType.APPOINTMENT_ANALYTICS:
         report_data = await get_appointment_analytics(
             report_request.report_period,
             report_request.custom_date_from,
             report_request.custom_date_to,
             current_user,
-            db
+            tenant_db,
+            platform_db,
         )
-    
+
     elif report_request.report_type == ReportType.PRESCRIPTION_ANALYTICS:
         report_data = await get_prescription_analytics(
             report_request.report_period,
             report_request.custom_date_from,
             report_request.custom_date_to,
             current_user,
-            db
+            tenant_db,
+            platform_db,
         )
-    
+
     elif report_request.report_type == ReportType.CLINICAL_OUTCOMES:
         report_data = await get_clinical_outcomes(
             report_request.report_period,
             report_request.custom_date_from,
             report_request.custom_date_to,
             current_user,
-            db
+            tenant_db,
+            platform_db,
         )
-    
+
     elif report_request.report_type == ReportType.FINANCIAL_SUMMARY:
         report_data = await get_financial_summary(
             report_request.report_period,
             report_request.custom_date_from,
             report_request.custom_date_to,
             current_user,
-            db
+            tenant_db,
+            platform_db,
         )
-    
+
     elif report_request.report_type == ReportType.PERFORMANCE_METRICS:
         report_data = await get_performance_metrics(
             report_request.report_period,
             report_request.custom_date_from,
             report_request.custom_date_to,
             current_user,
-            db
+            tenant_db,
+            platform_db,
         )
-    
+
     elif report_request.report_type == ReportType.COMPARATIVE_ANALYSIS:
         report_data = await get_comparative_analysis(
             report_request.report_period,
             report_request.custom_date_from,
             report_request.custom_date_to,
             current_user,
-            db
+            tenant_db,
+            platform_db,
         )
     
     # Add metadata

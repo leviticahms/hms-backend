@@ -40,11 +40,7 @@ PLATFORM_ONLY_PREFIXES: tuple[str, ...] = (
     "/api/v1/patient-appointment-booking",
     # doctor-management schedules live on tenant DB (DoctorSchedule, DoctorProfile)
     "/api/v1/staff/doctor-schedules",
-    "/api/v1/doctor-dashboard",
-    "/api/v1/doctor-appointment-tracking",
-    "/api/v1/doctor-patient-records",
-    "/api/v1/doctor-treatment-plans",
-    # doctor-sidebar uses tenant DB when configured (prescriptions, telemed notifications, IPD).
+    # doctor portal (dashboard, sidebar, IPD) reads tenant DB when provisioned — not platform-only.
     "/api/v1/patient-discharge-summary",
 )
 

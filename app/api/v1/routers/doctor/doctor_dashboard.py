@@ -18,8 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc, func, asc
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
-from app.core.database import get_db_session
+from app.core.database import get_db_session, get_platform_db_session
 from app.core.security import get_current_user
+from app.models.doctor import DoctorProfile
 from app.models.user import User, Role, user_roles
 from app.models.patient import PatientProfile, Appointment, MedicalRecord, Admission, DischargeSummary
 from app.models.hospital import Department, StaffDepartmentAssignment
@@ -137,59 +138,233 @@ def get_user_context(current_user: User) -> dict:
     }
 
 
-async def get_doctor_profile(user_context: dict, db: AsyncSession):
-    """Get doctor profile with department information"""
-    if UserRole.DOCTOR.value not in user_context.get("all_roles", []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied - Doctor role required"
+def _clinical_db_sessions(
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+) -> List[AsyncSession]:
+    seen: set[int] = set()
+    sessions: List[AsyncSession] = []
+    for sess in (tenant_db, platform_db):
+        key = id(sess)
+        if key in seen:
+            continue
+        seen.add(key)
+        sessions.append(sess)
+    return sessions
+
+
+async def _doctor_scope_ids(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    hospital_id: uuid.UUID,
+) -> List[uuid.UUID]:
+    """Admissions may reference users.id or legacy doctor_profiles.id."""
+    ids: List[uuid.UUID] = [user_id]
+    profile_result = await db.execute(
+        select(DoctorProfile.id).where(
+            and_(
+                DoctorProfile.user_id == user_id,
+                DoctorProfile.hospital_id == hospital_id,
+            )
         )
-    
-    # Get doctor user and their department assignment
-    doctor_result = await db.execute(
-        select(User)
-        .where(User.id == user_context["user_id"])
     )
-    doctor_user = doctor_result.scalar_one_or_none()
-    
-    if not doctor_user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Doctor user not found. Please contact administrator."
+    profile_id = profile_result.scalar_one_or_none()
+    if profile_id and profile_id not in ids:
+        ids.append(profile_id)
+    return ids
+
+
+async def _fetch_active_admissions_for_doctor(
+    user_id: uuid.UUID,
+    hospital_id: uuid.UUID,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+) -> List[tuple[Admission, AsyncSession]]:
+    """Load active IPD admissions from tenant + platform DB (deduped)."""
+    seen: set[uuid.UUID] = set()
+    rows: List[tuple[Admission, AsyncSession]] = []
+    scope_ids: Optional[List[uuid.UUID]] = None
+    for session in _clinical_db_sessions(tenant_db, platform_db):
+        if scope_ids is None:
+            scope_ids = await _doctor_scope_ids(session, user_id, hospital_id)
+        result = await session.execute(
+            select(Admission)
+            .where(
+                and_(
+                    Admission.hospital_id == hospital_id,
+                    Admission.doctor_id.in_(scope_ids),
+                    Admission.is_active == True,
+                )
+            )
+            .options(selectinload(Admission.patient).selectinload(PatientProfile.user))
+            .order_by(desc(Admission.admission_date))
         )
-        
-    # Get department assignment
+        for admission in result.scalars().all():
+            if admission.id in seen:
+                continue
+            seen.add(admission.id)
+            rows.append((admission, session))
+    return rows
+
+
+def _admission_patient_display(admission: Admission) -> tuple[str, str]:
+    patient = admission.patient
+    user = patient.user if patient else None
+    patient_ref = patient.patient_id if patient else ""
+    patient_name = (
+        f"{user.first_name} {user.last_name}".strip()
+        if user
+        else "Unknown"
+    )
+    return patient_ref, patient_name
+
+
+async def _fetch_discharged_without_summary(
+    user_id: uuid.UUID,
+    hospital_id: uuid.UUID,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+) -> List[tuple[Admission, AsyncSession]]:
+    """Discharged admissions missing a discharge summary (tenant + platform)."""
+    seen: set[uuid.UUID] = set()
+    rows: List[tuple[Admission, AsyncSession]] = []
+    scope_ids: Optional[List[uuid.UUID]] = None
+    for session in _clinical_db_sessions(tenant_db, platform_db):
+        if scope_ids is None:
+            scope_ids = await _doctor_scope_ids(session, user_id, hospital_id)
+        result = await session.execute(
+            select(Admission)
+            .where(
+                and_(
+                    Admission.hospital_id == hospital_id,
+                    Admission.doctor_id.in_(scope_ids),
+                    Admission.is_active == False,
+                    Admission.discharge_date.isnot(None),
+                    Admission.discharge_summary_id.is_(None),
+                )
+            )
+            .options(selectinload(Admission.patient).selectinload(PatientProfile.user))
+            .order_by(desc(Admission.discharge_date))
+        )
+        for admission in result.scalars().all():
+            if admission.id in seen:
+                continue
+            seen.add(admission.id)
+            rows.append((admission, session))
+    return rows
+
+
+async def _fetch_followup_medical_records(
+    user_id: uuid.UUID,
+    hospital_id: uuid.UUID,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+    limit: int = 10,
+) -> List[tuple[MedicalRecord, PatientProfile, AsyncSession]]:
+    seen: set[uuid.UUID] = set()
+    rows: List[tuple[MedicalRecord, PatientProfile, AsyncSession]] = []
+    scope_ids: Optional[List[uuid.UUID]] = None
+    since = datetime.now(timezone.utc) - timedelta(days=30)
+    for session in _clinical_db_sessions(tenant_db, platform_db):
+        if scope_ids is None:
+            scope_ids = await _doctor_scope_ids(session, user_id, hospital_id)
+        result = await session.execute(
+            select(MedicalRecord, PatientProfile)
+            .join(PatientProfile, MedicalRecord.patient_id == PatientProfile.id)
+            .where(
+                and_(
+                    MedicalRecord.hospital_id == hospital_id,
+                    MedicalRecord.doctor_id.in_(scope_ids),
+                    MedicalRecord.follow_up_instructions.isnot(None),
+                    MedicalRecord.follow_up_instructions != "",
+                    MedicalRecord.created_at >= since,
+                )
+            )
+            .options(selectinload(PatientProfile.user))
+            .order_by(desc(MedicalRecord.created_at))
+            .limit(limit * 2)
+        )
+        for record, patient in result.all():
+            if record.id in seen:
+                continue
+            seen.add(record.id)
+            rows.append((record, patient, session))
+            if len(rows) >= limit:
+                return rows
+    return rows
+
+
+async def _has_followup_appointment_scheduled(
+    patient_profile_id: uuid.UUID,
+    doctor_scope_ids: List[uuid.UUID],
+    hospital_id: uuid.UUID,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+) -> bool:
+    today_str = date.today().isoformat()
+    for session in _clinical_db_sessions(tenant_db, platform_db):
+        scheduled = await session.execute(
+            select(Appointment.id)
+            .where(
+                and_(
+                    Appointment.hospital_id == hospital_id,
+                    Appointment.patient_id == patient_profile_id,
+                    Appointment.doctor_id.in_(doctor_scope_ids),
+                    Appointment.appointment_date > today_str,
+                    Appointment.appointment_type == "FOLLOW_UP",
+                )
+            )
+            .limit(1)
+        )
+        if scheduled.scalar_one_or_none():
+            return True
+    return False
+
+
+async def get_doctor_profile(current_user: User, db: AsyncSession):
+    """Get doctor profile with department information (JWT user + tenant assignment)."""
+    if not current_user.hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Doctor must be associated with a hospital",
+        )
+
     assignment_result = await db.execute(
         select(StaffDepartmentAssignment)
-        .where(StaffDepartmentAssignment.staff_id == user_context["user_id"])
+        .where(
+            and_(
+                StaffDepartmentAssignment.staff_id == current_user.id,
+                StaffDepartmentAssignment.hospital_id == current_user.hospital_id,
+            )
+        )
         .options(selectinload(StaffDepartmentAssignment.department))
+        .order_by(desc(StaffDepartmentAssignment.effective_from))
+        .limit(1)
     )
     assignment = assignment_result.scalar_one_or_none()
-    
+
     if not assignment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Doctor department assignment not found. Please contact administrator."
+            detail="Doctor department assignment not found. Please contact administrator.",
         )
-        
-    # Create a mock object that has the same interface as the old DoctorProfile
+
     class MockDoctorProfile:
         def __init__(self, user, department):
             self.user = user
             self.department = department
-            self.id = user.id  # Add the id attribute that points to the user's id
+            self.id = user.id
             self.user_id = user.id
             self.hospital_id = user.hospital_id
-            self.doctor_id = user.staff_id or f"DOC-{str(user.id)[:8]}"  # Add doctor_id attribute
-            # Add commonly used attributes with default values
+            self.doctor_id = user.staff_id or f"DOC-{str(user.id)[:8]}"
             self.specialization = "General Medicine"
             self.designation = "Doctor"
             self.experience_years = 5
             self.consultation_fee = 500.0
             self.medical_license_number = f"LIC-{user.id}"
             self.is_available = True
-    
-    return MockDoctorProfile(doctor_user, assignment.department)
+
+    return MockDoctorProfile(current_user, assignment.department)
 
 
 def ensure_doctor_access(user_context: dict):
@@ -201,13 +376,16 @@ def ensure_doctor_access(user_context: dict):
         )
 
 
-def calculate_age(date_of_birth: str) -> int:
-    """Calculate age from date of birth"""
+def calculate_age(date_of_birth: Any) -> int:
+    """Calculate age from date of birth (str or date)."""
     try:
-        birth_date = datetime.strptime(date_of_birth, "%Y-%m-%d").date()
+        if isinstance(date_of_birth, date):
+            birth_date = date_of_birth
+        else:
+            birth_date = datetime.strptime(str(date_of_birth)[:10], "%Y-%m-%d").date()
         today = date.today()
         return today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
-    except:
+    except Exception:
         return 0
 
 
@@ -218,7 +396,8 @@ def calculate_age(date_of_birth: str) -> int:
 @router.get("/overview")
 async def get_doctor_dashboard_overview(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get comprehensive doctor dashboard overview.
@@ -231,7 +410,7 @@ async def get_doctor_dashboard_overview(
     ensure_doctor_access(user_context)
     
     # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
+    doctor = await get_doctor_profile(current_user, db)
     
     today = date.today().isoformat()
     
@@ -274,17 +453,14 @@ async def get_doctor_dashboard_overview(
     )
     pending_appointments = pending_appointments_result.scalar() or 0
     
-    # Get admitted patients count
-    admitted_patients_result = await db.execute(
-        select(func.count(Admission.id))
-        .where(
-            and_(
-                Admission.doctor_id == doctor.id,
-                Admission.is_active == True
-            )
-        )
+    # Active IPD admissions (tenant + platform when split)
+    admitted_rows = await _fetch_active_admissions_for_doctor(
+        doctor.user_id,
+        doctor.hospital_id,
+        db,
+        platform_db,
     )
-    admitted_patients = admitted_patients_result.scalar() or 0
+    admitted_patients = len(admitted_rows)
     
     # Get total patients treated (lifetime)
     total_patients_result = await db.execute(
@@ -293,15 +469,16 @@ async def get_doctor_dashboard_overview(
     )
     total_patients = total_patients_result.scalar() or 0
     
-    # Get pending discharge summaries
+    scope_ids = await _doctor_scope_ids(db, doctor.user_id, doctor.hospital_id)
     pending_discharge_result = await db.execute(
         select(func.count(Admission.id))
         .where(
             and_(
-                Admission.doctor_id == doctor.id,
+                Admission.hospital_id == doctor.hospital_id,
+                Admission.doctor_id.in_(scope_ids),
                 Admission.is_active == False,
                 Admission.discharge_date.isnot(None),
-                Admission.discharge_summary_id.is_(None)
+                Admission.discharge_summary_id.is_(None),
             )
         )
     )
@@ -366,7 +543,7 @@ async def get_todays_appointments(
     ensure_doctor_access(user_context)
     
     # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
+    doctor = await get_doctor_profile(current_user, db)
     
     today = date.today().isoformat()
     
@@ -433,7 +610,7 @@ async def get_recent_patients(
     ensure_doctor_access(user_context)
     
     # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
+    doctor = await get_doctor_profile(current_user, db)
     
     # Get recent patients (from appointments in last 30 days)
     thirty_days_ago = date.today() - timedelta(days=30)
@@ -524,7 +701,8 @@ async def get_recent_patients(
 @router.get("/patients/admitted")
 async def get_admitted_patients(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get currently admitted patients under doctor's care.
@@ -535,40 +713,32 @@ async def get_admitted_patients(
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
     
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Get admitted patients
-    admissions_result = await db.execute(
-        select(Admission)
-        .where(
-            and_(
-                Admission.doctor_id == doctor.id,
-                Admission.is_active == True
-            )
-        )
-        .options(
-            selectinload(Admission.patient).selectinload(PatientProfile.user)
-        )
-        .order_by(desc(Admission.admission_date))
+    doctor = await get_doctor_profile(current_user, tenant_db)
+    scope_ids = await _doctor_scope_ids(tenant_db, doctor.user_id, doctor.hospital_id)
+    admission_rows = await _fetch_active_admissions_for_doctor(
+        doctor.user_id,
+        doctor.hospital_id,
+        tenant_db,
+        platform_db,
     )
     
-    admissions = admissions_result.scalars().all()
-    
-    # Format admitted patients
     patient_list = []
-    for admission in admissions:
-        patient_age = calculate_age(admission.patient.date_of_birth)
-        length_of_stay = (datetime.now(timezone.utc) - admission.admission_date).days
+    for admission, record_db in admission_rows:
+        dob = admission.patient.date_of_birth if admission.patient else None
+        patient_age = calculate_age(dob) if dob else 0
+        adm_dt = admission.admission_date
+        if adm_dt is not None and adm_dt.tzinfo is None:
+            adm_dt = adm_dt.replace(tzinfo=timezone.utc)
+        length_of_stay = (datetime.now(timezone.utc) - adm_dt).days if adm_dt else 0
         
-        # Get latest assessment
-        latest_assessment_result = await db.execute(
+        latest_assessment_result = await record_db.execute(
             select(MedicalRecord.created_at, MedicalRecord.vital_signs)
             .where(
                 and_(
+                    MedicalRecord.hospital_id == doctor.hospital_id,
                     MedicalRecord.patient_id == admission.patient_id,
-                    MedicalRecord.doctor_id == doctor.id,
-                    MedicalRecord.created_at >= admission.admission_date
+                    MedicalRecord.doctor_id.in_(scope_ids),
+                    MedicalRecord.created_at >= admission.admission_date,
                 )
             )
             .order_by(desc(MedicalRecord.created_at))
@@ -588,10 +758,19 @@ async def get_admitted_patients(
         today = date.today()
         needs_rounds = last_assessment_date != today.isoformat() if last_assessment_date else True
         
+        patient = admission.patient
+        user = patient.user if patient else None
+        patient_ref = patient.patient_id if patient else ""
+        patient_name = (
+            f"{user.first_name} {user.last_name}".strip()
+            if user
+            else "Unknown"
+        )
+
         patient_list.append(AdmittedPatient(
             admission_number=admission.admission_number,
-            patient_ref=admission.patient.patient_id,
-            patient_name=f"{admission.patient.user.first_name} {admission.patient.user.last_name}",
+            patient_ref=patient_ref,
+            patient_name=patient_name,
             patient_age=patient_age,
             admission_date=admission.admission_date.date().isoformat(),
             length_of_stay=length_of_stay,
@@ -616,7 +795,8 @@ async def get_admitted_patients(
 @router.get("/tasks/pending")
 async def get_pending_tasks(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get pending tasks for the doctor.
@@ -627,83 +807,109 @@ async def get_pending_tasks(
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
     
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    pending_tasks = []
-    
-    # Task 1: Pending discharge summaries
-    pending_discharge_result = await db.execute(
-        select(Admission)
-        .where(
-            and_(
-                Admission.doctor_id == doctor.id,
-                Admission.is_active == False,
-                Admission.discharge_date.isnot(None),
-                Admission.discharge_summary_id.is_(None)
-            )
-        )
-        .options(selectinload(Admission.patient).selectinload(PatientProfile.user))
-        .order_by(desc(Admission.discharge_date))
+    doctor = await get_doctor_profile(current_user, tenant_db)
+    scope_ids = await _doctor_scope_ids(tenant_db, doctor.user_id, doctor.hospital_id)
+    pending_tasks: List[PendingTask] = []
+    task_ids_seen: set[str] = set()
+
+    def _add_task(task: PendingTask) -> None:
+        if task.task_id in task_ids_seen:
+            return
+        task_ids_seen.add(task.task_id)
+        pending_tasks.append(task)
+
+    # Task 1: Active inpatients — discharge summary not yet created
+    active_admissions = await _fetch_active_admissions_for_doctor(
+        doctor.user_id,
+        doctor.hospital_id,
+        tenant_db,
+        platform_db,
     )
-    
-    for admission in pending_discharge_result.scalars():
-        days_since_discharge = (datetime.now(timezone.utc).date() - admission.discharge_date.date()).days
-        priority = "HIGH" if days_since_discharge > 2 else "NORMAL"
-        
-        pending_tasks.append(PendingTask(
-            task_id=f"discharge-{admission.id}",
-            task_type="DISCHARGE_SUMMARY",
-            patient_ref=admission.patient.patient_id,
-            patient_name=f"{admission.patient.user.first_name} {admission.patient.user.last_name}",
-            description=f"Complete discharge summary for admission {admission.admission_number}",
-            priority=priority,
-            due_date=None,
-            created_date=admission.discharge_date.isoformat()
-        ))
-    
-    # Task 2: Follow-up appointments needed
-    follow_up_result = await db.execute(
-        select(MedicalRecord, PatientProfile)
-        .join(PatientProfile, MedicalRecord.patient_id == PatientProfile.id)
-        .where(
-            and_(
-                MedicalRecord.doctor_id == doctor.id,
-                MedicalRecord.follow_up_instructions.isnot(None),
-                MedicalRecord.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
-            )
-        )
-        .options(selectinload(PatientProfile.user))
-        .order_by(desc(MedicalRecord.created_at))
-        .limit(10)
-    )
-    
-    for record, patient in follow_up_result:
-        # Check if follow-up appointment already scheduled
-        follow_up_scheduled = await db.execute(
-            select(Appointment)
-            .where(
-                and_(
-                    Appointment.patient_id == patient.id,
-                    Appointment.doctor_id == doctor.id,
-                    Appointment.appointment_date > date.today().isoformat(),
-                    Appointment.appointment_type == "FOLLOW_UP"
-                )
-            )
-            .limit(1)
-        )
-        
-        if not follow_up_scheduled.scalar_one_or_none():
-            pending_tasks.append(PendingTask(
-                task_id=f"followup-{record.id}",
-                task_type="FOLLOW_UP",
-                patient_ref=patient.patient_id,
-                patient_name=f"{patient.user.first_name} {patient.user.last_name}",
-                description=f"Schedule follow-up appointment: {record.follow_up_instructions[:100]}...",
+    for admission, _session in active_admissions:
+        if admission.discharge_summary_id is not None:
+            continue
+        patient_ref, patient_name = _admission_patient_display(admission)
+        adm_dt = admission.admission_date
+        created = adm_dt.isoformat() if adm_dt else datetime.now(timezone.utc).isoformat()
+        _add_task(
+            PendingTask(
+                task_id=f"discharge-prep-{admission.id}",
+                task_type="DISCHARGE_SUMMARY",
+                patient_ref=patient_ref,
+                patient_name=patient_name,
+                description=f"Prepare discharge summary for active admission {admission.admission_number}",
                 priority="NORMAL",
                 due_date=None,
-                created_date=record.created_at.isoformat()
-            ))
+                created_date=created,
+            )
+        )
+
+    # Task 2: Discharged patients — summary still missing
+    for admission, _session in await _fetch_discharged_without_summary(
+        doctor.user_id,
+        doctor.hospital_id,
+        tenant_db,
+        platform_db,
+    ):
+        discharge_dt = admission.discharge_date
+        if discharge_dt is not None and discharge_dt.tzinfo is None:
+            discharge_dt = discharge_dt.replace(tzinfo=timezone.utc)
+        days_since_discharge = (
+            (datetime.now(timezone.utc).date() - discharge_dt.date()).days
+            if discharge_dt
+            else 0
+        )
+        priority = "HIGH" if days_since_discharge > 2 else "NORMAL"
+        patient_ref, patient_name = _admission_patient_display(admission)
+        _add_task(
+            PendingTask(
+                task_id=f"discharge-{admission.id}",
+                task_type="DISCHARGE_SUMMARY",
+                patient_ref=patient_ref,
+                patient_name=patient_name,
+                description=f"Complete discharge summary for admission {admission.admission_number}",
+                priority=priority,
+                due_date=None,
+                created_date=(
+                    discharge_dt.isoformat()
+                    if discharge_dt
+                    else datetime.now(timezone.utc).isoformat()
+                ),
+            )
+        )
+
+    # Task 3: Follow-up appointments needed (records with follow-up instructions)
+    for record, patient, _session in await _fetch_followup_medical_records(
+        doctor.user_id,
+        doctor.hospital_id,
+        tenant_db,
+        platform_db,
+    ):
+        if await _has_followup_appointment_scheduled(
+            patient.id,
+            scope_ids,
+            doctor.hospital_id,
+            tenant_db,
+            platform_db,
+        ):
+            continue
+        instructions = (record.follow_up_instructions or "").strip()
+        snippet = instructions[:100] + ("..." if len(instructions) > 100 else "")
+        pname = ""
+        if patient.user:
+            pname = f"{patient.user.first_name} {patient.user.last_name}".strip()
+        _add_task(
+            PendingTask(
+                task_id=f"followup-{record.id}",
+                task_type="FOLLOW_UP",
+                patient_ref=patient.patient_id or "",
+                patient_name=pname or "Unknown",
+                description=f"Schedule follow-up appointment: {snippet}",
+                priority="NORMAL",
+                due_date=None,
+                created_date=record.created_at.isoformat() if record.created_at else "",
+            )
+        )
     
     # Sort by priority and date
     priority_order = {"URGENT": 0, "HIGH": 1, "NORMAL": 2, "LOW": 3}
@@ -736,7 +942,7 @@ async def get_quick_stats(
     ensure_doctor_access(user_context)
     
     # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
+    doctor = await get_doctor_profile(current_user, db)
     
     # Calculate date range
     today = date.today()

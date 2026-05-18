@@ -397,6 +397,20 @@ def calculate_age(date_of_birth: str) -> int:
         return 0
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc_aware(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _days_since(dt: datetime) -> int:
+    return (_utc_now() - _as_utc_aware(dt)).days
+
+
 def generate_alert_id() -> str:
     """Generate unique alert ID"""
     import random
@@ -471,7 +485,7 @@ def assess_clinical_risks(patient: PatientProfile, medical_records: List[Medical
     
     # Visit frequency analysis
     if len(medical_records) > 5:
-        recent_visits = [r for r in medical_records if (datetime.now() - r.created_at).days <= 90]
+        recent_visits = [r for r in medical_records if _days_since(r.created_at) <= 90]
         if len(recent_visits) > 3:
             risks.append("Frequent recent visits - consider comprehensive evaluation")
     
@@ -1033,7 +1047,7 @@ async def get_patient_summary(
     if active_admissions > 0:
         clinical_alerts.append("Patient currently admitted")
     if len(recent_records) > 5:
-        recent_visits = [r for r in recent_records if (datetime.now() - r.created_at).days <= 30]
+        recent_visits = [r for r in recent_records if _days_since(r.created_at) <= 30]
         if len(recent_visits) > 3:
             clinical_alerts.append("Frequent recent visits - consider comprehensive evaluation")
     
@@ -1467,8 +1481,8 @@ async def analyze_case_history(
     if not user_context.get("hospital_id") and patient.hospital_id:
         user_context["hospital_id"] = str(patient.hospital_id)
     
-    # Calculate date range based on analysis period
-    end_date = datetime.now()
+    # Calculate date range based on analysis period (UTC-aware for DB timestamptz)
+    end_date = _utc_now()
     if analysis_period == "3months":
         start_date = end_date - timedelta(days=90)
     elif analysis_period == "6months":
@@ -1478,7 +1492,7 @@ async def analyze_case_history(
     elif analysis_period == "2years":
         start_date = end_date - timedelta(days=730)
     else:  # all
-        start_date = datetime(2020, 1, 1)  # Far back date
+        start_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
     
     # Get comprehensive medical data for analysis
     records_result = await db.execute(
@@ -1639,7 +1653,7 @@ async def analyze_case_history(
             })
     
     # Calculate readmission risk (simplified)
-    recent_admissions = len([a for a in appointments if (datetime.now() - a.created_at).days <= 30])
+    recent_admissions = len([a for a in appointments if _days_since(a.created_at) <= 30])
     readmission_risk = min(0.8, recent_admissions * 0.2) if recent_admissions > 0 else 0.1
     
     # Generate clinical recommendations
@@ -1661,7 +1675,7 @@ async def analyze_case_history(
     
     if records:
         last_visit = max(records, key=lambda x: x.created_at)
-        days_since_last = (datetime.now() - last_visit.created_at).days
+        days_since_last = _days_since(last_visit.created_at)
         
         if days_since_last > 90:
             follow_up_suggestions.append("Schedule routine follow-up - last visit over 3 months ago")
@@ -1778,7 +1792,7 @@ async def get_clinical_alerts(
         .where(
             and_(
                 Appointment.patient_id == patient.id,
-                Appointment.created_at >= datetime.now() - timedelta(days=30)
+                Appointment.created_at >= _utc_now() - timedelta(days=30)
             )
         )
     )
