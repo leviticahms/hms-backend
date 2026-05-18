@@ -191,7 +191,7 @@ def _receptionist_profile_base_dict(current_user: User) -> dict:
 
 @router.get("/dashboard", tags=[TAG_DASHBOARD])
 async def get_receptionist_dashboard(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_platform_db_session)
 ):
     """
@@ -222,7 +222,7 @@ async def get_receptionist_dashboard(
 async def register_patient(
     patient_data: PatientRegistrationCreate,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_platform_db_session)
 ):
     """

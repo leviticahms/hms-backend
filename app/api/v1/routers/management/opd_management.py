@@ -178,7 +178,7 @@ async def create_doctor(
     return await svc.create_doctor_modal(body.model_dump(exclude_none=True))
 
 
-@doctors_router.put("/{id}")
+@doctors_router.put("/{id:uuid}")
 async def update_doctor(
     id: UUID,
     body: OpdDoctorUpdate,
@@ -191,7 +191,7 @@ async def update_doctor(
     return await svc.update_doctor_modal(id, body.model_dump(exclude_none=True))
 
 
-@doctors_router.patch("/{id}/status")
+@doctors_router.patch("/{id:uuid}/status")
 async def update_doctor_status(
     id: UUID,
     is_active: bool = Query(..., alias="isActive"),
@@ -204,7 +204,7 @@ async def update_doctor_status(
     return await svc.set_doctor_status(id, is_active)
 
 
-@doctors_router.post("/{id}/deactivate")
+@doctors_router.post("/{id:uuid}/deactivate")
 async def deactivate_doctor(
     id: UUID,
     body: OpdDoctorDeactivate,

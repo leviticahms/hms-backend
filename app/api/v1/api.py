@@ -174,12 +174,13 @@ try:
     )
     api_router.include_router(nurse_management_router)
     api_router.include_router(receptionist_management_router)
-    api_router.include_router(directory_router)
-    api_router.include_router(directory_router, prefix="/receptionist")
-    api_router.include_router(appointments_router)
     api_router.include_router(staff_doctor_schedules_router)
     api_router.include_router(opd_management_router)
     api_router.include_router(opd_doctors_router)
+    # After OPD `/doctors/{uuid}` routes so `/doctors/statistics` is not captured as an id.
+    api_router.include_router(directory_router)
+    api_router.include_router(directory_router, prefix="/receptionist")
+    api_router.include_router(appointments_router)
     logger.info(
         "✓ Management routers loaded (receptionist, departments, doctors, OPD, nurse)"
     )

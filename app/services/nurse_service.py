@@ -66,6 +66,33 @@ def _is_pending_item(item: Dict[str, Any], done_statuses: set[str]) -> bool:
     return status_text not in done_statuses
 
 
+def _merge_nurse_discharge_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Map nurse UI fields onto DischargeSummary columns (no extra ORM attrs)."""
+    data = dict(payload)
+    hc_parts: List[str] = []
+    if data.get("hospital_course"):
+        hc_parts.append(str(data["hospital_course"]).strip())
+    if data.get("condition_on_discharge"):
+        hc_parts.append(f"Condition on discharge: {data['condition_on_discharge']}")
+    if hc_parts:
+        data["hospital_course"] = "\n\n".join(hc_parts)
+    data.pop("condition_on_discharge", None)
+
+    fu_parts: List[str] = []
+    if data.get("follow_up_instructions"):
+        fu_parts.append(str(data["follow_up_instructions"]).strip())
+    if data.get("discharge_notes"):
+        fu_parts.append(f"Discharge notes: {data['discharge_notes']}")
+    if fu_parts:
+        data["follow_up_instructions"] = "\n\n".join(fu_parts)
+    data.pop("discharge_notes", None)
+    return data
+
+
+def _discharge_summary_column_names() -> set[str]:
+    return {c.name for c in DischargeSummary.__table__.columns}
+
+
 def _require_uuid(value: Any, field: str) -> uuid.UUID:
     try:
         return uuid.UUID(str(value).strip())
@@ -112,12 +139,28 @@ class NurseService:
 
     async def _format_admission_row(self, admission: Admission) -> Dict[str, Any]:
         d = _serialize_model(admission)
-        d["patient_ref"] = admission.patient.patient_id if admission.patient else None
-        d["patient_name"] = await self._patient_display_name(admission.patient)
-        d["doctor_name"] = self._doctor_display_name(admission.doctor)
-        d["department_name"] = (
-            admission.department.name if getattr(admission, "department", None) else None
-        )
+        patient = admission.patient
+        if patient is None and admission.patient_id:
+            pres = await self.tenant_db.execute(
+                select(PatientProfile)
+                .where(PatientProfile.id == admission.patient_id)
+                .options(selectinload(PatientProfile.user))
+            )
+            patient = pres.scalar_one_or_none()
+        d["patient_ref"] = patient.patient_id if patient else None
+        d["patient_name"] = await self._patient_display_name(patient)
+
+        doctor = admission.doctor
+        if doctor is None and admission.doctor_id:
+            doctor = await self.platform_db.get(User, admission.doctor_id)
+            if doctor is None:
+                doctor = await self.tenant_db.get(User, admission.doctor_id)
+        d["doctor_name"] = self._doctor_display_name(doctor)
+
+        department = getattr(admission, "department", None)
+        if department is None and admission.department_id:
+            department = await self._department_row(admission.department_id, admission.hospital_id)
+        d["department_name"] = department.name if department else None
         return d
 
     async def _get_medical_record_for_nurse(
@@ -336,7 +379,7 @@ class NurseService:
                     or_(*dept_match),
                 )
             )
-            .options(selectinload(Admission.patient))
+            .options(*self._admission_load_options())
             .order_by(desc(Admission.created_at))
             .limit(1)
         )
@@ -352,7 +395,7 @@ class NurseService:
                     Admission.hospital_id == hid,
                 )
             )
-            .options(selectinload(Admission.patient))
+            .options(*self._admission_load_options())
             .order_by(desc(Admission.created_at))
             .limit(1)
         )
@@ -374,13 +417,19 @@ class NurseService:
         raise HTTPException(status_code=404, detail="Admission not found in nurse department")
 
     async def _mirror_upsert(self, model: Type[Any], model_id: uuid.UUID, values: Dict[str, Any]) -> None:
-        # Enforce persistence in both DBs.
+        """Mirror tenant writes to platform DB when they use separate databases."""
+        if self.platform_db is self.tenant_db:
+            return
+        col_names = {c.name for c in model.__table__.columns}
+        filtered = {k: v for k, v in values.items() if k in col_names}
+        filtered["id"] = model_id
         existing = await self.platform_db.get(model, model_id)
         if existing:
-            for k, v in values.items():
-                setattr(existing, k, v)
+            for k, v in filtered.items():
+                if k in col_names:
+                    setattr(existing, k, v)
         else:
-            self.platform_db.add(model(**values))
+            self.platform_db.add(model(**filtered))
         await self.platform_db.commit()
 
     async def _mirror_staff_assignment(self, assignment: StaffDepartmentAssignment) -> None:
@@ -429,7 +478,7 @@ class NurseService:
                 )
             )
             .order_by(desc(Admission.created_at))
-            .options(selectinload(Admission.patient))
+            .options(*self._admission_load_options())
         )
         admission = res.scalars().first()
         if not admission:
@@ -446,7 +495,10 @@ class NurseService:
         if not profile:
             return {}
         out = _serialize_model(profile)
-        out["department_name"] = profile.department.name if profile.department else None
+        dept = profile.department
+        if dept is None and profile.department_id:
+            dept = await self._department_row(profile.department_id, profile.hospital_id)
+        out["department_name"] = dept.name if dept else None
         return out
 
     async def upsert_profile(self, payload: Dict[str, Any], current_user: User) -> Dict[str, Any]:
@@ -922,7 +974,6 @@ class NurseService:
         )
         self.tenant_db.add(rec)
         await self.tenant_db.commit()
-        await self._mirror_upsert(MedicalRecord, rec_id, _model_values_raw(rec))
         return _serialize_model(rec)
 
     async def create_note(self, payload: Dict[str, Any], current_user: User) -> Dict[str, Any]:
@@ -960,7 +1011,6 @@ class NurseService:
         )
         self.tenant_db.add(rec)
         await self.tenant_db.commit()
-        await self._mirror_upsert(MedicalRecord, rec_id, _model_values_raw(rec))
         return _serialize_model(rec)
 
     async def list_notes(self, admission_number: str, current_user: User) -> List[Dict[str, Any]]:
@@ -989,29 +1039,34 @@ class NurseService:
             admission = await self._resolve_admission_by_patient_ref(payload["patient_ref"], current_user)
         else:
             raise HTTPException(status_code=400, detail="admission_number or patient_ref is required")
+        merged = _merge_nurse_discharge_payload(payload)
         ds_id = uuid.uuid4()
         now = datetime.now(timezone.utc)
+        adm_dt = admission.admission_date
+        if adm_dt is not None and adm_dt.tzinfo is None:
+            adm_dt = adm_dt.replace(tzinfo=timezone.utc)
+        los = 0
+        if adm_dt is not None:
+            los = max((now - adm_dt).days, 0)
         summary = DischargeSummary(
             id=ds_id,
             hospital_id=current_user.hospital_id,
             patient_id=admission.patient_id,
             doctor_id=admission.doctor_id,
-            admission_date=admission.admission_date,
+            admission_date=adm_dt or now,
             discharge_date=now,
-            length_of_stay=max((now - admission.admission_date).days, 0),
-            chief_complaint=admission.chief_complaint,
-            final_diagnosis=payload["final_diagnosis"],
-            secondary_diagnoses=payload.get("secondary_diagnoses", []),
-            procedures_performed=payload.get("procedures_performed", []),
-            hospital_course=payload.get("hospital_course"),
-            medications_on_discharge=payload.get("medications_on_discharge", []),
-            follow_up_instructions=payload.get("follow_up_instructions"),
-            diet_instructions=payload.get("diet_instructions"),
-            activity_restrictions=payload.get("activity_restrictions"),
-            follow_up_date=payload.get("follow_up_date"),
-            follow_up_doctor=payload.get("follow_up_doctor"),
-            condition_on_discharge=payload.get("condition_on_discharge"),
-            discharge_notes=payload.get("discharge_notes"),
+            length_of_stay=los,
+            chief_complaint=admission.chief_complaint or "IPD admission",
+            final_diagnosis=merged["final_diagnosis"],
+            secondary_diagnoses=merged.get("secondary_diagnoses", []),
+            procedures_performed=merged.get("procedures_performed", []),
+            hospital_course=merged.get("hospital_course"),
+            medications_on_discharge=merged.get("medications_on_discharge", []),
+            follow_up_instructions=merged.get("follow_up_instructions"),
+            diet_instructions=merged.get("diet_instructions"),
+            activity_restrictions=merged.get("activity_restrictions"),
+            follow_up_date=merged.get("follow_up_date"),
+            follow_up_doctor=merged.get("follow_up_doctor"),
         )
         self.tenant_db.add(summary)
         admission.discharge_summary_id = ds_id
@@ -1223,22 +1278,11 @@ class NurseService:
         summary = await self.tenant_db.get(DischargeSummary, admission.discharge_summary_id)
         if not summary:
             raise HTTPException(status_code=404, detail="Discharge summary not found")
-        for key in (
-            "final_diagnosis",
-            "secondary_diagnoses",
-            "procedures_performed",
-            "hospital_course",
-            "medications_on_discharge",
-            "follow_up_instructions",
-            "diet_instructions",
-            "activity_restrictions",
-            "follow_up_date",
-            "follow_up_doctor",
-            "condition_on_discharge",
-            "discharge_notes",
-        ):
-            if key in payload and payload[key] is not None:
-                setattr(summary, key, payload[key])
+        merged = _merge_nurse_discharge_payload(payload)
+        valid_cols = _discharge_summary_column_names()
+        for key, value in merged.items():
+            if key in valid_cols and value is not None:
+                setattr(summary, key, value)
         await self.tenant_db.commit()
         await self.tenant_db.refresh(summary)
         await self._mirror_upsert(DischargeSummary, summary.id, _model_values_raw(summary))

@@ -8,6 +8,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, date, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc, func, asc
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 from app.models.doctor import DoctorProfile
@@ -134,9 +135,82 @@ class ClinicalService:
 
     def __init__(self, db: AsyncSession, platform_db: Optional[AsyncSession] = None):
         self.db = db
-        self.platform_db = platform_db
+        # Receptionist OPD routes pass a single platform session; default both aliases to it.
+        self.platform_db = platform_db if platform_db is not None else db
         self.tenant_db = db
         self.security = SecurityManager()
+
+    def _sessions_share_connection(self) -> bool:
+        return id(self.platform_db) == id(self.tenant_db)
+
+    async def _commit_sessions(self) -> None:
+        """Commit platform + tenant; once when both aliases point at the same session."""
+        if self._sessions_share_connection():
+            await self.platform_db.commit()
+            return
+        try:
+            await self.platform_db.commit()
+            await self.tenant_db.commit()
+        except Exception:
+            await self._rollback_sessions()
+            raise
+
+    async def _rollback_sessions(self) -> None:
+        if self._sessions_share_connection():
+            await self.platform_db.rollback()
+            return
+        await self.platform_db.rollback()
+        await self.tenant_db.rollback()
+
+    def _hospital_uuid(self, user_context: dict) -> uuid.UUID:
+        hid = user_context.get("hospital_id")
+        if not hid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Hospital ID is required.",
+            )
+        if isinstance(hid, uuid.UUID):
+            return hid
+        try:
+            return uuid.UUID(str(hid))
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid hospital_id in user context.",
+            )
+
+    def _opd_db_sessions(self) -> List[AsyncSession]:
+        """Platform + tenant sessions for OPD reads (deduplicated)."""
+        seen: set[int] = set()
+        out: List[AsyncSession] = []
+        for sess in (self.platform_db, self.tenant_db):
+            if sess is None:
+                continue
+            key = id(sess)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(sess)
+        return out
+
+    async def _load_opd_patient_by_ref(
+        self, patient_ref: str, hospital_id_uuid: uuid.UUID
+    ) -> Optional[PatientProfile]:
+        for sess in self._opd_db_sessions():
+            result = await sess.execute(
+                select(PatientProfile)
+                .where(
+                    and_(
+                        PatientProfile.patient_id == patient_ref,
+                        PatientProfile.hospital_id == hospital_id_uuid,
+                    )
+                )
+                .options(selectinload(PatientProfile.user))
+            )
+            patient = result.scalar_one_or_none()
+            if patient:
+                return patient
+        return None
 
     async def _ensure_tenant_department_id(
         self,
@@ -205,7 +279,7 @@ class ClinicalService:
                 else uuid.UUID(str(hospital_id))
             )
             conditions.append(StaffDepartmentAssignment.hospital_id == hid)
-        result = await self.db.execute(
+        stmt = (
             select(StaffDepartmentAssignment)
             .where(and_(*conditions))
             .options(selectinload(StaffDepartmentAssignment.department))
@@ -216,7 +290,12 @@ class ClinicalService:
             )
             .limit(1)
         )
-        return result.scalars().first()
+        for sess in self._opd_db_sessions():
+            result = await sess.execute(stmt)
+            row = result.scalars().first()
+            if row:
+                return row
+        return None
 
     async def _department_from_user_metadata(self, user: User) -> Optional[Department]:
         """Resolve department from user_metadata when assignment/profile rows are missing."""
@@ -313,8 +392,17 @@ class ClinicalService:
     
     def get_user_context(self, current_user: User) -> dict:
         """Extract user context from JWT token"""
-        user_roles = [role.name for role in current_user.roles]
-        
+        from app.core.role_aliases import normalize_staff_role_name
+
+        user_roles = []
+        for role in current_user.roles or []:
+            name = getattr(role, "name", None)
+            if name is None:
+                continue
+            normalized = normalize_staff_role_name(str(name))
+            if normalized:
+                user_roles.append(normalized)
+
         return {
             "user_id": current_user.id,  # Keep as UUID for database operations
             "hospital_id": str(current_user.hospital_id) if current_user.hospital_id else None,
@@ -326,19 +414,35 @@ class ClinicalService:
     
     async def validate_receptionist_access(self, user_context: dict) -> None:
         """Ensure user is a receptionist"""
-        if user_context["role"] != UserRole.RECEPTIONIST:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied - Receptionist role required"
-            )
+        roles = user_context.get("all_roles") or []
+        if UserRole.RECEPTIONIST.value not in roles:
+            primary = user_context.get("role")
+            if primary != UserRole.RECEPTIONIST.value and primary != UserRole.RECEPTIONIST:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied - Receptionist role required",
+                )
     
     async def validate_nurse_access(self, user_context: dict) -> None:
         """Ensure user is a nurse"""
-        if user_context["role"] != UserRole.NURSE:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied - Nurse role required"
-            )
+        roles = user_context.get("all_roles") or []
+        if UserRole.NURSE.value not in roles:
+            primary = user_context.get("role")
+            if primary != UserRole.NURSE.value and primary != UserRole.NURSE:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied - Nurse role required",
+                )
+
+    @staticmethod
+    def _receptionist_ui_meta(current_user: User) -> tuple[str, str]:
+        """Department / work area labels without extra DB lookups."""
+        md = getattr(current_user, "user_metadata", None) or {}
+        if not isinstance(md, dict):
+            md = {}
+        dept = (md.get("department_name") or md.get("department") or "General OPD").strip()
+        work = (md.get("work_area") or "OPD").strip()
+        return dept or "General OPD", work or "OPD"
     
     async def validate_doctor_access(self, user_context: dict) -> None:
         """Ensure user is a doctor"""
@@ -435,11 +539,16 @@ class ClinicalService:
                 assignment = _AssignmentLike(dept_obj)
 
         if not assignment:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Receptionist department assignment not found. Please contact administrator."
-            )
-            
+            class _DefaultDepartment:
+                id = None
+                name = "General OPD"
+
+            class _AssignmentLike:
+                def __init__(self, department):
+                    self.department = department
+
+            assignment = _AssignmentLike(_DefaultDepartment())
+
         # Create a mock object that has the same interface as the old ReceptionistProfile
         class MockReceptionistProfile:
             def __init__(self, user, department):
@@ -464,8 +573,8 @@ class ClinicalService:
     async def register_opd_patient(self, patient_data: Dict[str, Any], current_user: User) -> Dict[str, Any]:
         """Register new patient for OPD services"""
         user_context = self.get_user_context(current_user)
-        receptionist = await self.get_receptionist_profile(user_context)
-        
+        await self.validate_receptionist_access(user_context)
+
         hospital_id_str = user_context.get("hospital_id")
         if not hospital_id_str:
             from app.utils.hospital_id_resolve import resolve_effective_hospital_id
@@ -622,8 +731,8 @@ class ClinicalService:
             emergency_contact_relation=patient_data.get("emergency_contact_relation"),
         )
         
-        self.tenant_db.add(patient_profile)
-        await self.tenant_db.flush()
+        self.platform_db.add(patient_profile)
+        await self.platform_db.flush()
         
         hospital_name = None
         try:
@@ -637,12 +746,24 @@ class ClinicalService:
             hospital_name = None
 
         try:
-            await self.platform_db.commit()
-            await self.tenant_db.commit()
-        except:
-            await self.platform_db.rollback()
-            await self.tenant_db.rollback()
-            raise
+            await self._commit_sessions()
+        except IntegrityError as exc:
+            await self._rollback_sessions()
+            detail = str(getattr(exc, "orig", exc))
+            if "phone" in detail.lower() or "users_phone" in detail.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Patient with this phone number already exists",
+                ) from exc
+            if "email" in detail.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Patient with this email already exists",
+                ) from exc
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Patient could not be registered (duplicate or invalid data)",
+            ) from exc
 
         result = {
             "patient_ref": patient_ref,
@@ -892,13 +1013,7 @@ class ClinicalService:
         except Exception:
             hospital_name = None
 
-        try:
-            await self.platform_db.commit()
-            await self.tenant_db.commit()
-        except:
-            await self.platform_db.rollback()
-            await self.tenant_db.rollback()
-            raise
+        await self._commit_sessions()
 
         out = self._receptionist_patient_detail_dict(profile)
         out["patient_ref"] = profile.patient_id
@@ -924,7 +1039,7 @@ class ClinicalService:
     async def get_receptionist_patient_by_ref(self, patient_ref: str, current_user: User) -> Dict[str, Any]:
         """Return full OPD profile for autofill (receptionist)."""
         user_context = self.get_user_context(current_user)
-        await self.get_receptionist_profile(user_context)
+        await self.validate_receptionist_access(user_context)
         hospital_id_str = user_context.get("hospital_id")
         if not hospital_id_str:
             from app.utils.hospital_id_resolve import resolve_effective_hospital_id
@@ -939,16 +1054,7 @@ class ClinicalService:
             )
         hospital_id_uuid = uuid.UUID(hospital_id_str)
         pr = (patient_ref or "").strip()
-        result = await self.tenant_db.execute(
-            select(PatientProfile)
-            .where(
-                and_(
-                    PatientProfile.patient_id == pr,
-                    PatientProfile.hospital_id == hospital_id_uuid,
-                )
-            )
-        )
-        patient = result.scalar_one_or_none()
+        patient = await self._load_opd_patient_by_ref(pr, hospital_id_uuid)
         if not patient:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -966,26 +1072,7 @@ class ClinicalService:
         name = (patient_name or "").strip()
 
         if ref:
-            patient_result = await self.tenant_db.execute(
-                select(PatientProfile)
-                .where(
-                    and_(
-                        PatientProfile.patient_id == ref,
-                        PatientProfile.hospital_id == hospital_id_uuid,
-                    )
-                )
-            )
-            patient = patient_result.scalar_one_or_none()
-            if not patient:
-                patient_result = await self.tenant_db.execute(
-                    select(PatientProfile)
-                    .where(PatientProfile.patient_id == ref)
-                )
-                patient = patient_result.scalar_one_or_none()
-                if patient and patient.hospital_id is None:
-                    patient.hospital_id = hospital_id_uuid
-                    if patient.user and patient.user.hospital_id is None:
-                        patient.user.hospital_id = hospital_id_uuid
+            patient = await self._load_opd_patient_by_ref(ref, hospital_id_uuid)
             if not patient:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -1045,7 +1132,7 @@ class ClinicalService:
         from app.services.appointment_service import AppointmentService
 
         user_context = self.get_user_context(current_user)
-        await self.get_receptionist_profile(user_context)
+        await self.validate_receptionist_access(user_context)
 
         hospital_id_uuid = None
         if user_context.get("hospital_id"):
@@ -1187,7 +1274,7 @@ class ClinicalService:
                 detail="Time slot is not available",
             )
 
-        conflict_check = await self.tenant_db.execute(
+        conflict_check = await self.db.execute(
             select(Appointment).where(
                 and_(
                     Appointment.doctor_id == doctor.id,
@@ -1205,7 +1292,7 @@ class ClinicalService:
                 detail="Doctor is not available at this time. Please choose a different time slot.",
             )
 
-        dp_result = await self.tenant_db.execute(
+        dp_result = await self.db.execute(
             select(DoctorProfile).where(
                 and_(
                     DoctorProfile.user_id == doctor.id,
@@ -1248,13 +1335,21 @@ class ClinicalService:
             created_by_user=uuid.UUID(str(user_context["user_id"])),
         )
 
-        self.tenant_db.add(appointment)
-        await self.tenant_db.commit()
+        self.db.add(appointment)
+        await self.db.commit()
+
+        patient_user = patient.user
+        if patient_user is None and patient.user_id:
+            patient_user = await self.platform_db.get(User, patient.user_id)
 
         return {
             "appointment_ref": appointment_ref,
             "patient_ref": patient.patient_id,
-            "patient_name": f"{patient.user.first_name} {patient.user.last_name}",
+            "patient_name": (
+                f"{patient_user.first_name} {patient_user.last_name}".strip()
+                if patient_user
+                else patient.patient_id
+            ),
             "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}",
             "department_name": department.name,
             "appointment_date": appt_date,
@@ -1269,7 +1364,8 @@ class ClinicalService:
     async def get_todays_opd_appointments(self, filters: Dict[str, Any], current_user: User) -> Dict[str, Any]:
         """Get today's OPD appointments with filtering"""
         user_context = self.get_user_context(current_user)
-        receptionist = await self.get_receptionist_profile(user_context)
+        await self.validate_receptionist_access(user_context)
+        hospital_id_uuid = self._hospital_uuid(user_context)
         
         # Build query for today's appointments
         today = date.today().isoformat()
@@ -1280,13 +1376,13 @@ class ClinicalService:
         
         query = select(Appointment).where(
             and_(
-                Appointment.hospital_id == user_context["hospital_id"],
+                Appointment.hospital_id == hospital_id_uuid,
                 Appointment.appointment_date == today
             )
         ).options(
-            selectinload(Appointment.patient),
+            selectinload(Appointment.patient).selectinload(PatientProfile.user),
             selectinload(Appointment.doctor),
-            selectinload(Appointment.department)
+            selectinload(Appointment.department),
         ).order_by(asc(Appointment.appointment_time))
         
         # Apply filters
@@ -1307,7 +1403,7 @@ class ClinicalService:
         # Get total count
         count_query = select(func.count(Appointment.id)).where(
             and_(
-                Appointment.hospital_id == user_context["hospital_id"],
+                Appointment.hospital_id == hospital_id_uuid,
                 Appointment.appointment_date == today
             )
         )
@@ -1353,16 +1449,17 @@ class ClinicalService:
         """Return one appointment by ref for the receptionist's hospital."""
         user_context = self.get_user_context(current_user)
         await self.validate_receptionist_access(user_context)
+        hospital_id_uuid = self._hospital_uuid(user_context)
         appointment_result = await self.db.execute(
             select(Appointment)
             .where(
                 and_(
                     Appointment.appointment_ref == appointment_ref,
-                    Appointment.hospital_id == user_context["hospital_id"],
+                    Appointment.hospital_id == hospital_id_uuid,
                 )
             )
             .options(
-                selectinload(Appointment.patient),
+                selectinload(Appointment.patient).selectinload(PatientProfile.user),
                 selectinload(Appointment.doctor),
                 selectinload(Appointment.department),
             )
@@ -1379,6 +1476,7 @@ class ClinicalService:
         """Modify existing OPD appointment"""
         user_context = self.get_user_context(current_user)
         await self.validate_receptionist_access(user_context)
+        hospital_id_uuid = self._hospital_uuid(user_context)
         
         # Get appointment
         appointment_result = await self.db.execute(
@@ -1386,13 +1484,13 @@ class ClinicalService:
             .where(
                 and_(
                     Appointment.appointment_ref == appointment_ref,
-                    Appointment.hospital_id == user_context["hospital_id"]
+                    Appointment.hospital_id == hospital_id_uuid,
                 )
             )
             .options(
-                selectinload(Appointment.patient),
+                selectinload(Appointment.patient).selectinload(PatientProfile.user),
                 selectinload(Appointment.doctor),
-                selectinload(Appointment.department)
+                selectinload(Appointment.department),
             )
         )
         
@@ -1416,7 +1514,7 @@ class ClinicalService:
             patient_result = await self.db.execute(
                 select(PatientProfile).where(
                     and_(
-                        PatientProfile.hospital_id == user_context["hospital_id"],
+                        PatientProfile.hospital_id == hospital_id_uuid,
                         PatientProfile.patient_id == p_ref,
                     )
                 )
@@ -1664,7 +1762,9 @@ class ClinicalService:
     async def get_opd_dashboard(self, current_user: User) -> Dict[str, Any]:
         """Get OPD dashboard with key metrics and information"""
         user_context = self.get_user_context(current_user)
-        receptionist = await self.get_receptionist_profile(user_context)
+        await self.validate_receptionist_access(user_context)
+        hospital_id_uuid = self._hospital_uuid(user_context)
+        dept_name, work_area = self._receptionist_ui_meta(current_user)
         
         today = date.today().isoformat()
         
@@ -1673,7 +1773,7 @@ class ClinicalService:
             select(func.count(Appointment.id))
             .where(
                 and_(
-                    Appointment.hospital_id == user_context["hospital_id"],
+                    Appointment.hospital_id == hospital_id_uuid,
                     Appointment.appointment_date == today
                 )
             )
@@ -1685,7 +1785,7 @@ class ClinicalService:
             select(func.count(Appointment.id))
             .where(
                 and_(
-                    Appointment.hospital_id == user_context["hospital_id"],
+                    Appointment.hospital_id == hospital_id_uuid,
                     Appointment.appointment_date == today,
                     Appointment.checked_in_at.isnot(None)
                 )
@@ -1698,7 +1798,7 @@ class ClinicalService:
             select(func.count(Appointment.id))
             .where(
                 and_(
-                    Appointment.hospital_id == user_context["hospital_id"],
+                    Appointment.hospital_id == hospital_id_uuid,
                     Appointment.appointment_date == today,
                     Appointment.checked_in_at.is_(None),
                     Appointment.status.in_([AppointmentStatus.CONFIRMED, AppointmentStatus.REQUESTED])
@@ -1713,7 +1813,7 @@ class ClinicalService:
             select(func.count(PatientProfile.id))
             .where(
                 and_(
-                    PatientProfile.hospital_id == user_context["hospital_id"],
+                    PatientProfile.hospital_id == hospital_id_uuid,
                     func.date(PatientProfile.created_at) == today_date
                 )
             )
@@ -1722,9 +1822,9 @@ class ClinicalService:
         
         return {
             "receptionist_name": f"{current_user.first_name} {current_user.last_name}",
-            "hospital_id": user_context["hospital_id"],
-            "department": receptionist.department.name,
-            "work_area": receptionist.work_area,
+            "hospital_id": str(hospital_id_uuid),
+            "department": dept_name,
+            "work_area": work_area,
             "dashboard_date": today,
             "statistics": {
                 "todays_appointments": todays_appointments,

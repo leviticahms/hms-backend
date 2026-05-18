@@ -1,6 +1,7 @@
 """
 Clinical operations schemas for OPD, IPD, and nursing management.
 """
+import re
 from typing import Optional, List, Dict, Any
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, EmailStr, field_validator, model_validator
 
@@ -105,6 +106,21 @@ class PatientRegistrationCreate(BaseModel):
         if bg == "OTHER" and not (self.blood_group_value or "").strip():
             raise ValueError("blood_group_value is required when blood_group is OTHER")
         return self
+
+    @field_validator("date_of_birth", mode="before")
+    @classmethod
+    def normalize_date_of_birth(cls, v: Any) -> Any:
+        """Accept YYYY-MM-DD or DD-MM-YYYY from UI date pickers."""
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return v
+        s = str(v).strip()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            return s
+        m = re.fullmatch(r"(\d{2})-(\d{2})-(\d{4})", s)
+        if m:
+            day, month, year = m.groups()
+            return f"{year}-{month}-{day}"
+        return s
 
     @field_validator("gender", mode="after")
     @classmethod
