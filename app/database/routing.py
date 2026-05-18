@@ -25,22 +25,26 @@ PLATFORM_ONLY_PREFIXES: tuple[str, ...] = (
     "/api/v1/auth/super-admin",
     "/api/v1/super-admin",
     "/api/v1/analytics",
-    # OPD appointment workflow lives in the platform DB because receptionist and patient
-    # booking create patients/appointments there for patient auth and shared doctor visibility.
-    "/api/v1/receptionist",
+    # OPD receptionist workflow (platform DB). Nested `/receptionist/departments/*` uses tenant DB.
+    "/api/v1/receptionist/profile",
+    "/api/v1/receptionist/dashboard",
+    "/api/v1/receptionist/quick-actions",
+    "/api/v1/receptionist/patients",
+    "/api/v1/receptionist/patient-documents",
+    "/api/v1/receptionist/appointments",
     # Subscription + plan flags live on the platform DB (`hospital_subscriptions`, `subscription_plans`).
     "/api/v1/hospital-admin/platform-settings",
     # Doctors / departments directory reads from tenant DB when `tenant_database_name` is set
     # (staff + DoctorProfile live there). Keep appointment slot math on platform below.
     "/api/v1/appointments/available-slots",
     "/api/v1/patient-appointment-booking",
-    "/api/v1/doctor-management",
+    # doctor-management schedules live on tenant DB (DoctorSchedule, DoctorProfile)
     "/api/v1/staff/doctor-schedules",
     "/api/v1/doctor-dashboard",
     "/api/v1/doctor-appointment-tracking",
     "/api/v1/doctor-patient-records",
     "/api/v1/doctor-treatment-plans",
-    "/api/v1/doctor-sidebar",
+    # doctor-sidebar uses tenant DB when configured (prescriptions, telemed notifications, IPD).
     "/api/v1/patient-discharge-summary",
 )
 

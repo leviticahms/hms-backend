@@ -278,6 +278,7 @@ async def register_patient(
 
 
 @router.patch("/patients/{patient_ref}", tags=[TAG_PATIENT_REGISTRATION])
+@router.put("/patients/{patient_ref}", tags=[TAG_PATIENT_REGISTRATION])
 async def patch_opd_patient(
     patient_ref: str,
     body: ReceptionistPatientPatch,
@@ -923,6 +924,7 @@ async def get_receptionist_profile(
 
 
 @router.patch("/profile", tags=[TAG_PROFILE])
+@router.put("/profile", tags=[TAG_PROFILE])
 async def update_receptionist_profile(
     body: ReceptionistProfileSelfUpdate,
     current_user: User = Depends(require_receptionist()),

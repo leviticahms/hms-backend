@@ -545,6 +545,44 @@ class DoctorService:
             "total_schedules": len(schedule_slots),
             "schedules": schedule_slots
         }
+
+    async def get_schedule_slot_by_id(self, schedule_id: str, current_user: User) -> Dict[str, Any]:
+        """Get one schedule slot by id for the current doctor."""
+        user_context = self.get_user_context(current_user)
+        doctor = await self.get_doctor_profile(user_context)
+        try:
+            sid = uuid.UUID(schedule_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid schedule_id",
+            )
+        schedule_result = await self.db.execute(
+            select(DoctorSchedule).where(
+                and_(
+                    DoctorSchedule.id == sid,
+                    DoctorSchedule.doctor_id == doctor.user_id,
+                )
+            )
+        )
+        schedule = schedule_result.scalar_one_or_none()
+        if not schedule:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Schedule slot not found",
+            )
+        return {
+            "schedule_id": str(schedule.id),
+            "date": self._schedule_date_from_row(schedule),
+            "day_of_week": schedule.day_of_week,
+            "start_time": schedule.start_time.strftime("%H:%M"),
+            "end_time": schedule.end_time.strftime("%H:%M"),
+            "slot_duration_minutes": schedule.slot_duration_minutes,
+            "is_active": schedule.is_active,
+            "effective_from": schedule.effective_from.isoformat() if schedule.effective_from else None,
+            "effective_to": schedule.effective_to.isoformat() if schedule.effective_to else None,
+            "notes": schedule.notes,
+        }
     
     async def create_schedule_slot(self, schedule_data: Dict[str, Any], current_user: User) -> Dict[str, Any]:
         """Create a new schedule slot for the doctor"""

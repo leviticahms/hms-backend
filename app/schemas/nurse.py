@@ -24,6 +24,24 @@ class NurseProfileUpsertRequest(BaseModel):
     is_active: bool = True
 
 
+class NurseProfileUpdateRequest(BaseModel):
+    """PATCH /nurse/profile — all fields optional."""
+    department_id: Optional[str] = None
+    nurse_id: Optional[str] = None
+    nursing_license_number: Optional[str] = None
+    designation: Optional[str] = None
+    specialization: Optional[str] = None
+    experience_years: Optional[int] = None
+    qualifications: Optional[List[str]] = None
+    certifications: Optional[List[str]] = None
+    shift_type: Optional[str] = None
+    employment_type: Optional[str] = None
+    clinical_skills: Optional[List[str]] = None
+    languages_spoken: Optional[List[str]] = None
+    bio: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
 class NurseDashboardResponse(BaseModel):
     profile: Dict[str, Any]
     stats: Dict[str, Any]
@@ -106,6 +124,19 @@ class NurseVitalsCreateRequest(BaseModel):
         return self
 
 
+class NurseVitalsUpdateRequest(BaseModel):
+    blood_pressure_systolic: Optional[int] = None
+    blood_pressure_diastolic: Optional[int] = None
+    pulse_rate: Optional[int] = None
+    temperature_f: Optional[float] = None
+    respiratory_rate: Optional[int] = None
+    oxygen_saturation: Optional[int] = None
+    weight: Optional[float] = None
+    height: Optional[float] = None
+    pain_scale: Optional[int] = None
+    notes: Optional[str] = None
+
+
 class NurseMedicationCreateRequest(BaseModel):
     admission_number: str
     medication_name: str
@@ -135,6 +166,38 @@ class NurseMedicationCreateRequest(BaseModel):
         return v
 
 
+class NurseMedicationUpdateRequest(BaseModel):
+    medication_name: Optional[str] = None
+    dose: Optional[str] = None
+    scheduled_time: Optional[str] = None
+    frequency: Optional[str] = None
+    start_date: Optional[str] = None
+    instructions: Optional[str] = None
+    status: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        allowed = {"PENDING", "GIVEN", "MISSED", "DELAYED"}
+        s = v.strip().upper()
+        if s not in allowed:
+            raise ValueError(f"status must be one of {sorted(allowed)}")
+        return s
+
+    @field_validator("scheduled_time")
+    @classmethod
+    def validate_scheduled_time(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        try:
+            datetime.strptime(v, "%H:%M")
+        except ValueError as e:
+            raise ValueError("scheduled_time must be in HH:MM format") from e
+        return v
+
+
 class NurseBedCreateRequest(BaseModel):
     ward_id: str
     bed_number: str
@@ -154,6 +217,24 @@ class NurseBedCreateRequest(BaseModel):
     settings: Dict[str, Any] = Field(default_factory=dict)
 
 
+class NurseBedUpdateRequest(BaseModel):
+    bed_number: Optional[str] = None
+    bed_code: Optional[str] = None
+    status: Optional[str] = None
+    bed_type: Optional[str] = None
+    floor: Optional[str] = None
+    room_number: Optional[str] = None
+    bed_position: Optional[str] = None
+    has_oxygen: Optional[bool] = None
+    has_suction: Optional[bool] = None
+    has_cardiac_monitor: Optional[bool] = None
+    has_ventilator: Optional[bool] = None
+    has_iv_pole: Optional[bool] = None
+    daily_rate: Optional[float] = None
+    notes: Optional[str] = None
+    settings: Optional[Dict[str, Any]] = None
+
+
 class NurseLabRequestCreateRequest(BaseModel):
     admission_number: str
     test_type: str
@@ -167,6 +248,25 @@ class NurseLabRequestCreateRequest(BaseModel):
     def validate_priority(cls, v: str) -> str:
         allowed = {"ROUTINE", "URGENT", "STAT"}
         s = (v or "").strip().upper()
+        if s not in allowed:
+            raise ValueError(f"priority must be one of {sorted(allowed)}")
+        return s
+
+
+class NurseLabRequestUpdateRequest(BaseModel):
+    test_type: Optional[str] = None
+    reason_for_test: Optional[str] = None
+    priority: Optional[str] = None
+    requesting_doctor: Optional[str] = None
+    notes: Optional[str] = None
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        allowed = {"ROUTINE", "URGENT", "STAT"}
+        s = v.strip().upper()
         if s not in allowed:
             raise ValueError(f"priority must be one of {sorted(allowed)}")
         return s
@@ -192,6 +292,26 @@ class NurseNoteCreateRequest(BaseModel):
         return s
 
 
+class NurseNoteUpdateRequest(BaseModel):
+    note_type: Optional[str] = None
+    observation_title: Optional[str] = None
+    details: Optional[str] = None
+    note_content: Optional[str] = None
+    priority: Optional[str] = None
+    follow_up_required: Optional[bool] = None
+
+    @field_validator("priority")
+    @classmethod
+    def validate_note_priority(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        allowed = {"LOW", "NORMAL", "HIGH", "URGENT"}
+        s = v.strip().upper()
+        if s not in allowed:
+            raise ValueError(f"priority must be one of {sorted(allowed)}")
+        return s
+
+
 class NurseDischargeCreateRequest(BaseModel):
     admission_number: Optional[str] = None
     patient_ref: Optional[str] = None
@@ -200,6 +320,21 @@ class NurseDischargeCreateRequest(BaseModel):
     procedures_performed: List[str] = Field(default_factory=list)
     hospital_course: Optional[str] = None
     medications_on_discharge: List[Dict[str, Any]] = Field(default_factory=list)
+    follow_up_instructions: Optional[str] = None
+    diet_instructions: Optional[str] = None
+    activity_restrictions: Optional[str] = None
+    follow_up_date: Optional[str] = None
+    follow_up_doctor: Optional[str] = None
+    condition_on_discharge: Optional[str] = None
+    discharge_notes: Optional[str] = None
+
+
+class NurseDischargeUpdateRequest(BaseModel):
+    final_diagnosis: Optional[str] = None
+    secondary_diagnoses: Optional[List[str]] = None
+    procedures_performed: Optional[List[str]] = None
+    hospital_course: Optional[str] = None
+    medications_on_discharge: Optional[List[Dict[str, Any]]] = None
     follow_up_instructions: Optional[str] = None
     diet_instructions: Optional[str] = None
     activity_restrictions: Optional[str] = None

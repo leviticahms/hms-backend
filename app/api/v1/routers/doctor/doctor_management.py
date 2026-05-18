@@ -88,6 +88,18 @@ async def get_schedule_slots(
     return success_response(message="Schedule slots retrieved successfully", data=result)
 
 
+@router.get("/schedule/{schedule_id}")
+async def get_schedule_slot_details(
+    schedule_id: str,
+    current_user: User = Depends(require_doctor()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Get a single schedule slot by id (for edit forms)."""
+    doctor_service = DoctorService(db)
+    result = await doctor_service.get_schedule_slot_by_id(schedule_id, current_user)
+    return success_response(message="Schedule slot retrieved successfully", data=result)
+
+
 @router.post("/schedule/create")
 async def create_schedule_slot(
     request: ScheduleCreate,

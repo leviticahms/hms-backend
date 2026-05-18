@@ -1057,6 +1057,7 @@ async def list_admissions(
 
 
 @router.patch("/admissions/{admission_id}/assign-bed", tags=["Hospital Admin - Admission Management"])
+@router.post("/admissions/{admission_id}/assign-bed", tags=["Hospital Admin - Admission Management"])
 async def assign_bed_to_admission(
     admission_id: str,
     bed_assignment: BedAssignmentCreate,
@@ -1091,6 +1092,7 @@ async def assign_bed_to_admission(
 
 
 @router.patch("/admissions/{admission_id}/discharge", tags=["Hospital Admin - Admission Management"])
+@router.post("/admissions/{admission_id}/discharge", tags=["Hospital Admin - Admission Management"])
 async def discharge_patient(
     admission_id: str,
     discharge_data: DischargeCreate,

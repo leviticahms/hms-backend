@@ -138,6 +138,52 @@ class ClinicalService:
         self.tenant_db = db
         self.security = SecurityManager()
 
+    async def _ensure_tenant_department_id(
+        self,
+        department: Any,
+        hospital_id: uuid.UUID,
+    ) -> uuid.UUID:
+        """
+        IPD admissions are stored on the tenant DB. Map doctor/nurse department
+        (which may reference a platform-only UUID) to a row in tenant ``departments``.
+        """
+        if department is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Doctor department is required to admit a patient.",
+            )
+        dep_id = getattr(department, "id", None)
+        dep_name = (getattr(department, "name", None) or "").strip()
+        if dep_id:
+            found = await self.db.execute(
+                select(Department.id).where(
+                    and_(Department.id == dep_id, Department.hospital_id == hospital_id)
+                )
+            )
+            if found.scalar_one_or_none():
+                return dep_id if isinstance(dep_id, uuid.UUID) else uuid.UUID(str(dep_id))
+        if dep_name:
+            by_name = await self.db.execute(
+                select(Department.id)
+                .where(
+                    and_(
+                        Department.hospital_id == hospital_id,
+                        func.lower(func.trim(Department.name)) == dep_name.lower(),
+                    )
+                )
+                .limit(1)
+            )
+            tid = by_name.scalar_one_or_none()
+            if tid:
+                return tid
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Department '{dep_name or dep_id}' is not provisioned in the hospital tenant database. "
+                "Create/sync the department under Hospital Admin, then retry admission."
+            ),
+        )
+
     async def _get_primary_staff_assignment(
         self,
         staff_id: Any,
@@ -1766,14 +1812,17 @@ class ClinicalService:
         
         # Generate admission number
         admission_number = f"ADM-{datetime.now().year}-{str(uuid.uuid4())[:8].upper()}"
-        
+
+        hid = uuid.UUID(str(user_context["hospital_id"]))
+        tenant_department_id = await self._ensure_tenant_department_id(doctor.department, hid)
+
         # Create admission record
         admission = Admission(
             id=uuid.uuid4(),
             hospital_id=user_context["hospital_id"],
             patient_id=patient.id,
             doctor_id=doctor.id,
-            department_id=doctor.department.id,
+            department_id=tenant_department_id,
             admission_number=admission_number,
             admission_type=admission_data["admission_type"],
             admission_date=datetime.now(timezone.utc),

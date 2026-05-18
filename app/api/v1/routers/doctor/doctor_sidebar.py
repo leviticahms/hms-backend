@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_doctor, require_hospital_context
-from app.core.database import get_db_session
+from app.core.database import get_db_session, get_platform_db_session
 from app.models.user import User
 from app.schemas.doctor_sidebar import (
     DoctorAppointmentOut,
@@ -205,11 +205,17 @@ async def sidebar_messages(
     user: User = Depends(require_doctor()),
     ctx: Dict = Depends(require_hospital_context),
     db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """Telemedicine notifications and prescription notifications for the current user."""
     hid = _hospital_uuid(ctx)
     return await sidebar_svc.list_messages_for_doctor(
-        db, user, hid, limit=limit, unread_only=unread_only
+        db,
+        user,
+        hid,
+        limit=limit,
+        unread_only=unread_only,
+        fallback_db=platform_db if platform_db is not db else None,
     )
 
 
@@ -239,11 +245,26 @@ async def sidebar_mark_message_read(
     user: User = Depends(require_doctor()),
     ctx: Dict = Depends(require_hospital_context),
     db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     hid = _hospital_uuid(ctx)
-    ok = await sidebar_svc.mark_message_read(db, user, hid, body.source, body.message_id)
+    ok = await sidebar_svc.mark_message_read(
+        db,
+        user,
+        hid,
+        body.source,
+        body.message_id,
+        fallback_db=platform_db if platform_db is not db else None,
+    )
     if not ok:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Message not found. Use the id and source from GET /doctor-sidebar/messages. "
+                "If the id came from GET /telemed/notifications/me, call PATCH "
+                "/api/v1/telemed/notifications/me/{id}/read instead."
+            ),
+        )
 
 
 @router.get(

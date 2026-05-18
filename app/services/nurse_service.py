@@ -3,12 +3,15 @@ Nurse module service (tenant-first reads + mirrored writes).
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Type
 
 from fastapi import HTTPException, status
+
+logger = logging.getLogger(__name__)
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -78,8 +81,89 @@ class NurseService:
         self.tenant_db = tenant_db
         self.platform_db = platform_db
 
-    async def _get_nurse_department(self, current_user: User) -> StaffDepartmentAssignment:
-        row = await self.tenant_db.execute(
+    @staticmethod
+    def _admission_load_options():
+        return (
+            selectinload(Admission.patient).selectinload(PatientProfile.user),
+            selectinload(Admission.doctor),
+            selectinload(Admission.department),
+        )
+
+    async def _patient_display_name(self, patient: Optional[PatientProfile]) -> Optional[str]:
+        if not patient:
+            return None
+        user = patient.user
+        if user is None and patient.user_id:
+            user = await self.platform_db.get(User, patient.user_id)
+            if user is None:
+                user = await self.tenant_db.get(User, patient.user_id)
+        if user:
+            name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+            if name:
+                return name
+        return patient.id_name or patient.patient_id
+
+    @staticmethod
+    def _doctor_display_name(doctor: Optional[User]) -> Optional[str]:
+        if not doctor:
+            return None
+        name = f"{doctor.first_name or ''} {doctor.last_name or ''}".strip()
+        return name or None
+
+    async def _format_admission_row(self, admission: Admission) -> Dict[str, Any]:
+        d = _serialize_model(admission)
+        d["patient_ref"] = admission.patient.patient_id if admission.patient else None
+        d["patient_name"] = await self._patient_display_name(admission.patient)
+        d["doctor_name"] = self._doctor_display_name(admission.doctor)
+        d["department_name"] = (
+            admission.department.name if getattr(admission, "department", None) else None
+        )
+        return d
+
+    async def _get_medical_record_for_nurse(
+        self,
+        record_id: uuid.UUID,
+        current_user: User,
+        *,
+        expected_complaints: Optional[List[str]] = None,
+    ) -> MedicalRecord:
+        rec = await self.tenant_db.get(MedicalRecord, record_id)
+        if not rec or rec.hospital_id != current_user.hospital_id:
+            raise HTTPException(status_code=404, detail="Record not found")
+        if expected_complaints and rec.chief_complaint not in expected_complaints:
+            raise HTTPException(status_code=404, detail="Record not found for this resource type")
+        adm_res = await self.tenant_db.execute(
+            select(Admission)
+            .where(
+                and_(
+                    Admission.patient_id == rec.patient_id,
+                    Admission.hospital_id == current_user.hospital_id,
+                )
+            )
+            .order_by(Admission.is_active.desc(), desc(Admission.created_at))
+            .limit(1)
+        )
+        admission = adm_res.scalars().first()
+        if not admission:
+            raise HTTPException(status_code=404, detail="No admission found for this patient")
+        dept_ids, dept_names, _ = await self._nurse_department_scope(current_user)
+        if not await self._nurse_can_access_admission(admission, current_user, dept_ids, dept_names):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this patient's department",
+            )
+        return rec
+
+    @staticmethod
+    def _norm_dept_name(name: Optional[str]) -> str:
+        return (name or "").strip().lower()
+
+    async def _load_staff_assignments(
+        self,
+        current_user: User,
+        session: AsyncSession,
+    ) -> List[StaffDepartmentAssignment]:
+        row = await session.execute(
             select(StaffDepartmentAssignment)
             .where(
                 and_(
@@ -88,41 +172,161 @@ class NurseService:
                     StaffDepartmentAssignment.is_active == True,
                 )
             )
-            .order_by(StaffDepartmentAssignment.is_primary.desc(), StaffDepartmentAssignment.created_at.desc())
+            .order_by(
+                StaffDepartmentAssignment.is_primary.desc(),
+                StaffDepartmentAssignment.created_at.desc(),
+            )
             .options(selectinload(StaffDepartmentAssignment.department))
         )
-        assignment = row.scalars().first()
-        if not assignment:
-            raise HTTPException(status_code=404, detail="Nurse department assignment not found")
-        return assignment
+        return list(row.scalars().all())
 
-    def _department_match_conditions(
+    async def _nurse_department_scope(
         self,
-        assignment: StaffDepartmentAssignment,
+        current_user: User,
+    ) -> tuple[List[uuid.UUID], List[str], Optional[StaffDepartmentAssignment]]:
+        """
+        Collect department ids/names for the nurse from tenant DB, then platform DB,
+        then NurseProfile — IPD data lives on tenant but admin UIs sometimes write platform only.
+        """
+        hid = current_user.hospital_id
+        dept_ids: List[uuid.UUID] = []
+        dept_names: List[str] = []
+        primary: Optional[StaffDepartmentAssignment] = None
+
+        def _add_dept(dep_id: Optional[uuid.UUID], dep_name: Optional[str]) -> None:
+            if dep_id and dep_id not in dept_ids:
+                dept_ids.append(dep_id)
+            norm = self._norm_dept_name(dep_name)
+            if norm and norm not in dept_names:
+                dept_names.append(norm)
+
+        for session in (self.tenant_db, self.platform_db):
+            try:
+                assignments = await self._load_staff_assignments(current_user, session)
+            except Exception as exc:
+                logger.warning("Nurse department assignment lookup failed: %s", exc)
+                assignments = []
+            for assignment in assignments:
+                if primary is None:
+                    primary = assignment
+                _add_dept(assignment.department_id, getattr(assignment.department, "name", None))
+
+        for session in (self.tenant_db, self.platform_db):
+            try:
+                np_row = await session.execute(
+                    select(NurseProfile)
+                    .where(
+                        and_(
+                            NurseProfile.user_id == current_user.id,
+                            NurseProfile.hospital_id == hid,
+                            NurseProfile.is_active == True,
+                        )
+                    )
+                    .options(selectinload(NurseProfile.department))
+                )
+                profile = np_row.scalar_one_or_none()
+            except Exception as exc:
+                logger.warning("Nurse profile department lookup failed: %s", exc)
+                profile = None
+            if profile:
+                _add_dept(profile.department_id, getattr(profile.department, "name", None))
+
+        if not dept_ids and not dept_names:
+            raise HTTPException(status_code=404, detail="Nurse department assignment not found")
+        return dept_ids, dept_names, primary
+
+    async def _get_nurse_department(self, current_user: User) -> StaffDepartmentAssignment:
+        _dept_ids, _dept_names, primary = await self._nurse_department_scope(current_user)
+        if primary is not None:
+            return primary
+        raise HTTPException(status_code=404, detail="Nurse department assignment not found")
+
+    async def _department_row(
+        self,
+        department_id: uuid.UUID,
         hospital_id: uuid.UUID,
-    ) -> list:
-        """Match admissions by department id or name (handles re-seeded department rows)."""
-        dept_match = [Admission.department_id == assignment.department_id]
-        dept_name = (
-            (getattr(getattr(assignment, "department", None), "name", None) or "")
-            .strip()
-            .lower()
-        )
-        if dept_name:
-            dept_match.append(
-                Admission.department_id.in_(
-                    select(Department.id).where(
+    ) -> Optional[Department]:
+        for session in (self.tenant_db, self.platform_db):
+            row = await session.execute(
+                select(Department).where(
+                    and_(
+                        Department.id == department_id,
                         Department.hospital_id == hospital_id,
-                        func.lower(func.trim(Department.name)) == dept_name,
                     )
                 )
             )
-        return dept_match
+            dept = row.scalar_one_or_none()
+            if dept:
+                return dept
+        return None
+
+    async def _department_ids_for_names(
+        self,
+        hospital_id: uuid.UUID,
+        names: List[str],
+    ) -> List[uuid.UUID]:
+        if not names:
+            return []
+        ids: List[uuid.UUID] = []
+        for session in (self.tenant_db, self.platform_db):
+            row = await session.execute(
+                select(Department.id).where(
+                    and_(
+                        Department.hospital_id == hospital_id,
+                        func.lower(func.trim(Department.name)).in_(names),
+                    )
+                )
+            )
+            for dep_id in row.scalars().all():
+                if dep_id not in ids:
+                    ids.append(dep_id)
+        return ids
+
+    def _admission_department_match_conditions(
+        self,
+        hospital_id: uuid.UUID,
+        dept_ids: List[uuid.UUID],
+        dept_names: List[str],
+    ) -> list:
+        """Match admissions when dept UUID or department name aligns (tenant + platform UUID drift)."""
+        conditions: list = []
+        if dept_ids:
+            conditions.append(Admission.department_id.in_(dept_ids))
+        if dept_names:
+            conditions.append(
+                Admission.department_id.in_(
+                    select(Department.id).where(
+                        Department.hospital_id == hospital_id,
+                        func.lower(func.trim(Department.name)).in_(dept_names),
+                    )
+                )
+            )
+        return conditions
+
+    async def _nurse_can_access_admission(
+        self,
+        admission: Admission,
+        current_user: User,
+        dept_ids: List[uuid.UUID],
+        dept_names: List[str],
+    ) -> bool:
+        hid = current_user.hospital_id
+        if admission.department_id in dept_ids:
+            return True
+        adm_dept = await self._department_row(admission.department_id, hid)
+        adm_name = self._norm_dept_name(adm_dept.name if adm_dept else None)
+        if adm_name and adm_name in dept_names:
+            return True
+        expanded_ids = await self._department_ids_for_names(hid, dept_names)
+        return admission.department_id in expanded_ids
 
     async def _resolve_admission(self, admission_number: str, current_user: User) -> Admission:
-        assignment = await self._get_nurse_department(current_user)
         hid = current_user.hospital_id
-        dept_match = self._department_match_conditions(assignment, hid)
+        dept_ids, dept_names, _primary = await self._nurse_department_scope(current_user)
+        dept_match = self._admission_department_match_conditions(hid, dept_ids, dept_names)
+        if not dept_match:
+            raise HTTPException(status_code=404, detail="Nurse department assignment not found")
+
         res = await self.tenant_db.execute(
             select(Admission)
             .where(
@@ -137,27 +341,37 @@ class NurseService:
             .limit(1)
         )
         admission = res.scalars().first()
-        if not admission:
-            other = await self.tenant_db.execute(
-                select(Admission)
-                .where(
-                    and_(
-                        Admission.admission_number == admission_number,
-                        Admission.hospital_id == hid,
-                    )
+        if admission:
+            return admission
+
+        other_res = await self.tenant_db.execute(
+            select(Admission)
+            .where(
+                and_(
+                    Admission.admission_number == admission_number,
+                    Admission.hospital_id == hid,
                 )
-                .limit(1)
             )
-            if other.scalars().first():
-                raise HTTPException(
-                    status_code=404,
-                    detail=(
-                        "Admission exists in this hospital but not in your department. "
-                        "Ask admin to align nurse department assignment with the admission ward/department."
-                    ),
-                )
-            raise HTTPException(status_code=404, detail="Admission not found in nurse department")
-        return admission
+            .options(selectinload(Admission.patient))
+            .order_by(desc(Admission.created_at))
+            .limit(1)
+        )
+        other = other_res.scalars().first()
+        if other and await self._nurse_can_access_admission(other, current_user, dept_ids, dept_names):
+            return other
+        if other:
+            adm_dept = await self._department_row(other.department_id, hid)
+            adm_label = adm_dept.name if adm_dept else str(other.department_id)
+            nurse_label = ", ".join(dept_names) if dept_names else ", ".join(str(x) for x in dept_ids)
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Admission is in department '{adm_label}' but your nurse assignment is "
+                    f"'{nurse_label}'. Re-save the nurse profile/assignment or admit the patient "
+                    f"under the same department."
+                ),
+            )
+        raise HTTPException(status_code=404, detail="Admission not found in nurse department")
 
     async def _mirror_upsert(self, model: Type[Any], model_id: uuid.UUID, values: Dict[str, Any]) -> None:
         # Enforce persistence in both DBs.
@@ -169,10 +383,30 @@ class NurseService:
             self.platform_db.add(model(**values))
         await self.platform_db.commit()
 
+    async def _mirror_staff_assignment(self, assignment: StaffDepartmentAssignment) -> None:
+        """Keep platform StaffDepartmentAssignment in sync when nurse profile is saved on tenant."""
+        if assignment is None:
+            return
+        existing = await self.platform_db.get(StaffDepartmentAssignment, assignment.id)
+        if existing:
+            for col in assignment.__table__.columns:
+                name = col.name
+                if name in ("created_at", "updated_at"):
+                    continue
+                setattr(existing, name, getattr(assignment, name))
+        else:
+            values = _model_values_raw(assignment)
+            values.pop("created_at", None)
+            values.pop("updated_at", None)
+            self.platform_db.add(StaffDepartmentAssignment(**values))
+        await self.platform_db.commit()
+
     async def _resolve_admission_by_patient_ref(self, patient_ref: str, current_user: User) -> Admission:
-        assignment = await self._get_nurse_department(current_user)
         hid = current_user.hospital_id
-        dept_match = self._department_match_conditions(assignment, hid)
+        dept_ids, dept_names, _primary = await self._nurse_department_scope(current_user)
+        dept_match = self._admission_department_match_conditions(hid, dept_ids, dept_names)
+        if not dept_match:
+            raise HTTPException(status_code=404, detail="Nurse department assignment not found")
         patient_row = await self.tenant_db.execute(
             select(PatientProfile).where(
                 and_(
@@ -257,6 +491,7 @@ class NurseService:
                 self.tenant_db.add(profile)
                 await self.tenant_db.commit()
 
+            await self._mirror_staff_assignment(assignment)
             await self.tenant_db.commit()
             await self._mirror_upsert(NurseProfile, profile.id, _model_values_raw(profile))
             return _serialize_model(profile)
@@ -281,20 +516,94 @@ class NurseService:
             bio=payload.get("bio"),
             is_active=payload.get("is_active", True),
         )
+        assignment = StaffDepartmentAssignment(
+            id=uuid.uuid4(),
+            hospital_id=current_user.hospital_id,
+            staff_id=current_user.id,
+            department_id=dep_id,
+            is_primary=True,
+            is_active=True,
+        )
         self.tenant_db.add(profile)
+        self.tenant_db.add(assignment)
         await self.tenant_db.commit()
+        await self._mirror_staff_assignment(assignment)
         await self._mirror_upsert(NurseProfile, profile_id, _model_values_raw(profile))
         return _serialize_model(profile)
 
+    async def patch_profile(self, payload: Dict[str, Any], current_user: User) -> Dict[str, Any]:
+        if not payload:
+            return await self.get_profile(current_user)
+        q = await self.tenant_db.execute(
+            select(NurseProfile).where(
+                and_(NurseProfile.user_id == current_user.id, NurseProfile.hospital_id == current_user.hospital_id)
+            )
+        )
+        profile = q.scalar_one_or_none()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Nurse profile not found. Create profile first.")
+        if payload.get("department_id") is not None:
+            dep_id = _require_uuid(payload["department_id"], "department_id")
+            profile.department_id = dep_id
+            assignment_q = await self.tenant_db.execute(
+                select(StaffDepartmentAssignment).where(
+                    and_(
+                        StaffDepartmentAssignment.staff_id == current_user.id,
+                        StaffDepartmentAssignment.hospital_id == current_user.hospital_id,
+                    )
+                )
+            )
+            assignment = assignment_q.scalars().first()
+            if assignment:
+                assignment.department_id = dep_id
+                assignment.is_active = True
+            else:
+                assignment = StaffDepartmentAssignment(
+                    id=uuid.uuid4(),
+                    hospital_id=current_user.hospital_id,
+                    staff_id=current_user.id,
+                    department_id=dep_id,
+                    is_primary=True,
+                    is_active=True,
+                )
+                self.tenant_db.add(assignment)
+            await self._mirror_staff_assignment(assignment)
+        scalar_fields = (
+            "nurse_id",
+            "nursing_license_number",
+            "designation",
+            "specialization",
+            "experience_years",
+            "shift_type",
+            "employment_type",
+            "bio",
+            "is_active",
+        )
+        list_fields = ("qualifications", "certifications", "clinical_skills", "languages_spoken")
+        for key in scalar_fields:
+            if key in payload and payload[key] is not None:
+                setattr(profile, key, payload[key])
+        for key in list_fields:
+            if key in payload and payload[key] is not None:
+                setattr(profile, key, payload[key])
+        await self.tenant_db.commit()
+        await self.tenant_db.refresh(profile)
+        await self._mirror_upsert(NurseProfile, profile.id, _model_values_raw(profile))
+        return await self.get_profile(current_user)
+
     async def get_dashboard(self, current_user: User) -> Dict[str, Any]:
-        assignment = await self._get_nurse_department(current_user)
+        hid = current_user.hospital_id
+        dept_ids, dept_names, _primary = await self._nurse_department_scope(current_user)
+        dept_match = self._admission_department_match_conditions(hid, dept_ids, dept_names)
+        admission_filters = [
+            Admission.hospital_id == hid,
+            Admission.is_active == True,
+        ]
+        if dept_match:
+            admission_filters.append(or_(*dept_match))
         admissions_res = await self.tenant_db.execute(
             select(Admission.patient_id, Admission.discharge_summary_id).where(
-                and_(
-                    Admission.hospital_id == current_user.hospital_id,
-                    Admission.department_id == assignment.department_id,
-                    Admission.is_active == True,
-                )
+                and_(*admission_filters)
             )
         )
         active_admissions = admissions_res.all()
@@ -390,30 +699,26 @@ class NurseService:
         return False
 
     async def list_assigned_patients(self, current_user: User) -> List[Dict[str, Any]]:
-        assignment = await self._get_nurse_department(current_user)
+        hid = current_user.hospital_id
+        dept_ids, dept_names, _primary = await self._nurse_department_scope(current_user)
+        dept_match = self._admission_department_match_conditions(hid, dept_ids, dept_names)
+        if not dept_match:
+            return []
         res = await self.tenant_db.execute(
             select(Admission)
             .where(
                 and_(
-                    Admission.hospital_id == current_user.hospital_id,
-                    Admission.department_id == assignment.department_id,
+                    Admission.hospital_id == hid,
+                    or_(*dept_match),
                     Admission.is_active == True,
                 )
             )
-            .options(selectinload(Admission.patient),selectinload(Admission.doctor))
+            .options(*self._admission_load_options())
             .order_by(desc(Admission.created_at))
         )
         rows = []
-        for a in res.scalars().all():
-            d = _serialize_model(a)
-            d["patient_name"] = (
-                a.patient.patient_id
-                if a.patient and a.patient.user
-                else None
-            )
-            d["patient_ref"] = a.patient.patient_id if a.patient else None
-            d["doctor_name"] = f"{a.doctor.first_name} {a.doctor.last_name}".strip() if a.doctor else None
-            rows.append(d)
+        for admission in res.scalars().all():
+            rows.append(await self._format_admission_row(admission))
         return rows
 
     async def create_vitals(self, payload: Dict[str, Any], current_user: User) -> Dict[str, Any]:
@@ -617,7 +922,7 @@ class NurseService:
         )
         self.tenant_db.add(rec)
         await self.tenant_db.commit()
-        await self._mirror_upsert(rec_id, _model_values_raw(rec))
+        await self._mirror_upsert(MedicalRecord, rec_id, _model_values_raw(rec))
         return _serialize_model(rec)
 
     async def create_note(self, payload: Dict[str, Any], current_user: User) -> Dict[str, Any]:
@@ -655,7 +960,7 @@ class NurseService:
         )
         self.tenant_db.add(rec)
         await self.tenant_db.commit()
-        await self._mirror_upsert(rec_id, _model_values_raw(rec))
+        await self._mirror_upsert(MedicalRecord, rec_id, _model_values_raw(rec))
         return _serialize_model(rec)
 
     async def list_notes(self, admission_number: str, current_user: User) -> List[Dict[str, Any]]:
@@ -713,35 +1018,231 @@ class NurseService:
         admission.discharge_date = now
         admission.is_active = False
         await self.tenant_db.commit()
-        await self._mirror_upsert(ds_id, _model_values_raw(summary))
-        await self._mirror_upsert(admission.id, _model_values_raw(admission))
+        await self._mirror_upsert(DischargeSummary, ds_id, _model_values_raw(summary))
+        await self._mirror_upsert(Admission, admission.id, _model_values_raw(admission))
         return _serialize_model(summary)
 
     async def list_discharge_support(self, current_user: User) -> List[Dict[str, Any]]:
-        assignment = await self._get_nurse_department(current_user)
+        hid = current_user.hospital_id
+        dept_ids, dept_names, _primary = await self._nurse_department_scope(current_user)
+        dept_match = self._admission_department_match_conditions(hid, dept_ids, dept_names)
+        if not dept_match:
+            return []
         res = await self.tenant_db.execute(
             select(Admission)
             .where(
                 and_(
-                    Admission.hospital_id == current_user.hospital_id,
-                    Admission.department_id == assignment.department_id,
+                    Admission.hospital_id == hid,
+                    or_(*dept_match),
                     Admission.is_active == True,
                 )
             )
-            .options(selectinload(Admission.patient), selectinload(Admission.doctor))
+            .options(*self._admission_load_options())
+            .order_by(desc(Admission.created_at))
         )
         rows: List[Dict[str, Any]] = []
-        for a in res.scalars().all():
-            d = _serialize_model(a)
-            d["patient_ref"] = a.patient.patient_id if a.patient else None
-            d["patient_name"] = (
-                f"{a.patient.user.first_name} {a.patient.user.last_name}".strip()
-                if a.patient and a.patient.user
-                else None
-            )
-            d["doctor_name"] = f"{a.doctor.first_name} {a.doctor.last_name}".strip() if a.doctor else None
-            rows.append(d)
+        for admission in res.scalars().all():
+            rows.append(await self._format_admission_row(admission))
         return rows
+
+    async def update_vitals(
+        self,
+        record_id: uuid.UUID,
+        payload: Dict[str, Any],
+        current_user: User,
+    ) -> Dict[str, Any]:
+        rec = await self._get_medical_record_for_nurse(
+            record_id, current_user, expected_complaints=["NURSE_VITALS_UPDATE"]
+        )
+        vital_signs = dict(rec.vital_signs or {})
+        for key in (
+            "blood_pressure_systolic",
+            "blood_pressure_diastolic",
+            "pulse_rate",
+            "temperature_f",
+            "respiratory_rate",
+            "oxygen_saturation",
+            "weight",
+            "height",
+            "pain_scale",
+            "notes",
+        ):
+            if key in payload and payload[key] is not None:
+                vital_signs[key] = payload[key]
+        vital_signs["recorded_by"] = str(current_user.id)
+        vital_signs["recorded_at"] = datetime.now(timezone.utc).isoformat()
+        vital_signs["alert_flags"] = {
+            "critical": self._is_critical_vitals(vital_signs),
+            "reasons": [
+                reason
+                for reason, cond in [
+                    ("HIGH_FEVER", isinstance(vital_signs.get("temperature_f"), (int, float)) and vital_signs.get("temperature_f") >= 102),
+                    ("LOW_OXYGEN", isinstance(vital_signs.get("oxygen_saturation"), (int, float)) and vital_signs.get("oxygen_saturation") < 92),
+                    ("HIGH_BP", (
+                        isinstance(vital_signs.get("blood_pressure_systolic"), (int, float)) and vital_signs.get("blood_pressure_systolic") >= 180
+                    ) or (
+                        isinstance(vital_signs.get("blood_pressure_diastolic"), (int, float)) and vital_signs.get("blood_pressure_diastolic") >= 120
+                    )),
+                ]
+                if cond
+            ],
+        }
+        rec.vital_signs = vital_signs
+        await self.tenant_db.commit()
+        await self.tenant_db.refresh(rec)
+        return _serialize_model(rec)
+
+    async def update_medication(
+        self,
+        record_id: uuid.UUID,
+        payload: Dict[str, Any],
+        current_user: User,
+    ) -> Dict[str, Any]:
+        rec = await self._get_medical_record_for_nurse(
+            record_id, current_user, expected_complaints=["NURSE_MEDICATION_ENTRY"]
+        )
+        meds = _json_items(rec.prescriptions)
+        if not meds:
+            raise HTTPException(status_code=404, detail="No medication entry on this record")
+        med = dict(meds[0])
+        for key in (
+            "medication_name",
+            "dose",
+            "scheduled_time",
+            "frequency",
+            "start_date",
+            "instructions",
+            "status",
+        ):
+            if key in payload and payload[key] is not None:
+                med[key] = payload[key]
+        med["updated_by"] = str(current_user.id)
+        med["updated_at"] = datetime.now(timezone.utc).isoformat()
+        rec.prescriptions = [med]
+        await self.tenant_db.commit()
+        await self.tenant_db.refresh(rec)
+        return _serialize_model(rec)
+
+    async def update_bed(
+        self,
+        bed_id: uuid.UUID,
+        payload: Dict[str, Any],
+        current_user: User,
+    ) -> Dict[str, Any]:
+        bed = await self.tenant_db.get(Bed, bed_id)
+        if not bed or bed.hospital_id != current_user.hospital_id:
+            raise HTTPException(status_code=404, detail="Bed not found")
+        for key in (
+            "bed_number",
+            "bed_code",
+            "status",
+            "bed_type",
+            "floor",
+            "room_number",
+            "bed_position",
+            "has_oxygen",
+            "has_suction",
+            "has_cardiac_monitor",
+            "has_ventilator",
+            "has_iv_pole",
+            "daily_rate",
+            "notes",
+            "settings",
+        ):
+            if key in payload and payload[key] is not None:
+                setattr(bed, key, payload[key])
+        await self.tenant_db.commit()
+        await self.tenant_db.refresh(bed)
+        await self._mirror_upsert(Bed, bed.id, _model_values_raw(bed))
+        d = _serialize_model(bed)
+        ward_res = await self.tenant_db.execute(select(Ward).where(Ward.id == bed.ward_id))
+        ward = ward_res.scalar_one_or_none()
+        d["ward_name"] = ward.name if ward else None
+        return d
+
+    async def update_lab_request(
+        self,
+        record_id: uuid.UUID,
+        payload: Dict[str, Any],
+        current_user: User,
+    ) -> Dict[str, Any]:
+        rec = await self._get_medical_record_for_nurse(
+            record_id, current_user, expected_complaints=["NURSE_LAB_REQUEST"]
+        )
+        orders = _json_items(rec.lab_orders)
+        if not orders:
+            raise HTTPException(status_code=404, detail="No lab request on this record")
+        order = dict(orders[0])
+        for key in ("test_type", "reason_for_test", "priority", "requesting_doctor", "notes"):
+            if key in payload and payload[key] is not None:
+                order[key] = payload[key]
+        order["updated_by"] = str(current_user.id)
+        order["updated_at"] = datetime.now(timezone.utc).isoformat()
+        rec.lab_orders = [order]
+        await self.tenant_db.commit()
+        await self.tenant_db.refresh(rec)
+        return _serialize_model(rec)
+
+    async def update_note(
+        self,
+        record_id: uuid.UUID,
+        payload: Dict[str, Any],
+        current_user: User,
+    ) -> Dict[str, Any]:
+        rec = await self._get_medical_record_for_nurse(
+            record_id, current_user, expected_complaints=["NURSE_NOTE"]
+        )
+        note_block = dict((rec.vital_signs or {}).get("nursing_note") or {})
+        for key in ("note_type", "observation_title", "details", "priority", "follow_up_required"):
+            if key in payload and payload[key] is not None:
+                note_block[key] = payload[key]
+        if payload.get("note_content") is not None:
+            note_block["note_content"] = payload["note_content"]
+            rec.history_of_present_illness = payload["note_content"]
+        elif payload.get("details") is not None:
+            note_block["note_content"] = payload["details"]
+            rec.history_of_present_illness = payload["details"]
+        note_block["updated_by"] = str(current_user.id)
+        note_block["updated_at"] = datetime.now(timezone.utc).isoformat()
+        vs = dict(rec.vital_signs or {})
+        vs["nursing_note"] = note_block
+        rec.vital_signs = vs
+        await self.tenant_db.commit()
+        await self.tenant_db.refresh(rec)
+        return _serialize_model(rec)
+
+    async def update_discharge_summary(
+        self,
+        admission_number: str,
+        payload: Dict[str, Any],
+        current_user: User,
+    ) -> Dict[str, Any]:
+        admission = await self._resolve_admission(admission_number, current_user)
+        if not admission.discharge_summary_id:
+            raise HTTPException(status_code=404, detail="Discharge summary not found")
+        summary = await self.tenant_db.get(DischargeSummary, admission.discharge_summary_id)
+        if not summary:
+            raise HTTPException(status_code=404, detail="Discharge summary not found")
+        for key in (
+            "final_diagnosis",
+            "secondary_diagnoses",
+            "procedures_performed",
+            "hospital_course",
+            "medications_on_discharge",
+            "follow_up_instructions",
+            "diet_instructions",
+            "activity_restrictions",
+            "follow_up_date",
+            "follow_up_doctor",
+            "condition_on_discharge",
+            "discharge_notes",
+        ):
+            if key in payload and payload[key] is not None:
+                setattr(summary, key, payload[key])
+        await self.tenant_db.commit()
+        await self.tenant_db.refresh(summary)
+        await self._mirror_upsert(DischargeSummary, summary.id, _model_values_raw(summary))
+        return _serialize_model(summary)
 
     async def get_discharge_summary(self, admission_number: str, current_user: User) -> Dict[str, Any]:
         admission = await self._resolve_admission(admission_number, current_user)

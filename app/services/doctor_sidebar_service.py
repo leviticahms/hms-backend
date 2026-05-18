@@ -433,12 +433,12 @@ def _dt_iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
 
 
-async def list_messages_for_doctor(
+async def _list_messages_from_db(
     db: AsyncSession,
     user: User,
     hospital_id: uuid.UUID,
-    limit: int = 100,
-    unread_only: bool = False,
+    limit: int,
+    unread_only: bool,
 ) -> List[DoctorMessageOut]:
     tq = select(TelemedNotification).where(
         TelemedNotification.hospital_id == hospital_id,
@@ -500,14 +500,38 @@ async def list_messages_for_doctor(
     return [m[2] for m in merged[:limit]]
 
 
-async def mark_message_read(
+async def list_messages_for_doctor(
+    db: AsyncSession,
+    user: User,
+    hospital_id: uuid.UUID,
+    limit: int = 100,
+    unread_only: bool = False,
+    *,
+    fallback_db: Optional[AsyncSession] = None,
+) -> List[DoctorMessageOut]:
+    """Merge inbox from routed DB and optional platform DB (legacy split notifications)."""
+    seen: set[str] = set()
+    merged: List[DoctorMessageOut] = []
+    for session in (db, fallback_db):
+        if session is None:
+            continue
+        for item in await _list_messages_from_db(session, user, hospital_id, limit, unread_only):
+            if item.id in seen:
+                continue
+            seen.add(item.id)
+            merged.append(item)
+    merged.sort(key=lambda m: m.created_at, reverse=True)
+    return merged[:limit]
+
+
+async def _mark_message_read_in_db(
     db: AsyncSession,
     user: User,
     hospital_id: uuid.UUID,
     source: str,
     message_id: uuid.UUID,
+    now: datetime,
 ) -> bool:
-    now = datetime.now(timezone.utc)
     if source == "telemed":
         r = await db.execute(
             select(TelemedNotification).where(
@@ -538,6 +562,31 @@ async def mark_message_read(
         n.read_at = now
         await db.commit()
         return True
+    return False
+
+
+async def mark_message_read(
+    db: AsyncSession,
+    user: User,
+    hospital_id: uuid.UUID,
+    source: str,
+    message_id: uuid.UUID,
+    *,
+    fallback_db: Optional[AsyncSession] = None,
+) -> bool:
+    """
+    Mark inbox message read. Tries requested source first, then the other table
+    (clients sometimes send the wrong source). Optionally retries on fallback_db
+    when notifications were created on platform vs tenant DB during migration.
+    """
+    now = datetime.now(timezone.utc)
+    sources = ("telemed", "prescription") if source == "telemed" else ("prescription", "telemed")
+    for session in (db, fallback_db):
+        if session is None:
+            continue
+        for src in sources:
+            if await _mark_message_read_in_db(session, user, hospital_id, src, message_id, now):
+                return True
     return False
 
 
