@@ -236,12 +236,19 @@ class NurseService:
         dept_names: List[str] = []
         primary: Optional[StaffDepartmentAssignment] = None
 
-        def _add_dept(dep_id: Optional[uuid.UUID], dep_name: Optional[str]) -> None:
+        def _add_dept(
+            dep_id: Optional[uuid.UUID],
+            dep_name: Optional[str],
+            dep_code: Optional[str] = None,
+        ) -> None:
             if dep_id and dep_id not in dept_ids:
                 dept_ids.append(dep_id)
             norm = self._norm_dept_name(dep_name)
             if norm and norm not in dept_names:
                 dept_names.append(norm)
+            code_norm = self._norm_dept_name(dep_code)
+            if code_norm and code_norm not in dept_names:
+                dept_names.append(code_norm)
 
         for session in (self.tenant_db, self.platform_db):
             try:
@@ -252,7 +259,11 @@ class NurseService:
             for assignment in assignments:
                 if primary is None:
                     primary = assignment
-                _add_dept(assignment.department_id, getattr(assignment.department, "name", None))
+                _add_dept(
+                    assignment.department_id,
+                    getattr(assignment.department, "name", None),
+                    getattr(assignment.department, "code", None),
+                )
 
         for session in (self.tenant_db, self.platform_db):
             try:
@@ -266,13 +277,19 @@ class NurseService:
                         )
                     )
                     .options(selectinload(NurseProfile.department))
+                    .order_by(desc(NurseProfile.created_at))
+                    .limit(1)
                 )
-                profile = np_row.scalar_one_or_none()
+                profile = np_row.scalars().first()
             except Exception as exc:
                 logger.warning("Nurse profile department lookup failed: %s", exc)
                 profile = None
             if profile:
-                _add_dept(profile.department_id, getattr(profile.department, "name", None))
+                _add_dept(
+                    profile.department_id,
+                    getattr(profile.department, "name", None),
+                    getattr(profile.department, "code", None),
+                )
 
         if not dept_ids and not dept_names:
             raise HTTPException(status_code=404, detail="Nurse department assignment not found")
@@ -340,7 +357,10 @@ class NurseService:
                 Admission.department_id.in_(
                     select(Department.id).where(
                         Department.hospital_id == hospital_id,
-                        func.lower(func.trim(Department.name)).in_(dept_names),
+                        or_(
+                            func.lower(func.trim(Department.name)).in_(dept_names),
+                            func.lower(func.trim(Department.code)).in_(dept_names),
+                        ),
                     )
                 )
             )
@@ -416,10 +436,56 @@ class NurseService:
             )
         raise HTTPException(status_code=404, detail="Admission not found in nurse department")
 
+    async def _ensure_ward_in_session(
+        self,
+        target: AsyncSession,
+        ward_id: uuid.UUID,
+        hospital_id: uuid.UUID,
+    ) -> Ward:
+        """Ensure ward row exists in target DB (copy from the other DB when split)."""
+        existing = await target.get(Ward, ward_id)
+        if existing:
+            if existing.hospital_id != hospital_id:
+                raise HTTPException(status_code=404, detail="Ward not found for this hospital")
+            return existing
+
+        source_ward: Optional[Ward] = None
+        for session in self._opd_db_sessions():
+            if session is target:
+                continue
+            candidate = await session.get(Ward, ward_id)
+            if candidate and candidate.hospital_id == hospital_id:
+                source_ward = candidate
+                break
+
+        if source_ward is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Ward not found. Create the ward in Hospital Admin first.",
+            )
+
+        col_names = {c.name for c in Ward.__table__.columns}
+        filtered = {k: v for k, v in _model_values_raw(source_ward).items() if k in col_names}
+        filtered["id"] = ward_id
+        target.add(Ward(**filtered))
+        await target.flush()
+        return await target.get(Ward, ward_id)
+
     async def _mirror_upsert(self, model: Type[Any], model_id: uuid.UUID, values: Dict[str, Any]) -> None:
         """Mirror tenant writes to platform DB when they use separate databases."""
         if self.platform_db is self.tenant_db:
             return
+        if model is Bed:
+            ward_id = values.get("ward_id")
+            hospital_id = values.get("hospital_id")
+            if ward_id is not None and hospital_id is not None:
+                await self._ensure_ward_in_session(
+                    self.platform_db,
+                    ward_id if isinstance(ward_id, uuid.UUID) else uuid.UUID(str(ward_id)),
+                    hospital_id
+                    if isinstance(hospital_id, uuid.UUID)
+                    else uuid.UUID(str(hospital_id)),
+                )
         col_names = {c.name for c in model.__table__.columns}
         filtered = {k: v for k, v in values.items() if k in col_names}
         filtered["id"] = model_id
@@ -645,20 +711,12 @@ class NurseService:
 
     async def get_dashboard(self, current_user: User) -> Dict[str, Any]:
         hid = current_user.hospital_id
-        dept_ids, dept_names, _primary = await self._nurse_department_scope(current_user)
-        dept_match = self._admission_department_match_conditions(hid, dept_ids, dept_names)
-        admission_filters = [
-            Admission.hospital_id == hid,
-            Admission.is_active == True,
-        ]
-        if dept_match:
-            admission_filters.append(or_(*dept_match))
-        admissions_res = await self.tenant_db.execute(
-            select(Admission.patient_id, Admission.discharge_summary_id).where(
-                and_(*admission_filters)
-            )
+        active_admissions_rows = await self._list_admissions_for_nurse(
+            current_user, active_only=True
         )
-        active_admissions = admissions_res.all()
+        active_admissions = [
+            (row.patient_id, row.discharge_summary_id) for row in active_admissions_rows
+        ]
         patient_ids = [row.patient_id for row in active_admissions]
         active_count = len(active_admissions)
         discharge_preparations = sum(1 for row in active_admissions if row.discharge_summary_id is None)
@@ -750,26 +808,54 @@ class NurseService:
             return True
         return False
 
-    async def list_assigned_patients(self, current_user: User) -> List[Dict[str, Any]]:
+    async def _list_admissions_for_nurse(
+        self,
+        current_user: User,
+        *,
+        active_only: bool = True,
+    ) -> List[Admission]:
+        """Load IPD admissions from tenant + platform DB (deduped) for nurse department scope."""
         hid = current_user.hospital_id
         dept_ids, dept_names, _primary = await self._nurse_department_scope(current_user)
         dept_match = self._admission_department_match_conditions(hid, dept_ids, dept_names)
         if not dept_match:
             return []
-        res = await self.tenant_db.execute(
-            select(Admission)
-            .where(
-                and_(
-                    Admission.hospital_id == hid,
-                    or_(*dept_match),
-                    Admission.is_active == True,
-                )
+
+        filters = [Admission.hospital_id == hid, or_(*dept_match)]
+        if active_only:
+            filters.append(Admission.is_active == True)
+
+        seen: set[uuid.UUID] = set()
+        admissions: List[Admission] = []
+        for session in self._opd_db_sessions():
+            res = await session.execute(
+                select(Admission)
+                .where(and_(*filters))
+                .options(*self._admission_load_options())
+                .order_by(desc(Admission.created_at))
             )
-            .options(*self._admission_load_options())
-            .order_by(desc(Admission.created_at))
-        )
+            for admission in res.scalars().all():
+                if admission.id in seen:
+                    continue
+                seen.add(admission.id)
+                admissions.append(admission)
+        return admissions
+
+    def _opd_db_sessions(self) -> List[AsyncSession]:
+        seen: set[int] = set()
+        out: List[AsyncSession] = []
+        for sess in (self.tenant_db, self.platform_db):
+            key = id(sess)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(sess)
+        return out
+
+    async def list_assigned_patients(self, current_user: User) -> List[Dict[str, Any]]:
+        admissions = await self._list_admissions_for_nurse(current_user, active_only=True)
         rows = []
-        for admission in res.scalars().all():
+        for admission in admissions:
             rows.append(await self._format_admission_row(admission))
         return rows
 
@@ -889,25 +975,40 @@ class NurseService:
         return out
 
     async def list_beds(self, current_user: User, ward_id: Optional[str], status_filter: Optional[str]) -> List[Dict[str, Any]]:
-        query = select(Bed).where(Bed.hospital_id == current_user.hospital_id).options(selectinload(Bed.ward))
+        ward_uuid: Optional[uuid.UUID] = None
         if ward_id is not None and str(ward_id).strip() != "":
-            query = query.where(Bed.ward_id == _require_uuid(ward_id, "ward_id"))
-        if status_filter:
-            query = query.where(Bed.status == status_filter)
-        res = await self.tenant_db.execute(query.order_by(Bed.bed_number))
-        rows = []
-        for b in res.scalars().all():
-            d = _serialize_model(b)
-            d["ward_name"] = b.ward.name if b.ward else None
-            rows.append(d)
+            ward_uuid = _require_uuid(ward_id, "ward_id")
+
+        seen: set[uuid.UUID] = set()
+        rows: List[Dict[str, Any]] = []
+        for session in self._opd_db_sessions():
+            query = (
+                select(Bed)
+                .where(Bed.hospital_id == current_user.hospital_id)
+                .options(selectinload(Bed.ward))
+            )
+            if ward_uuid is not None:
+                query = query.where(Bed.ward_id == ward_uuid)
+            if status_filter:
+                query = query.where(Bed.status == status_filter)
+            res = await session.execute(query.order_by(Bed.bed_number))
+            for b in res.scalars().all():
+                if b.id in seen:
+                    continue
+                seen.add(b.id)
+                d = _serialize_model(b)
+                d["ward_name"] = b.ward.name if b.ward else None
+                rows.append(d)
         return rows
 
     async def create_bed(self, payload: Dict[str, Any], current_user: User) -> Dict[str, Any]:
+        ward_id = _require_uuid(payload.get("ward_id"), "ward_id")
+        await self._ensure_ward_in_session(self.tenant_db, ward_id, current_user.hospital_id)
         bed_id = uuid.uuid4()
         bed = Bed(
             id=bed_id,
             hospital_id=current_user.hospital_id,
-            ward_id=_require_uuid(payload.get("ward_id"), "ward_id"),
+            ward_id=ward_id,
             bed_number=payload["bed_number"],
             bed_code=payload["bed_code"],
             status=payload.get("status", "AVAILABLE"),
@@ -1078,25 +1179,9 @@ class NurseService:
         return _serialize_model(summary)
 
     async def list_discharge_support(self, current_user: User) -> List[Dict[str, Any]]:
-        hid = current_user.hospital_id
-        dept_ids, dept_names, _primary = await self._nurse_department_scope(current_user)
-        dept_match = self._admission_department_match_conditions(hid, dept_ids, dept_names)
-        if not dept_match:
-            return []
-        res = await self.tenant_db.execute(
-            select(Admission)
-            .where(
-                and_(
-                    Admission.hospital_id == hid,
-                    or_(*dept_match),
-                    Admission.is_active == True,
-                )
-            )
-            .options(*self._admission_load_options())
-            .order_by(desc(Admission.created_at))
-        )
+        admissions = await self._list_admissions_for_nurse(current_user, active_only=True)
         rows: List[Dict[str, Any]] = []
-        for admission in res.scalars().all():
+        for admission in admissions:
             rows.append(await self._format_admission_row(admission))
         return rows
 

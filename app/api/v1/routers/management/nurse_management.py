@@ -85,11 +85,20 @@ async def patch_nurse_profile(
 
 @router.get("/assigned-patients")
 async def assigned_patients(
+    include_inactive: bool = Query(
+        False,
+        description="If true, include discharged/inactive admissions for the nurse's department(s).",
+    ),
     current_user: User = Depends(require_nurse()),
     tenant_db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
-    data = await _svc(tenant_db, platform_db).list_assigned_patients(current_user)
+    svc = _svc(tenant_db, platform_db)
+    if include_inactive:
+        admissions = await svc._list_admissions_for_nurse(current_user, active_only=False)
+        data = [await svc._format_admission_row(a) for a in admissions]
+    else:
+        data = await svc.list_assigned_patients(current_user)
     return success_response(message="Assigned patients fetched successfully", data=data)
 
 
