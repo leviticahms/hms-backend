@@ -12,13 +12,19 @@ BUSINESS RULES:
 - Evidence-based treatment protocols
 """
 import uuid
-from typing import Any, List, Optional, Dict, Union
+from typing import Any, List, Optional, Dict, Union, Tuple
 from datetime import datetime, timedelta, date, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc, func, asc, text
 from sqlalchemy.orm import selectinload, joinedload
 from app.core.database import get_db_session, get_platform_db_session
+from app.services.patient_resolve import (
+    clinical_db_sessions as _clinical_db_sessions,
+    load_patient_by_ref,
+    parse_hospital_uuid,
+    resolve_staff_hospital_id,
+)
 from app.core.security import get_current_user
 from app.models.user import User
 from app.models.patient import PatientProfile, Appointment, MedicalRecord
@@ -107,8 +113,8 @@ async def get_doctor_profile(user_context: dict, db: AsyncSession):
         profile_pk_result = await db.execute(
             select(DoctorProfile.id).where(
                 and_(
-                    DoctorProfile.user_id == user.id,
-                    DoctorProfile.hospital_id == user.hospital_id,
+                    DoctorProfile.user_id == doctor_user.id,
+                    DoctorProfile.hospital_id == doctor_user.hospital_id,
                 )
             )
         )
@@ -153,24 +159,10 @@ async def get_doctor_profile(user_context: dict, db: AsyncSession):
     return doctor
 
 
-def _clinical_db_sessions(
-    tenant_db: AsyncSession,
-    platform_db: AsyncSession,
-) -> List[AsyncSession]:
-    seen: set[int] = set()
-    sessions: List[AsyncSession] = []
-    for sess in (tenant_db, platform_db):
-        key = id(sess)
-        if key in seen:
-            continue
-        seen.add(key)
-        sessions.append(sess)
-    return sessions
-
-
 async def _treatment_plan_doctor_ids(
     doctor: Any,
-    db: AsyncSession,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
     hospital_id: uuid.UUID,
 ) -> List[uuid.UUID]:
     """TreatmentPlan.doctor_id -> doctor_profiles.id (include legacy user.id rows)."""
@@ -181,18 +173,73 @@ async def _treatment_plan_doctor_ids(
     if user_id and user_id not in ids:
         ids.append(user_id)
     if user_id:
-        profile_result = await db.execute(
-            select(DoctorProfile.id).where(
-                and_(
-                    DoctorProfile.user_id == user_id,
-                    DoctorProfile.hospital_id == hospital_id,
+        for session in _clinical_db_sessions(tenant_db, platform_db):
+            profile_result = await session.execute(
+                select(DoctorProfile.id).where(
+                    and_(
+                        DoctorProfile.user_id == user_id,
+                        DoctorProfile.hospital_id == hospital_id,
+                    )
                 )
             )
-        )
-        profile_id = profile_result.scalar_one_or_none()
-        if profile_id and profile_id not in ids:
-            ids.append(profile_id)
+            profile_id = profile_result.scalar_one_or_none()
+            if profile_id and profile_id not in ids:
+                ids.append(profile_id)
     return ids
+
+
+async def _resolve_doctor_hospital(
+    doctor: Any,
+    current_user: User,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+) -> uuid.UUID:
+    fallback = getattr(doctor, "hospital_id", None) or current_user.hospital_id
+    return await resolve_staff_hospital_id(
+        current_user, tenant_db, platform_db, fallback=fallback
+    )
+
+
+async def _fetch_plan_for_doctor(
+    plan_id: str,
+    doctor: Any,
+    hid: uuid.UUID,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+) -> Tuple[TreatmentPlan, AsyncSession]:
+    try:
+        plan_uuid = uuid.UUID(str(plan_id))
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid plan_id",
+        )
+
+    doctor_ids = await _treatment_plan_doctor_ids(doctor, tenant_db, platform_db, hid)
+    load_opts = (
+        joinedload(TreatmentPlan.patient).joinedload(PatientProfile.user),
+        joinedload(TreatmentPlan.doctor).joinedload(DoctorProfile.user),
+    )
+    for session in _clinical_db_sessions(tenant_db, platform_db):
+        plan_result = await session.execute(
+            select(TreatmentPlan)
+            .where(
+                and_(
+                    TreatmentPlan.id == plan_uuid,
+                    TreatmentPlan.hospital_id == hid,
+                    TreatmentPlan.doctor_id.in_(doctor_ids),
+                )
+            )
+            .options(*load_opts)
+        )
+        plan = plan_result.unique().scalar_one_or_none()
+        if plan:
+            return plan, session
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Treatment plan not found",
+    )
 
 
 def _safe_patient_display(patient: Optional[PatientProfile]) -> tuple[str, str]:
@@ -264,40 +311,37 @@ async def _fetch_treatment_plans(
     return plans
 
 
-async def get_patient_by_ref(patient_ref: str, hospital_id: Optional[str], db: AsyncSession) -> PatientProfile:
-    """Get patient by reference, handling null hospital_id"""
-    # First try with hospital_id if provided
-    if hospital_id:
-        result = await db.execute(
-            select(PatientProfile)
-            .where(
-                and_(
-                    PatientProfile.patient_id == patient_ref,
-                    PatientProfile.hospital_id == hospital_id
-                )
-            )
-            .options(selectinload(PatientProfile.user))
-        )
-        patient = result.scalar_one_or_none()
-        if patient:
-            return patient
-    
-    # If not found or hospital_id is None, try without hospital_id filter
-    # This handles cases where patient's hospital_id is null
-    result = await db.execute(
-        select(PatientProfile)
-        .where(PatientProfile.patient_id == patient_ref)
-        .options(selectinload(PatientProfile.user))
+async def _fetch_all_plans_for_doctor(
+    doctor: Any,
+    hid: uuid.UUID,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+    *,
+    extra_conditions: Optional[List[Any]] = None,
+) -> List[TreatmentPlan]:
+    doctor_ids = await _treatment_plan_doctor_ids(doctor, tenant_db, platform_db, hid)
+    conditions: List[Any] = [
+        TreatmentPlan.hospital_id == hid,
+        TreatmentPlan.doctor_id.in_(doctor_ids),
+    ]
+    if extra_conditions:
+        conditions.extend(extra_conditions)
+    seen: set[uuid.UUID] = set()
+    merged: List[TreatmentPlan] = []
+    load_opts = (
+        joinedload(TreatmentPlan.patient).joinedload(PatientProfile.user),
+        joinedload(TreatmentPlan.doctor).joinedload(DoctorProfile.user),
     )
-    
-    patient = result.scalar_one_or_none()
-    if not patient:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Patient {patient_ref} not found"
+    for session in _clinical_db_sessions(tenant_db, platform_db):
+        result = await session.execute(
+            select(TreatmentPlan).where(and_(*conditions)).options(*load_opts)
         )
-    
-    return patient
+        for plan in result.unique().scalars().all():
+            if plan.id in seen:
+                continue
+            seen.add(plan.id)
+            merged.append(plan)
+    return merged
 
 
 def ensure_doctor_access(user_context: dict):
@@ -396,28 +440,21 @@ async def get_treatment_plans(
     ensure_doctor_access(user_context)
 
     doctor = await get_doctor_profile(user_context, tenant_db)
-    hospital_id = doctor.hospital_id or current_user.hospital_id
-    if not hospital_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Doctor must be associated with a hospital",
-        )
-    hid = hospital_id if isinstance(hospital_id, uuid.UUID) else uuid.UUID(str(hospital_id))
-    doctor_ids = await _treatment_plan_doctor_ids(doctor, tenant_db, hid)
+    hid = await _resolve_doctor_hospital(doctor, current_user, tenant_db, platform_db)
+    doctor_ids = await _treatment_plan_doctor_ids(doctor, tenant_db, platform_db, hid)
 
     patient_uuid: Optional[uuid.UUID] = None
     if patient_ref:
-        for session in _clinical_db_sessions(tenant_db, platform_db):
-            patient_filters = [
-                PatientProfile.patient_id == patient_ref,
-                PatientProfile.hospital_id == hid,
-            ]
-            patient_result = await session.execute(
-                select(PatientProfile.id).where(and_(*patient_filters))
+        try:
+            resolved = await load_patient_by_ref(
+                patient_ref,
+                hid,
+                tenant_db,
+                platform_db,
             )
-            patient_uuid = patient_result.scalar_one_or_none()
-            if patient_uuid:
-                break
+            patient_uuid = resolved.id
+        except HTTPException:
+            patient_uuid = None
         if not patient_uuid:
             return {
                 "doctor_name": _doctor_header_name(doctor, current_user),
@@ -519,45 +556,9 @@ async def get_treatment_plan_details(
     ensure_doctor_access(user_context)
 
     doctor = await get_doctor_profile(user_context, tenant_db)
-    hospital_id = doctor.hospital_id or current_user.hospital_id
-    if not hospital_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Doctor must be associated with a hospital",
-        )
-    hid = hospital_id if isinstance(hospital_id, uuid.UUID) else uuid.UUID(str(hospital_id))
-    doctor_ids = await _treatment_plan_doctor_ids(doctor, tenant_db, hid)
+    hid = await _resolve_doctor_hospital(doctor, current_user, tenant_db, platform_db)
+    plan, _plan_db = await _fetch_plan_for_doctor(plan_id, doctor, hid, tenant_db, platform_db)
 
-    plan = None
-    try:
-        plan_uuid = uuid.UUID(str(plan_id))
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid plan_id")
-
-    for session in _clinical_db_sessions(tenant_db, platform_db):
-        plan_result = await session.execute(
-            select(TreatmentPlan)
-            .where(
-                and_(
-                    TreatmentPlan.id == plan_uuid,
-                    TreatmentPlan.hospital_id == hid,
-                    TreatmentPlan.doctor_id.in_(doctor_ids),
-                )
-            )
-            .options(
-                joinedload(TreatmentPlan.patient).joinedload(PatientProfile.user),
-                joinedload(TreatmentPlan.doctor).joinedload(DoctorProfile.user),
-            )
-        )
-        plan = plan_result.unique().scalar_one_or_none()
-        if plan:
-            break
-    if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Treatment plan not found"
-        )
-    
     # Process goals
     short_term_goals = []
     for goal_data in (plan.short_term_goals or []):
@@ -680,7 +681,8 @@ async def get_treatment_plan_details(
 async def create_treatment_plan(
     request: TreatmentPlanCreate,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Create a new treatment plan for a patient.
@@ -691,30 +693,26 @@ async def create_treatment_plan(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # CRITICAL FIX: Ensure DoctorProfile exists for TreatmentPlan foreign key constraint
-    # Check if this is a MockDoctorProfile by checking if it has the 'user' attribute
-    if hasattr(doctor, 'user'):
-        # This is a MockDoctorProfile, we need to create actual DoctorProfile
-        existing_profile = await db.execute(
+
+    doctor = await get_doctor_profile(user_context, tenant_db)
+
+    if hasattr(doctor, "user"):
+        existing_profile = await tenant_db.execute(
             select(DoctorProfile).where(DoctorProfile.user_id == doctor.user_id)
         )
         actual_profile = existing_profile.scalar_one_or_none()
-        
+
         if not actual_profile:
-            # Ensure we have hospital_id
-            hospital_id_val = user_context.get("hospital_id")
+            hospital_id_val = user_context.get("hospital_id") or (
+                str(doctor.hospital_id) if doctor.hospital_id else None
+            )
             if not hospital_id_val:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Hospital ID is required. Please ensure your account is linked to a hospital."
+                    detail="Hospital ID is required. Please ensure your account is linked to a hospital.",
                 )
-            # Create DoctorProfile record for foreign key constraint
             new_profile = DoctorProfile(
-                hospital_id=uuid.UUID(hospital_id_val),
+                hospital_id=uuid.UUID(str(hospital_id_val)),
                 user_id=doctor.user_id,
                 department_id=doctor.department_id,
                 doctor_id=doctor.doctor_id,
@@ -728,17 +726,24 @@ async def create_treatment_plan(
                 is_available_for_emergency=doctor.is_available_for_emergency,
                 is_accepting_new_patients=doctor.is_accepting_new_patients,
                 bio=doctor.bio,
-                languages_spoken=doctor.languages_spoken
+                languages_spoken=doctor.languages_spoken,
             )
-            db.add(new_profile)
-            await db.commit()
-            await db.refresh(new_profile)
-            
-            # Update doctor reference to use the actual profile
+            tenant_db.add(new_profile)
+            await tenant_db.commit()
+            await tenant_db.refresh(new_profile)
             doctor = new_profile
-    
-    # Find patient - handle null hospital_id
-    patient = await get_patient_by_ref(request.patient_ref, user_context.get("hospital_id"), db)
+
+    hid = await _resolve_doctor_hospital(doctor, current_user, tenant_db, platform_db)
+    hospital_for_patient = user_context.get("hospital_id") or (
+        str(doctor.hospital_id) if doctor.hospital_id else None
+    )
+    patient = await load_patient_by_ref(
+        request.patient_ref,
+        parse_hospital_uuid(hospital_for_patient) or hid,
+        tenant_db,
+        platform_db,
+        ensure_on_tenant=True,
+    )
     
     # Use patient's hospital_id if user's is null
     if not user_context.get("hospital_id") and patient.hospital_id:
@@ -779,7 +784,7 @@ async def create_treatment_plan(
         initial_progress_notes.append({
             'note_id': str(uuid.uuid4()),
             'date': datetime.now().strftime("%Y-%m-%d"),
-            'author': f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
+            'author': _safe_doctor_display(doctor),
             'note_type': 'PLAN_CREATION',
             'content': request.initial_notes,
             'is_significant': True
@@ -816,16 +821,18 @@ async def create_treatment_plan(
         status="ACTIVE"
     )
     
-    db.add(new_plan)
-    await db.commit()
-    await db.refresh(new_plan)
-    
+    tenant_db.add(new_plan)
+    await tenant_db.commit()
+    await tenant_db.refresh(new_plan)
+
+    _, patient_name = _safe_patient_display(patient)
+
     return {
         "message": "Treatment plan created successfully",
         "plan_id": str(new_plan.id),
         "plan_name": new_plan.plan_name,
         "patient_ref": request.patient_ref,
-        "patient_name": f"{patient.user.first_name} {patient.user.last_name}",
+        "patient_name": patient_name,
         "status": new_plan.status,
         "created_date": new_plan.created_at.strftime("%Y-%m-%d %H:%M:%S"),
         "total_goals": len(processed_short_term_goals) + len(processed_long_term_goals),
@@ -839,7 +846,8 @@ async def update_treatment_plan(
     plan_id: str,
     request: TreatmentPlanUpdate,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Update an existing treatment plan.
@@ -850,30 +858,10 @@ async def update_treatment_plan(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Find treatment plan
-    plan_result = await db.execute(
-        select(TreatmentPlan)
-        .where(
-            and_(
-                TreatmentPlan.id == plan_id,
-                TreatmentPlan.doctor_id == doctor.id
-            )
-        )
-        .options(
-            selectinload(TreatmentPlan.patient).selectinload(PatientProfile.user)
-        )
-    )
-    
-    plan = plan_result.scalar_one_or_none()
-    if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Treatment plan not found"
-        )
+
+    doctor = await get_doctor_profile(user_context, tenant_db)
+    hid = await _resolve_doctor_hospital(doctor, current_user, tenant_db, platform_db)
+    plan, plan_db = await _fetch_plan_for_doctor(plan_id, doctor, hid, tenant_db, platform_db)
     
     # Update basic fields
     if request.plan_name:
@@ -969,7 +957,7 @@ async def update_treatment_plan(
         new_note = {
             'note_id': str(uuid.uuid4()),
             'date': datetime.now().strftime("%Y-%m-%d"),
-            'author': f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
+            'author': _safe_doctor_display(doctor),
             'note_type': 'PLAN_UPDATE',
             'content': request.progress_notes,
             'is_significant': True
@@ -983,7 +971,7 @@ async def update_treatment_plan(
         completion_note = {
             'note_id': str(uuid.uuid4()),
             'date': datetime.now().strftime("%Y-%m-%d"),
-            'author': f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
+            'author': _safe_doctor_display(doctor),
             'note_type': 'COMPLETION',
             'content': request.completion_notes,
             'is_significant': True
@@ -991,9 +979,9 @@ async def update_treatment_plan(
         existing_notes.append(completion_note)
         plan.progress_notes = existing_notes
     
-    await db.commit()
-    await db.refresh(plan)
-    
+    await plan_db.commit()
+    await plan_db.refresh(plan)
+
     return {
         "message": "Treatment plan updated successfully",
         "plan_id": str(plan.id),
@@ -1009,7 +997,8 @@ async def update_treatment_progress(
     plan_id: str,
     request: ProgressUpdate,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Update treatment plan progress with milestone and goal updates.
@@ -1020,31 +1009,11 @@ async def update_treatment_progress(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Find treatment plan
-    plan_result = await db.execute(
-        select(TreatmentPlan)
-        .where(
-            and_(
-                TreatmentPlan.id == plan_id,
-                TreatmentPlan.doctor_id == doctor.id
-            )
-        )
-        .options(
-            selectinload(TreatmentPlan.patient).selectinload(PatientProfile.user)
-        )
-    )
-    
-    plan = plan_result.scalar_one_or_none()
-    if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Treatment plan not found"
-        )
-    
+
+    doctor = await get_doctor_profile(user_context, tenant_db)
+    hid = await _resolve_doctor_hospital(doctor, current_user, tenant_db, platform_db)
+    plan, plan_db = await _fetch_plan_for_doctor(plan_id, doctor, hid, tenant_db, platform_db)
+
     # Update milestones
     if request.milestone_updates:
         existing_milestones = plan.milestones or []
@@ -1105,7 +1074,7 @@ async def update_treatment_progress(
     progress_note = {
         'note_id': str(uuid.uuid4()),
         'date': datetime.now().strftime("%Y-%m-%d"),
-        'author': f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
+        'author': _safe_doctor_display(doctor),
         'note_type': 'PROGRESS',
         'content': request.progress_note,
         'is_significant': request.significant_change
@@ -1113,14 +1082,14 @@ async def update_treatment_progress(
     existing_notes.append(progress_note)
     plan.progress_notes = existing_notes
     
-    await db.commit()
-    await db.refresh(plan)
-    
+    await plan_db.commit()
+    await plan_db.refresh(plan)
+
     # Calculate updated progress
     all_goals = (plan.short_term_goals or []) + (plan.long_term_goals or [])
     milestones = plan.milestones or []
     progress_percentage = calculate_progress_percentage(all_goals, milestones)
-    
+
     return {
         "message": "Treatment progress updated successfully",
         "plan_id": str(plan.id),
@@ -1142,7 +1111,8 @@ async def update_treatment_progress(
 async def get_treatment_plan_status(
     plan_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get treatment plan status and available actions.
@@ -1153,31 +1123,11 @@ async def get_treatment_plan_status(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Find treatment plan
-    plan_result = await db.execute(
-        select(TreatmentPlan)
-        .where(
-            and_(
-                TreatmentPlan.id == plan_id,
-                TreatmentPlan.doctor_id == doctor.id
-            )
-        )
-        .options(
-            selectinload(TreatmentPlan.patient).selectinload(PatientProfile.user)
-        )
-    )
-    
-    plan = plan_result.scalar_one_or_none()
-    if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Treatment plan not found"
-        )
-    
+
+    doctor = await get_doctor_profile(user_context, tenant_db)
+    hid = await _resolve_doctor_hospital(doctor, current_user, tenant_db, platform_db)
+    plan, _plan_db = await _fetch_plan_for_doctor(plan_id, doctor, hid, tenant_db, platform_db)
+
     # Check for outcome assessment
     has_outcome_assessment = False
     outcome_date = None
@@ -1208,8 +1158,8 @@ async def get_treatment_plan_status(
     return {
         "plan_id": str(plan.id),
         "plan_name": plan.plan_name,
-        "patient_ref": plan.patient.patient_id,
-        "patient_name": f"{plan.patient.user.first_name} {plan.patient.user.last_name}",
+        "patient_ref": _safe_patient_display(plan.patient)[0],
+        "patient_name": _safe_patient_display(plan.patient)[1],
         "status": plan.status,
         "start_date": plan.start_date,
         "expected_end_date": plan.expected_end_date,
@@ -1238,7 +1188,8 @@ async def record_treatment_outcome(
     plan_id: str,
     outcome: Dict[str, Any],
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Record treatment outcome assessment for a completed plan.
@@ -1249,37 +1200,17 @@ async def record_treatment_outcome(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Find treatment plan
-    plan_result = await db.execute(
-        select(TreatmentPlan)
-        .where(
-            and_(
-                TreatmentPlan.id == plan_id,
-                TreatmentPlan.doctor_id == doctor.id
-            )
-        )
-        .options(
-            selectinload(TreatmentPlan.patient).selectinload(PatientProfile.user)
-        )
-    )
-    
-    plan = plan_result.scalar_one_or_none()
-    if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Treatment plan not found"
-        )
-    
+
+    doctor = await get_doctor_profile(user_context, tenant_db)
+    hid = await _resolve_doctor_hospital(doctor, current_user, tenant_db, platform_db)
+    plan, plan_db = await _fetch_plan_for_doctor(plan_id, doctor, hid, tenant_db, platform_db)
+
     # Add outcome as a special progress note (outcome is Dict[str, Any])
     existing_notes = plan.progress_notes or []
     outcome_note = {
         'note_id': str(uuid.uuid4()),
         'date': outcome.get('outcome_date'),
-        'author': f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
+        'author': _safe_doctor_display(doctor),
         'note_type': 'OUTCOME_ASSESSMENT',
         'content': outcome.get('outcome_summary'),
         'is_significant': True,
@@ -1307,9 +1238,9 @@ async def record_treatment_outcome(
         plan.status = "COMPLETED"
         plan.completion_date = outcome_date
     
-    await db.commit()
-    await db.refresh(plan)
-    
+    await plan_db.commit()
+    await plan_db.refresh(plan)
+
     goals_achieved = outcome.get('goals_achieved', 0)
     goals_partially_achieved = outcome.get('goals_partially_achieved', 0)
     goals_not_achieved = outcome.get('goals_not_achieved', 0)
@@ -1335,7 +1266,8 @@ async def record_treatment_outcome(
 async def get_treatment_outcome(
     plan_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get treatment outcome assessment for a plan.
@@ -1346,31 +1278,11 @@ async def get_treatment_outcome(
     """
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
-    
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Find treatment plan
-    plan_result = await db.execute(
-        select(TreatmentPlan)
-        .where(
-            and_(
-                TreatmentPlan.id == plan_id,
-                TreatmentPlan.doctor_id == doctor.id
-            )
-        )
-        .options(
-            selectinload(TreatmentPlan.patient).selectinload(PatientProfile.user)
-        )
-    )
-    
-    plan = plan_result.scalar_one_or_none()
-    if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Treatment plan not found"
-        )
-    
+
+    doctor = await get_doctor_profile(user_context, tenant_db)
+    hid = await _resolve_doctor_hospital(doctor, current_user, tenant_db, platform_db)
+    plan, _plan_db = await _fetch_plan_for_doctor(plan_id, doctor, hid, tenant_db, platform_db)
+
     # Find outcome assessment in progress notes
     outcome_note = None
     for note in (plan.progress_notes or []):
@@ -1385,8 +1297,8 @@ async def get_treatment_outcome(
             "plan_id": str(plan.id),
             "plan_name": plan.plan_name,
             "plan_status": plan.status,
-            "patient_ref": plan.patient.patient_id,
-            "patient_name": f"{plan.patient.user.first_name} {plan.patient.user.last_name}",
+            "patient_ref": _safe_patient_display(plan.patient)[0],
+            "patient_name": _safe_patient_display(plan.patient)[1],
             "start_date": plan.start_date,
             "has_outcome_assessment": False,
             "suggestion": "Create an outcome assessment using POST /plans/{plan_id}/outcome endpoint",
@@ -1582,7 +1494,8 @@ async def create_plan_from_template(
     patient_ref: str = Body(...),
     customizations: Optional[Dict[str, Any]] = Body(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Create a treatment plan from a template.
@@ -1594,11 +1507,16 @@ async def create_plan_from_template(
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
     
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Find patient - handle null hospital_id
-    patient = await get_patient_by_ref(patient_ref, user_context.get("hospital_id"), db)
+    doctor = await get_doctor_profile(user_context, tenant_db)
+
+    hid = await _resolve_doctor_hospital(doctor, current_user, tenant_db, platform_db)
+    patient = await load_patient_by_ref(
+        patient_ref,
+        hid,
+        tenant_db,
+        platform_db,
+        ensure_on_tenant=True,
+    )
     
     # Use patient's hospital_id if user's is null
     if not user_context.get("hospital_id") and patient.hospital_id:
@@ -1665,8 +1583,9 @@ async def create_plan_from_template(
         initial_notes=f"Treatment plan created from template {template_id}"
     )
     
-    # Use the existing create_treatment_plan function
-    return await create_treatment_plan(create_request, current_user, db)
+    return await create_treatment_plan(
+        create_request, current_user, tenant_db, platform_db
+    )
 
 
 # ============================================================================
@@ -1676,7 +1595,8 @@ async def create_plan_from_template(
 @router.post("/maintenance/cleanup-dates")
 async def cleanup_invalid_dates(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Clean up invalid date values in treatment plans.
@@ -1687,18 +1607,12 @@ async def cleanup_invalid_dates(
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
     
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Find treatment plans with invalid dates
-    plans_result = await db.execute(
-        select(TreatmentPlan)
-        .where(TreatmentPlan.doctor_id == doctor.id)
-    )
-    
-    plans = plans_result.scalars().all()
-    
+    doctor = await get_doctor_profile(user_context, tenant_db)
+    hid = await _resolve_doctor_hospital(doctor, current_user, tenant_db, platform_db)
+    plans = await _fetch_all_plans_for_doctor(doctor, hid, tenant_db, platform_db)
+
     cleaned_count = 0
+    sessions_to_commit: set[int] = set()
     for plan in plans:
         updated = False
         
@@ -1719,12 +1633,18 @@ async def cleanup_invalid_dates(
         
         if updated:
             cleaned_count += 1
-    
-    if cleaned_count > 0:
-        await db.commit()
-    
+            from sqlalchemy.orm import object_session
+
+            sess = object_session(plan)
+            if sess is not None:
+                sessions_to_commit.add(id(sess))
+
+    for session in _clinical_db_sessions(tenant_db, platform_db):
+        if id(session) in sessions_to_commit:
+            await session.commit()
+
     return {
-        "message": f"Data cleanup completed successfully",
+        "message": "Data cleanup completed successfully",
         "total_plans_checked": len(plans),
         "plans_cleaned": cleaned_count,
         "cleanup_actions": [
@@ -1744,7 +1664,8 @@ async def get_treatment_plan_analytics(
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get treatment plan analytics and summary statistics.
@@ -1756,9 +1677,9 @@ async def get_treatment_plan_analytics(
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
     
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
+    doctor = await get_doctor_profile(user_context, tenant_db)
+    hid = await _resolve_doctor_hospital(doctor, current_user, tenant_db, platform_db)
+
     # Set default date range if not provided
     if not date_from:
         date_from = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
@@ -1775,22 +1696,16 @@ async def get_treatment_plan_analytics(
             detail="Invalid date format. Use YYYY-MM-DD format."
         )
     
-    # Get treatment plans in date range
-    plans_result = await db.execute(
-        select(TreatmentPlan)
-        .where(
-            and_(
-                TreatmentPlan.doctor_id == doctor.id,
-                TreatmentPlan.created_at >= start_datetime,
-                TreatmentPlan.created_at <= end_datetime
-            )
-        )
-        .options(
-            selectinload(TreatmentPlan.patient).selectinload(PatientProfile.user)
-        )
+    plans = await _fetch_all_plans_for_doctor(
+        doctor,
+        hid,
+        tenant_db,
+        platform_db,
+        extra_conditions=[
+            TreatmentPlan.created_at >= start_datetime,
+            TreatmentPlan.created_at <= end_datetime,
+        ],
     )
-    
-    plans = plans_result.scalars().all()
     
     # Calculate analytics
     total_plans = len(plans)
@@ -1835,7 +1750,7 @@ async def get_treatment_plan_analytics(
     success_rate = (completed_plans / total_plans * 100) if total_plans > 0 else 0
     
     return {
-        "doctor_name": f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
+        "doctor_name": _doctor_header_name(doctor, current_user),
         "analysis_period": f"{date_from} to {date_to}",
         "summary_statistics": {
             "total_plans": total_plans,

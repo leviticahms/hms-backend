@@ -252,40 +252,24 @@ def get_user_context(current_user: User) -> dict:
     }
 
 
-async def get_patient_by_ref(patient_ref: str, hospital_id: Optional[str], db: AsyncSession) -> PatientProfile:
-    """Get patient by reference, handling null hospital_id"""
-    # First try with hospital_id if provided
-    if hospital_id:
-        result = await db.execute(
-            select(PatientProfile)
-            .where(
-                and_(
-                    PatientProfile.patient_id == patient_ref,
-                    PatientProfile.hospital_id == hospital_id
-                )
-            )
-            .options(selectinload(PatientProfile.user))
+async def get_patient_by_ref(
+    patient_ref: str,
+    hospital_id: Optional[str],
+    db: AsyncSession,
+) -> PatientProfile:
+    """Resolve patient on tenant + platform (OPD patients often live on platform DB)."""
+    from app.database.session import AsyncSessionLocal
+    from app.services.patient_resolve import load_patient_by_ref, parse_hospital_uuid
+
+    hid = parse_hospital_uuid(hospital_id)
+    async with AsyncSessionLocal() as platform_db:
+        return await load_patient_by_ref(
+            patient_ref,
+            hid,
+            db,
+            platform_db,
+            ensure_on_tenant=True,
         )
-        patient = result.scalar_one_or_none()
-        if patient:
-            return patient
-    
-    # If not found or hospital_id is None, try without hospital_id filter
-    # This handles cases where patient's hospital_id is null
-    result = await db.execute(
-        select(PatientProfile)
-        .where(PatientProfile.patient_id == patient_ref)
-        .options(selectinload(PatientProfile.user))
-    )
-    
-    patient = result.scalar_one_or_none()
-    if not patient:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Patient {patient_ref} not found"
-        )
-    
-    return patient
 
 
 async def get_doctor_profile(user_context: dict, db: AsyncSession):

@@ -18,7 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc, func, asc, update
 from sqlalchemy.orm import selectinload
-from app.core.database import get_db_session
+from app.core.database import get_db_session, get_platform_db_session
+from app.services.patient_resolve import load_patient_by_ref, resolve_staff_hospital_id
 from app.core.security import get_current_user
 from app.models.user import User
 from app.models.patient import PatientProfile, Appointment, MedicalRecord
@@ -38,6 +39,27 @@ router = APIRouter(prefix="/doctor-prescription-system", tags=["Doctor Portal - 
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
+
+async def _load_patient_for_doctor(
+    patient_ref: str,
+    current_user: User,
+    tenant_db: AsyncSession,
+    platform_db: AsyncSession,
+):
+    hid = await resolve_staff_hospital_id(
+        current_user,
+        tenant_db,
+        platform_db,
+        fallback=str(current_user.hospital_id) if current_user.hospital_id else None,
+    )
+    return await load_patient_by_ref(
+        patient_ref,
+        hid,
+        tenant_db,
+        platform_db,
+        ensure_on_tenant=True,
+    )
+
 
 def get_user_context(current_user: User) -> dict:
     """Extract user context from JWT token"""
@@ -341,7 +363,8 @@ async def get_dosage_recommendation(
     patient_ref: str = Body(...),
     indication: str = Body(...),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get dosage recommendation based on patient factors.
@@ -352,28 +375,11 @@ async def get_dosage_recommendation(
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
     
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Get patient
-    patient_result = await db.execute(
-        select(PatientProfile)
-        .where(
-            and_(
-                PatientProfile.patient_id == patient_ref,
-                PatientProfile.hospital_id == user_context["hospital_id"]
-            )
-        )
-        .options(selectinload(PatientProfile.user))
+    doctor = await get_doctor_profile(user_context, tenant_db)
+    patient = await _load_patient_for_doctor(
+        patient_ref, current_user, tenant_db, platform_db
     )
-    
-    patient = patient_result.scalar_one_or_none()
-    if not patient:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Patient not found"
-        )
-    
+
     # Get drug info
     if drug_id not in MOCK_DRUG_DATABASE:
         raise HTTPException(
@@ -466,7 +472,8 @@ async def get_dosage_recommendation(
 async def validate_prescription(
     request: PrescriptionCreate,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Validate prescription before creation.
@@ -477,28 +484,11 @@ async def validate_prescription(
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
     
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Get patient
-    patient_result = await db.execute(
-        select(PatientProfile)
-        .where(
-            and_(
-                PatientProfile.patient_id == request.patient_ref,
-                PatientProfile.hospital_id == user_context["hospital_id"]
-            )
-        )
-        .options(selectinload(PatientProfile.user))
+    doctor = await get_doctor_profile(user_context, tenant_db)
+    patient = await _load_patient_for_doctor(
+        request.patient_ref, current_user, tenant_db, platform_db
     )
-    
-    patient = patient_result.scalar_one_or_none()
-    if not patient:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Patient not found"
-        )
-    
+
     warnings = []
     errors = []
     drug_interactions = []
@@ -607,7 +597,8 @@ async def create_advanced_prescription(
     request: PrescriptionCreate,
     force_create: bool = Query(False, description="Force create despite warnings"),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Create advanced digital prescription with validation.
@@ -625,22 +616,23 @@ async def create_advanced_prescription(
             detail="Hospital ID is required. Doctor must be associated with a hospital."
         )
     
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # CRITICAL FIX: Ensure DoctorProfile exists for Prescription foreign key constraint
-    # Check if this is a MockDoctorProfile by checking if it has the 'user' attribute
-    if hasattr(doctor, 'user'):
-        # This is a MockDoctorProfile, we need to create actual DoctorProfile
-        existing_profile = await db.execute(
+    doctor = await get_doctor_profile(user_context, tenant_db)
+
+    if hasattr(doctor, "user"):
+        existing_profile = await tenant_db.execute(
             select(DoctorProfile).where(DoctorProfile.user_id == doctor.user_id)
         )
         actual_profile = existing_profile.scalar_one_or_none()
-        
+
         if not actual_profile:
-            # Create DoctorProfile record for foreign key constraint
+            hid = await resolve_staff_hospital_id(
+                current_user,
+                tenant_db,
+                platform_db,
+                fallback=user_context.get("hospital_id"),
+            )
             new_profile = DoctorProfile(
-                hospital_id=uuid.UUID(user_context["hospital_id"]),
+                hospital_id=hid,
                 user_id=doctor.user_id,
                 department_id=doctor.department_id,
                 doctor_id=doctor.doctor_id,
@@ -656,37 +648,20 @@ async def create_advanced_prescription(
                 bio=doctor.bio,
                 languages_spoken=doctor.languages_spoken
             )
-            db.add(new_profile)
-            await db.commit()
-            await db.refresh(new_profile)
-            
-            # Update doctor reference to use the actual profile
+            tenant_db.add(new_profile)
+            await tenant_db.commit()
+            await tenant_db.refresh(new_profile)
             doctor = new_profile
-    
-    # Get patient
-    patient_result = await db.execute(
-        select(PatientProfile)
-        .where(
-            and_(
-                PatientProfile.patient_id == request.patient_ref,
-                PatientProfile.hospital_id == user_context["hospital_id"]
-            )
-        )
-        .options(selectinload(PatientProfile.user))
+
+    patient = await _load_patient_for_doctor(
+        request.patient_ref, current_user, tenant_db, platform_db
     )
-    
-    patient = patient_result.scalar_one_or_none()
-    if not patient:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Patient not found"
-        )
-    
-    # Validate prescription first (unless forced)
+
     if not force_create:
-        # Run validation
-        validation_result = await validate_prescription(request, current_user, db)
-        
+        validation_result = await validate_prescription(
+            request, current_user, tenant_db, platform_db
+        )
+
         if not validation_result.is_valid:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -717,7 +692,7 @@ async def create_advanced_prescription(
     medical_record_id = None
     
     if request.appointment_ref:
-        appointment_result = await db.execute(
+        appointment_result = await tenant_db.execute(
             select(Appointment)
             .where(
                 and_(
@@ -727,13 +702,12 @@ async def create_advanced_prescription(
                 )
             )
         )
-        
+
         appointment = appointment_result.scalar_one_or_none()
         if appointment:
             appointment_id = appointment.id
-            
-            # Get associated medical record
-            medical_record_result = await db.execute(
+
+            medical_record_result = await tenant_db.execute(
                 select(MedicalRecord)
                 .where(MedicalRecord.appointment_id == appointment.id)
             )
@@ -763,13 +737,19 @@ async def create_advanced_prescription(
             "substitute_allowed": med.substitute_allowed
         })
     
-    # Create prescription
+    rx_hospital_id = await resolve_staff_hospital_id(
+        current_user,
+        tenant_db,
+        platform_db,
+        fallback=user_context.get("hospital_id"),
+    )
+
     prescription = Prescription(
         patient_id=patient.id,
         doctor_id=doctor.id,
         appointment_id=appointment_id,
         medical_record_id=medical_record_id,
-        hospital_id=uuid.UUID(user_context["hospital_id"]),
+        hospital_id=rx_hospital_id,
         prescription_number=prescription_number,
         prescription_date=date.today().isoformat(),
         diagnosis=request.clinical_diagnosis,
@@ -782,11 +762,10 @@ async def create_advanced_prescription(
         signature_hash=f"hash_{prescription_number}"
     )
     
-    db.add(prescription)
-    await db.commit()
-    await db.refresh(prescription)
-    
-    # Generate QR code
+    tenant_db.add(prescription)
+    await tenant_db.commit()
+    await tenant_db.refresh(prescription)
+
     qr_code = generate_qr_code({
         "prescription_number": prescription_number,
         "patient_ref": request.patient_ref,
@@ -924,7 +903,8 @@ async def get_prescription_history(
     dispensing_status: Optional[str] = Query(None, pattern="^(PENDING|DISPENSED|PARTIALLY_DISPENSED)$"),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get prescription history with filtering options.
@@ -935,25 +915,18 @@ async def get_prescription_history(
     user_context = get_user_context(current_user)
     ensure_doctor_access(user_context)
     
-    # Get doctor profile
-    doctor = await get_doctor_profile(user_context, db)
-    
-    # Build query conditions
+    doctor = await get_doctor_profile(user_context, tenant_db)
+
     conditions = [Prescription.doctor_id == doctor.id]
-    
+
     if patient_ref:
-        # Get patient ID
-        patient_result = await db.execute(
-            select(PatientProfile.id)
-            .where(
-                and_(
-                    PatientProfile.patient_id == patient_ref,
-                    PatientProfile.hospital_id == user_context["hospital_id"]
-                )
+        try:
+            resolved_patient = await _load_patient_for_doctor(
+                patient_ref, current_user, tenant_db, platform_db
             )
-        )
-        
-        patient_id = patient_result.scalar_one_or_none()
+            patient_id = resolved_patient.id
+        except HTTPException:
+            patient_id = None
         if patient_id:
             conditions.append(Prescription.patient_id == patient_id)
         else:
@@ -981,8 +954,7 @@ async def get_prescription_history(
         elif dispensing_status == "PENDING":
             conditions.append(Prescription.is_dispensed == False)
     
-    # Get prescriptions
-    prescriptions_result = await db.execute(
+    prescriptions_result = await tenant_db.execute(
         select(Prescription)
         .where(and_(*conditions))
         .options(selectinload(Prescription.patient).selectinload(PatientProfile.user))
