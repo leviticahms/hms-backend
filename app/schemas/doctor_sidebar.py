@@ -89,11 +89,15 @@ class DoctorMessageOut(BaseModel):
 
 class DoctorMessageReadRequest(BaseModel):
     source: Literal["telemed", "prescription"]
-    message_id: str
+    message_id: UUID = Field(
+        ...,
+        description="UUID from GET /doctor-sidebar/messages (not the literal word 'string')",
+        examples=["550e8400-e29b-41d4-a716-446655440000"],
+    )
 
 
 class DoctorMessageCreateRequest(BaseModel):
-    recipient_user_id: str
+    recipient_user_id: UUID
     title: str
     body: str
     event_type: str = "NEW_MESSAGE"

@@ -131,11 +131,11 @@ async def send_opd_portal_credentials_email_task(
 
 class ClinicalService:
     """Service for clinical operations (OPD, IPD, Nursing)"""
-<<<<<<< HEAD
 
     def __init__(self, db: AsyncSession, platform_db: Optional[AsyncSession] = None):
         self.db = db
         self.platform_db = platform_db
+        self.tenant_db = db
         self.security = SecurityManager()
 
     async def _get_primary_staff_assignment(
@@ -260,14 +260,7 @@ class ClinicalService:
                         return dept
 
         return await self._department_from_user_metadata(user)
-=======
-    
-    def __init__(self, platform_db,tenant_db):
-        self.platform_db = platform_db
-        self.tenant_db = tenant_db
-        self.db = tenant_db
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
-    
+
     # ============================================================================
     # USER CONTEXT AND VALIDATION
     # ============================================================================
@@ -342,21 +335,9 @@ class ClinicalService:
                 detail="Receptionist user not found. Please contact administrator."
             )
             
-<<<<<<< HEAD
         assignment = await self._get_primary_staff_assignment(
             user_context["user_id"],
             user_context.get("hospital_id"),
-=======
-        # Get department assignment
-        assignment_result = await self.platform_db.execute(
-            select(StaffDepartmentAssignment)
-            .where(
-                and_(
-                    StaffDepartmentAssignment.staff_id == uuid.UUID(str(user_context["user_id"])),
-                    StaffDepartmentAssignment.is_active == True,
-                )
-            )
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
         )
 
         # Legacy/fallback compatibility:
@@ -1750,12 +1731,9 @@ class ClinicalService:
                     PatientProfile.hospital_id == user_context["hospital_id"]
                 )
             )
-<<<<<<< HEAD
             .options(selectinload(PatientProfile.user))
             .order_by(desc(PatientProfile.created_at))
             .limit(1)
-=======
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
         )
         
         patient = patient_result.scalars().first()
@@ -1972,7 +1950,6 @@ class ClinicalService:
                 )
                 .order_by(desc(Admission.admission_date))
             )
-<<<<<<< HEAD
             count_query = select(func.count(Admission.id)).where(
                 Admission.hospital_id == hid,
                 Admission.is_active == True,
@@ -2012,15 +1989,6 @@ class ClinicalService:
                 )
             )
 
-=======
-        ).options(
-            selectinload(Admission.patient),
-            selectinload(Admission.doctor),
-            selectinload(Admission.department)
-        ).order_by(desc(Admission.admission_date))
-        
-        # Apply filters
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
         if filters.get("ward"):
             query = query.where(Admission.ward == filters["ward"])
             count_query = count_query.where(Admission.ward == filters["ward"])
@@ -2442,39 +2410,12 @@ class ClinicalService:
     
     async def get_admission_by_number_with_department_check(self, admission_number: str, user_profile) -> Admission:
         """Get admission with department access control"""
-<<<<<<< HEAD
         return await self._fetch_admission_for_ipd_department(admission_number, user_profile)
-=======
-        result = await self.db.execute(
-            select(Admission)
-            .where(
-                and_(
-                    Admission.admission_number == admission_number,
-                    Admission.hospital_id == user_profile.hospital_id,
-                    Admission.department_id == user_profile.department_id  # Department-based access
-                )
-            )
-            .options(
-                selectinload(Admission.patient),
-                selectinload(Admission.doctor),
-                selectinload(Admission.department)
-            )
-        )
-        
-        admission = result.scalar_one_or_none()
-        if not admission:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Admission {admission_number} not found in your department"
-            )
-        
-        return admission
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
-    
+
     # ============================================================================
     # HELPER METHODS FOR IPD
     # ============================================================================
-    
+
     async def _fetch_admission_for_ipd_department(self, admission_number: str, user_profile) -> Admission:
         """Load one admission scoped to the caller's department (id or name)."""
         hid = user_profile.hospital_id
@@ -2533,8 +2474,6 @@ class ClinicalService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Doctor user not found. Please contact administrator."
             )
-<<<<<<< HEAD
-
         department = await self._resolve_ipd_department(
             doctor_user,
             user_context.get("hospital_id"),
@@ -2543,47 +2482,6 @@ class ClinicalService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Doctor department assignment not found. Please contact administrator.",
-=======
-            
-        # Get department assignment
-        assignment_result = await self.tenant_db.execute(
-            select(StaffDepartmentAssignment)
-            .options(
-                selectinload(StaffDepartmentAssignment.department),
-                selectinload(StaffDepartmentAssignment.staff)
-            )
-            .where(
-                and_(
-                    StaffDepartmentAssignment.staff_id == uuid.UUID(str(user_context["user_id"])),
-                    StaffDepartmentAssignment.hospital_id == uuid.UUID(str(user_context["hospital_id"])),
-                    StaffDepartmentAssignment.is_active == True,
-                )
-            )
-        )
-        assignments = assignment_result.scalars().all()
-        assignment = assignments[0] if assignments else None
-        print("========== DOCTOR PROFILE DEBUG ==========")
-        print("USER_ID:", user_context["user_id"])
-        print("HOSPITAL_ID:", user_context["hospital_id"])
-        print("ASSIGNMENT:", assignment)
-
-        if assignment:
-            print("ASSIGNMENT ID:", assignment.id)
-            print("DEPARTMENT ID:", assignment.department_id)
-            print("IS ACTIVE:", assignment.is_active)
-            print("DEPARTMENT:", assignment.department)
-        print("==========================================")
-        
-        if not assignment or not assignment.department:
-            print("========== DOCTOR DEBUG ==========")
-            print("USER ID:", uuid.UUID(str(user_context["user_id"])))
-            print("USING DB:", self.tenant_db)
-
-            print("ASSIGNMENT RESULT:", assignment)
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Doctor not assigned to any department."
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
             )
 
         # Create a mock object that has the same interface as the old DoctorProfile
@@ -2618,18 +2516,9 @@ class ClinicalService:
             
             if not nurse_user:
                 return None
-<<<<<<< HEAD
-
             department = await self._resolve_ipd_department(
                 nurse_user,
                 user_context.get("hospital_id"),
-=======
-                
-            # Get department assignment
-            assignment_result = await self.db.execute(
-                select(StaffDepartmentAssignment)
-                .where(StaffDepartmentAssignment.staff_id == uuid.UUID(str(user_context["user_id"])))
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
             )
             if not department:
                 return None
@@ -3006,41 +2895,10 @@ class ClinicalService:
     # HELPER METHODS FOR IPD
     # ============================================================================
     
-    async def get_admission_by_number_with_department_check(self, admission_number: str, user_profile) -> Admission:
-        """Get admission with department access control"""
-<<<<<<< HEAD
-        return await self._fetch_admission_for_ipd_department(admission_number, user_profile)
-=======
-        result = await self.db.execute(
-            select(Admission)
-            .where(
-                and_(
-                    Admission.admission_number == admission_number,
-                    Admission.hospital_id == user_profile.hospital_id,
-                    Admission.department_id == user_profile.department_id  # Department-based access
-                )
-            )
-            .options(
-                selectinload(Admission.patient),
-                selectinload(Admission.doctor),
-                selectinload(Admission.department)
-            )
-        )
-        
-        admission = result.scalar_one_or_none()
-        if not admission:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Admission {admission_number} not found in your department"
-            )
-        
-        return admission
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
-
     # ============================================================================
     # HELPER METHODS
     # ============================================================================
-    
+
     async def get_doctor_by_name(
         self,
         doctor_name: str,

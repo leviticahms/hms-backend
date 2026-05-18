@@ -3,8 +3,9 @@ Application configuration settings.
 Manages environment variables and application settings.
 """
 from pydantic_settings import BaseSettings
-from pydantic import Field, model_validator, field_validator
-from typing import Literal, Optional
+from pydantic import AliasChoices, Field, model_validator
+from typing import Any, Literal, Optional
+import json
 import os
 import logging
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
@@ -136,8 +137,13 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
-    # CORS — set ALLOWED_ORIGINS in env (comma-separated); empty means no browser origins allowed
-    ALLOWED_ORIGINS: list[str] = Field(default_factory=list, env="ALLOWED_ORIGINS")
+    # CORS — set ALLOWED_ORIGINS in env (comma-separated or JSON array); empty = no browser origins
+    # Env binds to allowed_origins_str (str) so pydantic-settings does not JSON-decode list fields.
+    allowed_origins_str: str = Field(
+        default="",
+        validation_alias=AliasChoices("ALLOWED_ORIGINS"),
+    )
+    cors_allowed_origins: list[str] = Field(default_factory=list)
     # Optional frontend URL convenience (auto-added to ALLOWED_ORIGINS if set)
     FRONTEND_URL: str = Field(default="", env="FRONTEND_URL")
     VERCEL_URL: str = Field(
@@ -146,19 +152,27 @@ class Settings(BaseSettings):
         description="Optional Vercel hostname (without scheme). If set, will be converted to https://<host> for CORS.",
     )
 
-    @field_validator("ALLOWED_ORIGINS", mode="before")
-    @classmethod
-    def _parse_allowed_origins(cls, v):
+    @staticmethod
+    def _parse_allowed_origins(v: Any) -> list[str]:
         if v is None:
             return []
+        if isinstance(v, list):
+            return [str(item).strip() for item in v if str(item).strip()]
         if isinstance(v, str):
             raw = v.strip()
             if not raw:
                 return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
             if raw == "*":
                 return ["*"]
             return [item.strip() for item in raw.split(",") if item.strip()]
-        return v
+        return []
 
     @model_validator(mode="after")
     def _add_frontend_origin(self):
@@ -167,8 +181,11 @@ class Settings(BaseSettings):
         - FRONTEND_URL can be a full origin (https://...) or a bare host.
         - VERCEL_URL is usually a bare host like: hospital-management-12.vercel.app
         """
-        origins = list(self.ALLOWED_ORIGINS or [])
+        origins = self._parse_allowed_origins(self.allowed_origins_str)
+        if not origins and self.cors_allowed_origins:
+            origins = list(self.cors_allowed_origins)
         if "*" in origins:
+            self.cors_allowed_origins = origins
             return self
 
         def _norm_origin(raw: str) -> str:
@@ -187,8 +204,12 @@ class Settings(BaseSettings):
         if vz and vz not in origins:
             origins.append(vz)
 
-        self.ALLOWED_ORIGINS = origins
+        self.cors_allowed_origins = origins
         return self
+
+    @property
+    def ALLOWED_ORIGINS(self) -> list[str]:
+        return self.cors_allowed_origins
 
     # Public URL of this backend (used for absolute /uploads/... links in JSON; set to your API origin)
     APP_PUBLIC_URL: str = Field(default="http://localhost:8000", env="APP_PUBLIC_URL")

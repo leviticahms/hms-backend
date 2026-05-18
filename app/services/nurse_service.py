@@ -9,11 +9,11 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Type
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, desc, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.hospital import Bed, StaffDepartmentAssignment, Ward
+from app.models.hospital import Bed, Department, StaffDepartmentAssignment, Ward
 from app.models.nurse import NurseProfile
 from app.models.patient import Admission, DischargeSummary, MedicalRecord, PatientProfile
 from app.models.user import User
@@ -96,38 +96,66 @@ class NurseService:
             raise HTTPException(status_code=404, detail="Nurse department assignment not found")
         return assignment
 
+    def _department_match_conditions(
+        self,
+        assignment: StaffDepartmentAssignment,
+        hospital_id: uuid.UUID,
+    ) -> list:
+        """Match admissions by department id or name (handles re-seeded department rows)."""
+        dept_match = [Admission.department_id == assignment.department_id]
+        dept_name = (
+            (getattr(getattr(assignment, "department", None), "name", None) or "")
+            .strip()
+            .lower()
+        )
+        if dept_name:
+            dept_match.append(
+                Admission.department_id.in_(
+                    select(Department.id).where(
+                        Department.hospital_id == hospital_id,
+                        func.lower(func.trim(Department.name)) == dept_name,
+                    )
+                )
+            )
+        return dept_match
+
     async def _resolve_admission(self, admission_number: str, current_user: User) -> Admission:
         assignment = await self._get_nurse_department(current_user)
+        hid = current_user.hospital_id
+        dept_match = self._department_match_conditions(assignment, hid)
         res = await self.tenant_db.execute(
             select(Admission)
             .where(
                 and_(
                     Admission.admission_number == admission_number,
-                    Admission.hospital_id == current_user.hospital_id,
-                    Admission.department_id == assignment.department_id,
+                    Admission.hospital_id == hid,
+                    or_(*dept_match),
                 )
             )
             .options(selectinload(Admission.patient))
+            .order_by(desc(Admission.created_at))
+            .limit(1)
         )
-        admission = res.scalar_one_or_none()
-        print("========== DEBUG ADMISSION ==========")
-        print("REQUESTED:", admission_number)
-        print("NURSE DEPARTMENT:", assignment.department_id)
-
-        all_admissions = await self.tenant_db.execute(
-            select(
-                Admission.admission_number,
-                Admission.department_id,
-                Admission.is_active
-            )
-        )
-    
-        print("ALL ADMISSIONS:")
-        for row in all_admissions.fetchall():
-            print(row)
-
-        print("====================================")
+        admission = res.scalars().first()
         if not admission:
+            other = await self.tenant_db.execute(
+                select(Admission)
+                .where(
+                    and_(
+                        Admission.admission_number == admission_number,
+                        Admission.hospital_id == hid,
+                    )
+                )
+                .limit(1)
+            )
+            if other.scalars().first():
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "Admission exists in this hospital but not in your department. "
+                        "Ask admin to align nurse department assignment with the admission ward/department."
+                    ),
+                )
             raise HTTPException(status_code=404, detail="Admission not found in nurse department")
         return admission
 
@@ -143,11 +171,13 @@ class NurseService:
 
     async def _resolve_admission_by_patient_ref(self, patient_ref: str, current_user: User) -> Admission:
         assignment = await self._get_nurse_department(current_user)
+        hid = current_user.hospital_id
+        dept_match = self._department_match_conditions(assignment, hid)
         patient_row = await self.tenant_db.execute(
             select(PatientProfile).where(
                 and_(
                     PatientProfile.patient_id == patient_ref,
-                    PatientProfile.hospital_id == current_user.hospital_id,
+                    PatientProfile.hospital_id == hid,
                 )
             )
         )
@@ -159,8 +189,8 @@ class NurseService:
             .where(
                 and_(
                     Admission.patient_id == patient.id,
-                    Admission.hospital_id == current_user.hospital_id,
-                    Admission.department_id == assignment.department_id,
+                    Admission.hospital_id == hid,
+                    or_(*dept_match),
                     Admission.is_active == True,
                 )
             )

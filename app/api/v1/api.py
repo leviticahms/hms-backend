@@ -85,7 +85,6 @@ try:
     from app.api.v1.routers.doctor.doctor_treatment_plans import router as doctor_treatment_router
     from app.api.v1.routers.doctor.simple_prescription import router as simple_prescription_router
     from app.api.v1.routers.doctor.doctor_sidebar import router as doctor_sidebar_router
-    from app.api.v1.routers.doctor.simple_prescription import router as simple_prescription_router
 
     api_router.include_router(doctor_dashboard_router)
     api_router.include_router(doctor_management_router)
@@ -93,16 +92,9 @@ try:
     api_router.include_router(doctor_patient_records_router)
     api_router.include_router(doctor_reports_router)
     api_router.include_router(doctor_treatment_router)
-<<<<<<< HEAD
     api_router.include_router(doctor_sidebar_router)
-    # Pharmacy-linked prescriptions: doctor search/create, pharmacist dispense, patient PDF/list.
     api_router.include_router(simple_prescription_router)
     logger.info("✓ Doctor routers loaded (sidebar + simple-prescription / pharmacy medicines)")
-=======
-    api_router.include_router(simple_prescription_router)
-    api_router.include_router(doctor_sidebar_router)
-    logger.info("✓ Doctor routers loaded (sidebar + simple-prescription)")
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 except ImportError as e:
     logger.error(f"✗ Failed to load doctor routers: {e}")
 
@@ -117,16 +109,10 @@ try:
     )
 
     api_router.include_router(ipd_management_router)
-
-    print("✓ IPD ROUTER LOADED")
+    logger.info("IPD router loaded")
 
 except Exception as e:
-    import traceback
-
-    print("✗ IPD ROUTER FAILED")
-    print(e)
-
-    traceback.print_exc()
+    logger.exception("Failed to load IPD router: %s", e)
 
 
 # ---------------- PATIENT DASHBOARD ----------------
@@ -136,12 +122,10 @@ try:
     )
 
     api_router.include_router(patient_dashboard_router)
-
-    print("✓ PATIENT DASHBOARD ROUTER LOADED")
+    logger.info("Patient dashboard router loaded")
 
 except Exception as e:
-    print("✗ PATIENT DASHBOARD ROUTER FAILED")
-    print(e)
+    logger.exception("Failed to load patient dashboard router: %s", e)
 
 
 # ---------------- PATIENT PROFILE ----------------
@@ -151,12 +135,10 @@ try:
     )
 
     api_router.include_router(patient_profile_router)
-
-    print("✓ PATIENT PROFILE ROUTER LOADED")
+    logger.info("Patient profile router loaded")
 
 except Exception as e:
-    print("✗ PATIENT PROFILE ROUTER FAILED")
-    print(e)
+    logger.exception("Failed to load patient profile router: %s", e)
 
 
 # ---------------- PATIENT BILLING ----------------
@@ -166,12 +148,10 @@ try:
     )
 
     api_router.include_router(patient_billing_router)
-
-    print("✓ PATIENT BILLING ROUTER LOADED")
+    logger.info("Patient billing router loaded")
 
 except Exception as e:
-    print("✗ PATIENT BILLING ROUTER FAILED")
-    print(e)
+    logger.exception("Failed to load patient billing router: %s", e)
 
 # ============================================================================
 # 6. STAFF MANAGEMENT (Receptionist + OPD)

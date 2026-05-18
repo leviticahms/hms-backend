@@ -37,6 +37,26 @@ import app.services.doctor_sidebar_service as sidebar_svc
 router = APIRouter(prefix="/doctor-sidebar", tags=["Doctor Portal - Sidebar"])
 
 
+def _hospital_uuid(ctx: Dict) -> uuid.UUID:
+    try:
+        return uuid.UUID(str(ctx["hospital_id"]))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid hospital context on your account",
+        )
+
+
+def _parse_uuid(value: str, field: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(str(value).strip())
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid UUID for {field}",
+        )
+
+
 @router.get(
     "/appointments",
     response_model=List[DoctorAppointmentOut],
@@ -48,7 +68,7 @@ async def sidebar_appointments(
     ctx: Dict = Depends(require_hospital_context),
     db: AsyncSession = Depends(get_db_session),
 ):
-    hid = uuid.UUID(ctx["hospital_id"])
+    hid = _hospital_uuid(ctx)
     return await sidebar_svc.list_appointments_for_doctor(db, user, hid, limit=limit)
 
 
@@ -66,7 +86,7 @@ async def sidebar_prescriptions(
     db: AsyncSession = Depends(get_db_session),
 ):
     """Doctor-scoped prescriptions; same data as `/simple-prescription/doctor/prescriptions`."""
-    hid = uuid.UUID(ctx["hospital_id"])
+    hid = _hospital_uuid(ctx)
     return await sidebar_svc.list_prescriptions_for_doctor(
         db, user, hid, patient_ref=patient_ref, is_dispensed=is_dispensed, limit=limit
     )
@@ -84,7 +104,7 @@ async def sidebar_create_prescription(
     ctx: Dict = Depends(require_hospital_context),
     db: AsyncSession = Depends(get_db_session),
 ):
-    hid = uuid.UUID(ctx["hospital_id"])
+    hid = _hospital_uuid(ctx)
     try:
         return await sidebar_svc.create_prescription_for_doctor(db, user, hid, body)
     except ValueError as e:
@@ -103,7 +123,7 @@ async def sidebar_lab_results(
     db: AsyncSession = Depends(get_db_session),
 ):
     """Medical records authored by this doctor with non-empty `lab_orders`."""
-    hid = uuid.UUID(ctx["hospital_id"])
+    hid = _hospital_uuid(ctx)
     return await sidebar_svc.list_lab_results_for_doctor(db, user, hid, limit=limit)
 
 
@@ -119,12 +139,12 @@ async def sidebar_review_lab_result(
     ctx: Dict = Depends(require_hospital_context),
     db: AsyncSession = Depends(get_db_session),
 ):
-    hid = uuid.UUID(ctx["hospital_id"])
+    hid = _hospital_uuid(ctx)
     ok = await sidebar_svc.review_lab_result_for_doctor(
         db,
         user,
         hid,
-        uuid.UUID(medical_record_id),
+        _parse_uuid(medical_record_id, "medical_record_id"),
         body,
     )
     if not ok:
@@ -144,7 +164,7 @@ async def sidebar_inpatient_visits(
     db: AsyncSession = Depends(get_db_session),
 ):
     """IPD admissions where this doctor is the admitting doctor."""
-    hid = uuid.UUID(ctx["hospital_id"])
+    hid = _hospital_uuid(ctx)
     return await sidebar_svc.list_inpatient_visits_for_doctor(
         db, user, hid, active_only=active_only, limit=limit
     )
@@ -162,12 +182,12 @@ async def sidebar_update_inpatient_vitals(
     ctx: Dict = Depends(require_hospital_context),
     db: AsyncSession = Depends(get_db_session),
 ):
-    hid = uuid.UUID(ctx["hospital_id"])
+    hid = _hospital_uuid(ctx)
     ok = await sidebar_svc.update_inpatient_vitals_for_doctor(
         db,
         user,
         hid,
-        uuid.UUID(admission_id),
+        _parse_uuid(admission_id, "admission_id"),
         body,
     )
     if not ok:
@@ -187,7 +207,7 @@ async def sidebar_messages(
     db: AsyncSession = Depends(get_db_session),
 ):
     """Telemedicine notifications and prescription notifications for the current user."""
-    hid = uuid.UUID(ctx["hospital_id"])
+    hid = _hospital_uuid(ctx)
     return await sidebar_svc.list_messages_for_doctor(
         db, user, hid, limit=limit, unread_only=unread_only
     )
@@ -205,7 +225,7 @@ async def sidebar_send_message(
     ctx: Dict = Depends(require_hospital_context),
     db: AsyncSession = Depends(get_db_session),
 ):
-    hid = uuid.UUID(ctx["hospital_id"])
+    hid = _hospital_uuid(ctx)
     return await sidebar_svc.create_message_for_doctor(db, user, hid, body)
 
 
@@ -220,9 +240,8 @@ async def sidebar_mark_message_read(
     ctx: Dict = Depends(require_hospital_context),
     db: AsyncSession = Depends(get_db_session),
 ):
-    hid = uuid.UUID(ctx["hospital_id"])
-    mid = uuid.UUID(body.message_id)
-    ok = await sidebar_svc.mark_message_read(db, user, hid, body.source, mid)
+    hid = _hospital_uuid(ctx)
+    ok = await sidebar_svc.mark_message_read(db, user, hid, body.source, body.message_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
 

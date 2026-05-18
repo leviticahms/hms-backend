@@ -550,7 +550,7 @@ async def create_message_for_doctor(
     rec = TelemedNotification(
         id=uuid.uuid4(),
         hospital_id=hospital_id,
-        recipient_user_id=uuid.UUID(payload.recipient_user_id),
+        recipient_user_id=payload.recipient_user_id,
         session_id=None,
         event_type=(payload.event_type or "NEW_MESSAGE").strip() or "NEW_MESSAGE",
         title=payload.title,

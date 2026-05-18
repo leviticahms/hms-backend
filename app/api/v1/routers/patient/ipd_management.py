@@ -16,13 +16,11 @@ BUSINESS RULES:
 - Department-based access: Users can only access patients in their assigned department
 """
 
-print("IPD FILE LOADED")
 from typing import Optional
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-<<<<<<< HEAD
 from sqlalchemy.orm import selectinload
 from app.core.database import get_db_session, get_platform_db_session
 from app.core.security import get_current_user
@@ -31,41 +29,15 @@ from app.models.patient import PatientProfile
 from app.services.clinical_service import ClinicalService
 from app.services.patient_tenant_bridge import resolve_patient_profile_id_for_tenant
 from app.schemas.clinical import (
-    PatientAdmissionCreate, BedAssignmentCreate, TreatmentPlanCreate,
-    MedicationAdministrationCreate, DoctorRoundsCreate,
+    PatientAdmissionCreate,
+    DoctorRoundsCreate,
     DebugPatientEditUpdate,
 )
-=======
-from app.database.session import get_db_session, get_platform_db_session
-
-from app.core.security import get_current_user
-from app.models.user import User
-from app.models.patient import PatientProfile
-try:
-    from app.services.clinical_service import ClinicalService
-    print("SERVICE OK")
-
-except Exception as e:
-    print("SERVICE IMPORT FAILED")
-    print(e)
-try:
-    from app.schemas.clinical import (
-        PatientAdmissionCreate,
-        DoctorRoundsCreate,
-        DebugPatientEditUpdate,
-    )
-    print("SCHEMAS OK")
-
-except Exception as e:
-    print("SCHEMA IMPORT FAILED")
-    print(e)
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 from app.core.response_utils import success_response
 
 router = APIRouter(prefix="/ipd-management", tags=["Patient Portal - IPD Management"])
 
 
-<<<<<<< HEAD
 def _clinical_service(
     db: AsyncSession,
     platform_db: AsyncSession,
@@ -73,8 +45,6 @@ def _clinical_service(
     """IPD uses tenant ``db`` for admissions/staff; ``platform_db`` for OPD-registered patients."""
     return ClinicalService(db, platform_db=platform_db)
 
-=======
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 
 # ============================================================================
 # IPD PATIENT ADMISSIONS
@@ -84,27 +54,18 @@ def _clinical_service(
 async def admit_patient_to_ipd(
     admission_data: PatientAdmissionCreate,
     current_user: User = Depends(get_current_user),
-<<<<<<< HEAD
     db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
-=======
-    platform_db: AsyncSession = Depends(get_platform_db_session),
-    tenant_db: AsyncSession = Depends(get_db_session)
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 ):
     """
     Admit patient to IPD.
-    
+
     Access Control:
     - Only Doctors can admit patients to IPD
     - Patient must exist in the system and belong to the same hospital
     - Any doctor in the hospital can admit any patient from the same hospital
     """
-<<<<<<< HEAD
     clinical_service = _clinical_service(db, platform_db)
-=======
-    clinical_service = ClinicalService(platform_db, tenant_db)
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
     result = await clinical_service.admit_patient_to_ipd(admission_data.dict(), current_user)
     return success_response(message="Operation completed successfully", data=result)
 
@@ -116,27 +77,18 @@ async def admit_patient_to_ipd(
 @router.get("/available-patients")
 async def get_available_patients_for_admission(
     current_user: User = Depends(get_current_user),
-<<<<<<< HEAD
     db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
-=======
-    platform_db: AsyncSession = Depends(get_platform_db_session),
-    tenant_db: AsyncSession = Depends(get_db_session),
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 ):
     """
     Get list of patients that the doctor can see.
-    
+
     Returns all patients in the hospital with their admission status.
-    
+
     Access Control:
     - Only Doctors can access this endpoint
     """
-<<<<<<< HEAD
     clinical_service = _clinical_service(db, platform_db)
-=======
-    clinical_service = ClinicalService(platform_db, tenant_db)
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
     result = await clinical_service.get_available_patients_for_admission(current_user)
     return success_response(message="Operation completed successfully", data=result)
 
@@ -156,26 +108,17 @@ async def get_ipd_patients(
         description="If true, return active admissions for the entire hospital (not only the caller's department).",
     ),
     current_user: User = Depends(get_current_user),
-<<<<<<< HEAD
     db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
-=======
-    platform_db: AsyncSession = Depends(get_platform_db_session),
-    tenant_db: AsyncSession = Depends(get_db_session),
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 ):
     """
     Get list of IPD patients in user's department.
-    
+
     Access Control:
     - Nurses and Doctors can view IPD patients
     - Department-based access control
     """
-<<<<<<< HEAD
     clinical_service = _clinical_service(db, platform_db)
-=======
-    clinical_service = ClinicalService(platform_db, tenant_db)
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
     filters = {
         "page": page,
         "limit": limit,
@@ -191,26 +134,17 @@ async def get_ipd_patients(
 async def get_ipd_admission_details(
     admission_number: str,
     current_user: User = Depends(get_current_user),
-<<<<<<< HEAD
     db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
-=======
-    platform_db: AsyncSession = Depends(get_platform_db_session),
-    tenant_db: AsyncSession = Depends(get_db_session),
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 ):
     """
     Get detailed IPD admission information.
-    
+
     Access Control:
     - Nurses and Doctors can view admission details
     - Department-based access control
     """
-<<<<<<< HEAD
     clinical_service = _clinical_service(db, platform_db)
-=======
-    clinical_service = ClinicalService(platform_db, tenant_db)
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
     result = await clinical_service.get_ipd_admission_details(admission_number, current_user)
     return success_response(message="Operation completed successfully", data=result)
 
@@ -223,26 +157,17 @@ async def get_ipd_admission_details(
 async def create_doctor_rounds(
     rounds_data: DoctorRoundsCreate,
     current_user: User = Depends(get_current_user),
-<<<<<<< HEAD
     db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
-=======
-    platform_db: AsyncSession = Depends(get_platform_db_session),
-    tenant_db: AsyncSession = Depends(get_db_session),
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 ):
     """
     Document doctor rounds for IPD patient.
-    
+
     Access Control:
     - Only Doctors can document rounds
     - Department-based access control
     """
-<<<<<<< HEAD
     clinical_service = _clinical_service(db, platform_db)
-=======
-    clinical_service = ClinicalService(platform_db, tenant_db)
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
     result = await clinical_service.create_doctor_rounds(rounds_data.dict(), current_user)
     return success_response(message="Operation completed successfully", data=result)
 
@@ -254,26 +179,17 @@ async def create_doctor_rounds(
 @router.get("/dashboard")
 async def get_ipd_dashboard(
     current_user: User = Depends(get_current_user),
-<<<<<<< HEAD
     db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
-=======
-    platform_db: AsyncSession = Depends(get_platform_db_session),
-    tenant_db: AsyncSession = Depends(get_db_session),
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 ):
     """
     Get IPD dashboard with key metrics and patient information.
-    
+
     Access Control:
     - Nurses and Doctors can access IPD dashboard
     - Department-specific metrics
     """
-<<<<<<< HEAD
     clinical_service = _clinical_service(db, platform_db)
-=======
-    clinical_service = ClinicalService(platform_db, tenant_db)
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
     result = await clinical_service.get_ipd_dashboard(current_user)
     return success_response(message="Operation completed successfully", data=result)
 
@@ -285,22 +201,13 @@ async def get_ipd_dashboard(
 @router.get("/debug/all-patients")
 async def debug_list_all_patients(
     current_user: User = Depends(get_current_user),
-<<<<<<< HEAD
     db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
-=======
-    platform_db: AsyncSession = Depends(get_platform_db_session),
-    tenant_db: AsyncSession = Depends(get_db_session),
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 ):
     """
     DEBUG: List all patients in the hospital for testing purposes.
     """
-<<<<<<< HEAD
     clinical_service = _clinical_service(db, platform_db)
-=======
-    clinical_service = ClinicalService(platform_db, tenant_db)
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
     user_context = clinical_service.get_user_context(current_user)
 
     # Prefer platform registry (receptionist OPD); falls back to routed session if needed.
@@ -310,20 +217,14 @@ async def debug_list_all_patients(
     query = select(PatientProfile)
     if user_context.get("hospital_id"):
         query = query.where(PatientProfile.hospital_id == uuid.UUID(user_context["hospital_id"]))
-<<<<<<< HEAD
 
     patients_result = await patient_db.execute(
         query.options(selectinload(PatientProfile.user))
         .order_by(PatientProfile.created_at.desc())
-=======
-    
-    patients_result = await tenant_db.execute(
-        query.order_by(PatientProfile.created_at.desc())
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
     )
-    
+
     patients = patients_result.scalars().all()
-    
+
     patient_list = []
     for patient in patients:
         patient_list.append({
@@ -333,7 +234,7 @@ async def debug_list_all_patients(
             "hospital_id": str(patient.hospital_id),
             "created_at": patient.created_at.isoformat()
         })
-    
+
     return success_response(message="Operation completed successfully", data={
         "hospital_id": user_context.get("hospital_id"),
         "total_patients": len(patient_list),
@@ -346,23 +247,14 @@ async def debug_edit_patient(
     patient_ref: str,
     payload: DebugPatientEditUpdate,
     current_user: User = Depends(get_current_user),
-<<<<<<< HEAD
     db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
-=======
-    platform_db: AsyncSession = Depends(get_platform_db_session),
-    tenant_db: AsyncSession = Depends(get_db_session),
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
 ):
     """
     DEBUG: Edit a patient from the debug patient list by patient_ref.
     Hospital-scoped; updates user + patient profile fields.
     """
-<<<<<<< HEAD
     clinical_service = _clinical_service(db, platform_db)
-=======
-    clinical_service = ClinicalService(platform_db, tenant_db)
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
     user_context = clinical_service.get_user_context(current_user)
     if not user_context.get("hospital_id"):
         raise HTTPException(
@@ -371,7 +263,6 @@ async def debug_edit_patient(
         )
 
     hospital_id = uuid.UUID(user_context["hospital_id"])
-<<<<<<< HEAD
     await resolve_patient_profile_id_for_tenant(
         (patient_ref or "").strip(),
         hospital_id,
@@ -379,26 +270,17 @@ async def debug_edit_patient(
         platform_db,
     )
     result = await db.execute(
-=======
-    result = await tenant_db.execute(
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
         select(PatientProfile)
         .where(
             PatientProfile.patient_id == (patient_ref or "").strip(),
             PatientProfile.hospital_id == hospital_id,
         )
-<<<<<<< HEAD
         .options(selectinload(PatientProfile.user))
         .order_by(PatientProfile.created_at.desc())
         .limit(1)
     )
     patient = result.scalars().first()
     if not patient or not patient.user:
-=======
-    )
-    patient = result.scalar_one_or_none()
-    if not patient:
->>>>>>> 2a76c0f (Implemented clinical and IPD management updates)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Patient '{patient_ref}' not found in this hospital.",
@@ -429,8 +311,8 @@ async def debug_edit_patient(
             setattr(patient, key, data[key])
 
     await platform_db.commit()
-    await tenant_db.commit()
-    await tenant_db.refresh(patient)
+    await db.commit()
+    await db.refresh(patient)
 
     return success_response(
         message="Patient updated successfully",
@@ -444,10 +326,7 @@ async def debug_edit_patient(
         },
     )
 
+
 @router.get("/test")
 async def test_ipd():
     return {"ok": True}
-
-
-
-print("IPD FILE LOADED")
