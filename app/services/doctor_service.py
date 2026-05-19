@@ -271,6 +271,17 @@ class DoctorService:
         if schedule.effective_from and schedule.effective_from == schedule.effective_to:
             return schedule.effective_from
         return schedule.effective_from
+
+    @staticmethod
+    def _schedule_date_value(value: Any) -> Optional[str]:
+        """DoctorSchedule.effective_* are String(10) columns, not date objects."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value.strip()[:10] if value.strip() else None
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return str(value)
     
     # ============================================================================
     # USER CONTEXT AND VALIDATION
@@ -633,8 +644,8 @@ class DoctorService:
             "end_time": schedule.end_time.strftime("%H:%M"),
             "slot_duration_minutes": schedule.slot_duration_minutes,
             "is_active": schedule.is_active,
-            "effective_from": schedule.effective_from.isoformat() if schedule.effective_from else None,
-            "effective_to": schedule.effective_to.isoformat() if schedule.effective_to else None,
+            "effective_from": self._schedule_date_value(schedule.effective_from),
+            "effective_to": self._schedule_date_value(schedule.effective_to),
             "notes": schedule.notes,
         }
     
