@@ -4,7 +4,7 @@ Handles OPD, IPD, and nursing management business logic.
 """
 import logging
 import uuid
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta, date, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc, func, asc
@@ -25,6 +25,7 @@ from app.core.security import SecurityManager
 from app.utils.receptionist_serializers import (
     build_receptionist_patient_full_payload,
     serialize_opd_appointment_full,
+    serialize_opd_appointment_table_row,
 )
 from app.services.patient_tenant_bridge import resolve_patient_profile_id_for_tenant
 
@@ -81,7 +82,17 @@ def _normalize_opd_appointment_status(raw: Any) -> Optional[str]:
         return AppointmentStatus.CANCELLED.value
     if s in ("DONE", "COMPLETE", "COMPLETED"):
         return AppointmentStatus.COMPLETED.value
-    return s
+    if s in ("CHECKED_IN", "CHECKED-IN", "CHECK IN"):
+        return "CHECKED_IN"
+    if s in ("WAITING", "IN_QUEUE", "QUEUE"):
+        return "WAITING"
+    if s in ("IN_CONSULTATION", "IN-CONSULTATION", "IN_PROGRESS", "CONSULTING"):
+        return "IN_CONSULTATION"
+    if s in ("NO_SHOW", "NO-SHOW", "NOSHOW"):
+        return "NO_SHOW"
+    if s in ("SCHEDULED",):
+        return AppointmentStatus.CONFIRMED.value
+    return s[:20]
 
 
 def _normalize_opd_blood_group(bg: Optional[str]) -> Optional[str]:
@@ -133,11 +144,16 @@ async def send_opd_portal_credentials_email_task(
 class ClinicalService:
     """Service for clinical operations (OPD, IPD, Nursing)"""
 
-    def __init__(self, db: AsyncSession, platform_db: Optional[AsyncSession] = None):
+    def __init__(
+        self,
+        db: AsyncSession,
+        platform_db: Optional[AsyncSession] = None,
+        tenant_db: Optional[AsyncSession] = None,
+    ):
         self.db = db
         # Receptionist OPD routes pass a single platform session; default both aliases to it.
         self.platform_db = platform_db if platform_db is not None else db
-        self.tenant_db = db
+        self.tenant_db = tenant_db if tenant_db is not None else db
         self.security = SecurityManager()
 
     def _sessions_share_connection(self) -> bool:
@@ -192,6 +208,43 @@ class ClinicalService:
             seen.add(key)
             out.append(sess)
         return out
+
+    async def _resolve_opd_appointment_by_ref(
+        self,
+        appointment_ref: str,
+        hospital_id_uuid: uuid.UUID,
+    ) -> Tuple[Optional[Appointment], Optional[AsyncSession]]:
+        """Resolve appointment on platform first, then tenant."""
+        load_opts = (
+            selectinload(Appointment.patient).selectinload(PatientProfile.user),
+            selectinload(Appointment.doctor),
+            selectinload(Appointment.department),
+        )
+        for sess in self._opd_db_sessions():
+            result = await sess.execute(
+                select(Appointment)
+                .where(
+                    and_(
+                        Appointment.appointment_ref == appointment_ref,
+                        Appointment.hospital_id == hospital_id_uuid,
+                    )
+                )
+                .options(*load_opts)
+            )
+            appointment = result.scalar_one_or_none()
+            if appointment:
+                return appointment, sess
+        return None, None
+
+    async def _load_opd_appointment_by_ref(
+        self,
+        appointment_ref: str,
+        hospital_id_uuid: uuid.UUID,
+    ) -> Optional[Appointment]:
+        appointment, _ = await self._resolve_opd_appointment_by_ref(
+            appointment_ref, hospital_id_uuid
+        )
+        return appointment
 
     async def _load_opd_patient_by_ref(
         self, patient_ref: str, hospital_id_uuid: uuid.UUID
@@ -1156,12 +1209,12 @@ class ClinicalService:
 
         hid = user_context.get("hospital_id")
         department = await self.get_department_by_id_or_name(
-            appointment_data.get("department_id"),
+            None,
             appointment_data.get("department_name"),
             hid,
         )
         doctor = await self._resolve_doctor_for_scheduling(
-            appointment_data.get("doctor_id"),
+            None,
             appointment_data.get("doctor_name"),
             hospital_id_uuid,
             department_id=department.id if department else None,
@@ -1342,61 +1395,119 @@ class ClinicalService:
         limit = filters.get("limit", 50)
         offset = (page - 1) * limit
         status_filter = _normalize_opd_appointment_status(filters.get("status"))
-        
-        query = select(Appointment).where(
-            and_(
-                Appointment.hospital_id == hospital_id_uuid,
-                Appointment.appointment_date == today
+        search_term = (filters.get("search") or filters.get("q") or "").strip()
+
+        base_conditions = [
+            Appointment.hospital_id == hospital_id_uuid,
+            Appointment.appointment_date == today,
+        ]
+
+        query = (
+            select(Appointment)
+            .where(and_(*base_conditions))
+            .options(
+                selectinload(Appointment.patient).selectinload(PatientProfile.user),
+                selectinload(Appointment.doctor),
+                selectinload(Appointment.department),
             )
-        ).options(
-            selectinload(Appointment.patient).selectinload(PatientProfile.user),
-            selectinload(Appointment.doctor),
-            selectinload(Appointment.department),
-        ).order_by(asc(Appointment.appointment_time))
-        
-        # Apply filters
+            .order_by(asc(Appointment.appointment_time))
+        )
+
         if filters.get("department_name"):
-            query = query.join(Department).where(Department.name == filters["department_name"])
-        
-        if filters.get("doctor_name"):
-            query = query.join(User, Appointment.doctor_id == User.id).where(
+            dname = filters["department_name"].strip()
+            query = query.join(Department).where(
                 or_(
-                    func.concat(User.first_name, ' ', User.last_name) == filters["doctor_name"],
-                    func.concat('Dr. ', User.first_name, ' ', User.last_name) == filters["doctor_name"]
+                    Department.name.ilike(f"%{dname}%"),
+                    Department.code.ilike(f"%{dname}%"),
                 )
             )
-        
+        if filters.get("doctor_name"):
+            ddoc = filters["doctor_name"].strip()
+            query = query.join(User, Appointment.doctor_id == User.id).where(
+                or_(
+                    func.concat(User.first_name, " ", User.last_name).ilike(f"%{ddoc}%"),
+                    func.concat("Dr. ", User.first_name, " ", User.last_name).ilike(f"%{ddoc}%"),
+                )
+            )
         if status_filter:
             query = query.where(Appointment.status == status_filter)
-        
-        # Get total count
-        count_query = select(func.count(Appointment.id)).where(
-            and_(
-                Appointment.hospital_id == hospital_id_uuid,
-                Appointment.appointment_date == today
+        if search_term:
+            from sqlalchemy.orm import aliased
+
+            term = f"%{search_term}%"
+            patient_user = aliased(User)
+            doctor_user = aliased(User)
+            query = (
+                query.join(PatientProfile, Appointment.patient_id == PatientProfile.id)
+                .join(patient_user, PatientProfile.user_id == patient_user.id)
+                .join(doctor_user, Appointment.doctor_id == doctor_user.id)
+                .where(
+                    or_(
+                        Appointment.appointment_ref.ilike(term),
+                        PatientProfile.patient_id.ilike(term),
+                        func.concat(patient_user.first_name, " ", patient_user.last_name).ilike(term),
+                        func.concat(doctor_user.first_name, " ", doctor_user.last_name).ilike(term),
+                        func.concat("Dr. ", doctor_user.first_name, " ", doctor_user.last_name).ilike(term),
+                    )
+                )
             )
-        )
-        
+
+        count_query = select(func.count(Appointment.id.distinct())).where(and_(*base_conditions))
         if filters.get("department_name"):
-            count_query = count_query.join(Department).where(Department.name == filters["department_name"])
+            dname = filters["department_name"].strip()
+            count_query = count_query.join(Department).where(
+                or_(
+                    Department.name.ilike(f"%{dname}%"),
+                    Department.code.ilike(f"%{dname}%"),
+                )
+            )
         if filters.get("doctor_name"):
+            ddoc = filters["doctor_name"].strip()
             count_query = count_query.join(User, Appointment.doctor_id == User.id).where(
                 or_(
-                    func.concat(User.first_name, ' ', User.last_name) == filters["doctor_name"],
-                    func.concat('Dr. ', User.first_name, ' ', User.last_name) == filters["doctor_name"]
+                    func.concat(User.first_name, " ", User.last_name).ilike(f"%{ddoc}%"),
+                    func.concat("Dr. ", User.first_name, " ", User.last_name).ilike(f"%{ddoc}%"),
                 )
             )
         if status_filter:
             count_query = count_query.where(Appointment.status == status_filter)
+        if search_term:
+            term = f"%{search_term}%"
+            from sqlalchemy.orm import aliased
+
+            patient_user = aliased(User)
+            doctor_user = aliased(User)
+            count_query = (
+                count_query.join(PatientProfile, Appointment.patient_id == PatientProfile.id)
+                .join(patient_user, PatientProfile.user_id == patient_user.id)
+                .join(doctor_user, Appointment.doctor_id == doctor_user.id)
+                .where(
+                    or_(
+                        Appointment.appointment_ref.ilike(term),
+                        PatientProfile.patient_id.ilike(term),
+                        func.concat(patient_user.first_name, " ", patient_user.last_name).ilike(term),
+                        func.concat(doctor_user.first_name, " ", doctor_user.last_name).ilike(term),
+                        func.concat("Dr. ", doctor_user.first_name, " ", doctor_user.last_name).ilike(term),
+                    )
+                )
+            )
         
-        total_result = await self.db.execute(count_query)
-        total_appointments = total_result.scalar() or 0
-        
-        # Get paginated appointments
-        appointments_result = await self.db.execute(query.offset(offset).limit(limit))
-        appointments = appointments_result.scalars().all()
-        
-        appointment_list = [serialize_opd_appointment_full(a) for a in appointments]
+        merged_by_ref: Dict[str, Appointment] = {}
+        for sess in self._opd_db_sessions():
+            rows_result = await sess.execute(query)
+            for appt in rows_result.scalars().unique().all():
+                ref = appt.appointment_ref
+                if ref and ref not in merged_by_ref:
+                    merged_by_ref[ref] = appt
+
+        all_appointments = sorted(
+            merged_by_ref.values(),
+            key=lambda a: (a.appointment_time or "", str(a.appointment_ref or "")),
+        )
+        total_appointments = len(all_appointments)
+        appointments = all_appointments[offset : offset + limit]
+
+        appointment_list = [serialize_opd_appointment_table_row(a) for a in appointments]
         
         return {
             "date": today,
@@ -1419,21 +1530,7 @@ class ClinicalService:
         user_context = self.get_user_context(current_user)
         await self.validate_receptionist_access(user_context)
         hospital_id_uuid = self._hospital_uuid(user_context)
-        appointment_result = await self.db.execute(
-            select(Appointment)
-            .where(
-                and_(
-                    Appointment.appointment_ref == appointment_ref,
-                    Appointment.hospital_id == hospital_id_uuid,
-                )
-            )
-            .options(
-                selectinload(Appointment.patient).selectinload(PatientProfile.user),
-                selectinload(Appointment.doctor),
-                selectinload(Appointment.department),
-            )
-        )
-        appointment = appointment_result.scalar_one_or_none()
+        appointment = await self._load_opd_appointment_by_ref(appointment_ref, hospital_id_uuid)
         if not appointment:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1447,29 +1544,15 @@ class ClinicalService:
         await self.validate_receptionist_access(user_context)
         hospital_id_uuid = self._hospital_uuid(user_context)
         
-        # Get appointment
-        appointment_result = await self.db.execute(
-            select(Appointment)
-            .where(
-                and_(
-                    Appointment.appointment_ref == appointment_ref,
-                    Appointment.hospital_id == hospital_id_uuid,
-                )
-            )
-            .options(
-                selectinload(Appointment.patient).selectinload(PatientProfile.user),
-                selectinload(Appointment.doctor),
-                selectinload(Appointment.department),
-            )
+        appointment, write_db = await self._resolve_opd_appointment_by_ref(
+            appointment_ref, hospital_id_uuid
         )
-        
-        appointment = appointment_result.scalar_one_or_none()
-        if not appointment:
+        if not appointment or write_db is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Appointment {appointment_ref} not found"
             )
-        
+
         # Check if appointment can be modified
         if appointment.status == AppointmentStatus.COMPLETED:
             raise HTTPException(
@@ -1496,65 +1579,13 @@ class ClinicalService:
                 )
             appointment.patient_id = patient.id
 
-        # Apply department before doctor so name-based doctor resolution stays in the right department
-        if modification_data.get("department_id"):
-            try:
-                dep_id = uuid.UUID(str(modification_data["department_id"]).strip())
-            except ValueError:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="department_id must be a valid UUID",
-                )
-            dep_result = await self.db.execute(
-                select(Department).where(
-                    and_(
-                        Department.id == dep_id,
-                        Department.hospital_id == user_context["hospital_id"],
-                        Department.is_active == True,
-                    )
-                )
-            )
-            dep = dep_result.scalar_one_or_none()
-            if not dep:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Department not found for provided department_id",
-                )
-            appointment.department_id = dep.id
-        elif modification_data.get("department_name"):
+        if modification_data.get("department_name"):
             department = await self.get_department_by_name(
                 modification_data["department_name"], user_context["hospital_id"]
             )
             appointment.department_id = department.id
 
-        if modification_data.get("doctor_id"):
-            try:
-                doctor_user_id = uuid.UUID(str(modification_data["doctor_id"]).strip())
-            except ValueError:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="doctorId must be a valid UUID",
-                )
-            doctor_result = await self.db.execute(
-                select(User)
-                .join(user_roles, User.id == user_roles.c.user_id)
-                .join(Role, user_roles.c.role_id == Role.id)
-                .where(
-                    and_(
-                        User.id == doctor_user_id,
-                        User.hospital_id == user_context["hospital_id"],
-                        Role.name == UserRole.DOCTOR.value,
-                    )
-                )
-            )
-            doctor = doctor_result.scalar_one_or_none()
-            if not doctor:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Doctor not found for provided doctorId",
-                )
-            appointment.doctor_id = doctor.id
-        elif modification_data.get("doctor_name"):
+        if modification_data.get("doctor_name"):
             doctor = await self.get_doctor_by_name(
                 modification_data["doctor_name"],
                 user_context["hospital_id"],
@@ -1602,7 +1633,7 @@ class ClinicalService:
         )
         st_upper = (appointment.status or "").strip().upper()
         if st_upper not in ("CANCELLED", "COMPLETED"):
-            in_dept = await self.db.execute(
+            in_dept = await write_db.execute(
                 select(StaffDepartmentAssignment.id).where(
                     and_(
                         StaffDepartmentAssignment.staff_id == appointment.doctor_id,
@@ -1634,7 +1665,7 @@ class ClinicalService:
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Appointment must be rescheduled to a future date and time",
                     )
-                svc = AppointmentService(self.db)
+                svc = AppointmentService(write_db)
                 day_slots = await svc.get_available_time_slots_for_doctor_user(
                     appointment.doctor_id,
                     appointment.appointment_date,
@@ -1661,41 +1692,170 @@ class ClinicalService:
                 if "duration_minutes" in match:
                     appointment.duration_minutes = int(match["duration_minutes"])
 
-        await self.db.commit()
-        
+        await write_db.commit()
+
         return {
             "appointment_ref": appointment_ref,
             "message": "Appointment modified successfully",
             "modified_by": f"{current_user.first_name} {current_user.last_name} (Receptionist)",
             "modified_at": datetime.utcnow().isoformat()
         }
+
+    async def _load_opd_appointment_for_receptionist(
+        self,
+        appointment_ref: str,
+        current_user: User,
+    ) -> Tuple[Appointment, AsyncSession]:
+        user_context = self.get_user_context(current_user)
+        await self.validate_receptionist_access(user_context)
+        hospital_id_uuid = self._hospital_uuid(user_context)
+        appointment, write_db = await self._resolve_opd_appointment_by_ref(
+            appointment_ref, hospital_id_uuid
+        )
+        if not appointment or write_db is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Appointment {appointment_ref} not found",
+            )
+        return appointment, write_db
+
+    async def update_opd_appointment_status(
+        self,
+        appointment_ref: str,
+        status_value: str,
+        current_user: User,
+    ) -> Dict[str, Any]:
+        appointment, write_db = await self._load_opd_appointment_for_receptionist(
+            appointment_ref, current_user
+        )
+        if appointment.status == AppointmentStatus.COMPLETED.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot change status of a completed appointment",
+            )
+        normalized = _normalize_opd_appointment_status(status_value)
+        if not normalized:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid appointment status",
+            )
+        appointment.status = normalized
+        if normalized == "CHECKED_IN" and not appointment.checked_in_at:
+            appointment.checked_in_at = datetime.now(timezone.utc)
+        if normalized == AppointmentStatus.COMPLETED.value:
+            appointment.completed_at = datetime.now(timezone.utc)
+        if normalized == AppointmentStatus.CANCELLED.value:
+            appointment.cancelled_at = datetime.now(timezone.utc)
+        await write_db.commit()
+        return {
+            "appointment_ref": appointment_ref,
+            "status": appointment.status,
+            "message": "Appointment status updated successfully",
+        }
+
+    async def cancel_opd_appointment(
+        self,
+        appointment_ref: str,
+        cancel_data: Dict[str, Any],
+        current_user: User,
+    ) -> Dict[str, Any]:
+        appointment, write_db = await self._load_opd_appointment_for_receptionist(
+            appointment_ref, current_user
+        )
+        if appointment.status == AppointmentStatus.COMPLETED.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot cancel a completed appointment",
+            )
+        appointment.status = AppointmentStatus.CANCELLED.value
+        appointment.cancelled_at = datetime.now(timezone.utc)
+        reason = (cancel_data.get("cancel_reason") or cancel_data.get("cancellation_reason") or "").strip()
+        if reason:
+            appointment.cancellation_reason = reason
+        await write_db.commit()
+        return {
+            "appointment_ref": appointment_ref,
+            "status": appointment.status,
+            "cancel_reason": appointment.cancellation_reason,
+            "message": "Appointment cancelled successfully",
+        }
+
+    async def delete_opd_appointment(
+        self,
+        appointment_ref: str,
+        current_user: User,
+    ) -> Dict[str, Any]:
+        appointment, write_db = await self._load_opd_appointment_for_receptionist(
+            appointment_ref, current_user
+        )
+        if appointment.status == AppointmentStatus.COMPLETED.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete a completed appointment",
+            )
+        await write_db.delete(appointment)
+        await write_db.commit()
+        return {
+            "appointment_ref": appointment_ref,
+            "message": "Appointment deleted successfully",
+        }
+
+    async def get_opd_appointment_dashboard_stats(
+        self,
+        current_user: User,
+        target_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Statistics cards for appointment scheduling UI."""
+        user_context = self.get_user_context(current_user)
+        await self.validate_receptionist_access(user_context)
+        hospital_id_uuid = self._hospital_uuid(user_context)
+        day = (target_date or date.today().isoformat())[:10]
+
+        rows_by_ref: Dict[str, tuple] = {}
+        for sess in self._opd_db_sessions():
+            result = await sess.execute(
+                select(
+                    Appointment.appointment_ref,
+                    Appointment.status,
+                    Appointment.checked_in_at,
+                ).where(
+                    and_(
+                        Appointment.hospital_id == hospital_id_uuid,
+                        Appointment.appointment_date == day,
+                    )
+                )
+            )
+            for ref, status_raw, checked_at in result.all():
+                if ref and ref not in rows_by_ref:
+                    rows_by_ref[ref] = (status_raw, checked_at)
+        rows = list(rows_by_ref.values())
+        total = len(rows)
+        completed = cancelled = waiting = checked_in = 0
+        for status_raw, checked_at in rows:
+            st = (status_raw or "").upper()
+            if st == AppointmentStatus.COMPLETED.value:
+                completed += 1
+            elif st == AppointmentStatus.CANCELLED.value:
+                cancelled += 1
+            elif st == "WAITING":
+                waiting += 1
+            elif st in ("CHECKED_IN", "IN_CONSULTATION") or checked_at is not None:
+                checked_in += 1
+
+        return {
+            "date": day,
+            "total_appointments": total,
+            "checked_in": checked_in,
+            "waiting": waiting,
+            "completed": completed,
+            "cancelled": cancelled,
+        }
     
     async def check_in_patient(self, appointment_ref: str, checkin_data: Dict[str, Any], current_user: User) -> Dict[str, Any]:
         """Check-in patient for their appointment"""
-        user_context = self.get_user_context(current_user)
-        await self.validate_receptionist_access(user_context)
-        
-        # Get appointment
-        appointment_result = await self.db.execute(
-            select(Appointment)
-            .where(
-                and_(
-                    Appointment.appointment_ref == appointment_ref,
-                    Appointment.hospital_id == user_context["hospital_id"]
-                )
-            )
-            .options(
-                selectinload(Appointment.patient),
-                selectinload(Appointment.doctor)
-            )
+        appointment, write_db = await self._load_opd_appointment_for_receptionist(
+            appointment_ref, current_user
         )
-        
-        appointment = appointment_result.scalar_one_or_none()
-        if not appointment:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Appointment {appointment_ref} not found"
-            )
         
         # Check if appointment is for today
         today = date.today().isoformat()
@@ -1712,20 +1872,31 @@ class ClinicalService:
                 detail="Patient is already checked in"
             )
         
-        # Check-in patient
-        appointment.checked_in_at = datetime.utcnow()
-        appointment.status = AppointmentStatus.CONFIRMED
-        
-        await self.db.commit()
-        
+        appointment.checked_in_at = datetime.now(timezone.utc)
+        appointment.status = "CHECKED_IN"
+
+        await write_db.commit()
+
+        checked_by = (checkin_data.get("checked_in_by") or "").strip()
+        if not checked_by:
+            checked_by = f"{current_user.first_name} {current_user.last_name} (Receptionist)"
+
+        patient = appointment.patient
+        patient_name = ""
+        patient_ref = ""
+        if patient and patient.user:
+            patient_name = f"{patient.user.first_name} {patient.user.last_name}".strip()
+            patient_ref = patient.patient_id or ""
+
         return {
             "appointment_ref": appointment_ref,
-            "patient_ref": appointment.patient.patient_id,
-            "patient_name": f"{appointment.patient.user.first_name} {appointment.patient.user.last_name}",
+            "patient_ref": patient_ref,
+            "patient_name": patient_name,
             "doctor_name": f"Dr. {appointment.doctor.first_name} {appointment.doctor.last_name}",
             "checked_in_at": appointment.checked_in_at.isoformat(),
-            "checked_in_by": f"{current_user.first_name} {current_user.last_name} (Receptionist)",
-            "message": "Patient checked in successfully"
+            "checked_in_by": checked_by,
+            "status": appointment.status,
+            "message": "Patient checked in successfully",
         }
     
     async def get_opd_dashboard(self, current_user: User) -> Dict[str, Any]:
@@ -1736,45 +1907,34 @@ class ClinicalService:
         dept_name, work_area = self._receptionist_ui_meta(current_user)
         
         today = date.today().isoformat()
-        
-        # Get today's appointments count
-        todays_appointments_result = await self.db.execute(
-            select(func.count(Appointment.id))
-            .where(
-                and_(
-                    Appointment.hospital_id == hospital_id_uuid,
-                    Appointment.appointment_date == today
+
+        appts_by_ref: Dict[str, Appointment] = {}
+        for sess in self._opd_db_sessions():
+            day_rows = await sess.execute(
+                select(Appointment).where(
+                    and_(
+                        Appointment.hospital_id == hospital_id_uuid,
+                        Appointment.appointment_date == today,
+                    )
                 )
             )
+            for appt in day_rows.scalars().all():
+                if appt.appointment_ref and appt.appointment_ref not in appts_by_ref:
+                    appts_by_ref[appt.appointment_ref] = appt
+
+        todays_appointments = len(appts_by_ref)
+        checked_in_patients = sum(
+            1 for a in appts_by_ref.values() if a.checked_in_at is not None
         )
-        todays_appointments = todays_appointments_result.scalar() or 0
-        
-        # Get checked-in patients count
-        checked_in_result = await self.db.execute(
-            select(func.count(Appointment.id))
-            .where(
-                and_(
-                    Appointment.hospital_id == hospital_id_uuid,
-                    Appointment.appointment_date == today,
-                    Appointment.checked_in_at.isnot(None)
-                )
+        pending_checkins = sum(
+            1
+            for a in appts_by_ref.values()
+            if a.checked_in_at is None
+            and (a.status or "") in (
+                AppointmentStatus.CONFIRMED.value,
+                AppointmentStatus.REQUESTED.value,
             )
         )
-        checked_in_patients = checked_in_result.scalar() or 0
-        
-        # Get pending appointments (not checked in)
-        pending_result = await self.db.execute(
-            select(func.count(Appointment.id))
-            .where(
-                and_(
-                    Appointment.hospital_id == hospital_id_uuid,
-                    Appointment.appointment_date == today,
-                    Appointment.checked_in_at.is_(None),
-                    Appointment.status.in_([AppointmentStatus.CONFIRMED, AppointmentStatus.REQUESTED])
-                )
-            )
-        )
-        pending_checkins = pending_result.scalar() or 0
         
         # Get total patients registered today
         today_date = date.today()  # Use actual date object instead of string
@@ -3068,7 +3228,7 @@ class ClinicalService:
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "AMBIGUOUS_DOCTOR",
-                "message": f"Multiple doctors match '{doctor_name}'. Refine the name or use doctor_id.",
+                "message": f"Multiple doctors match '{doctor_name}'. Refine the name or add department_name.",
             },
         )
 
@@ -3207,7 +3367,7 @@ class ClinicalService:
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="doctor_id or doctor_name is required",
+            detail="doctor_name is required",
         )
 
     async def get_primary_department_for_doctor(

@@ -18,7 +18,7 @@ BUSINESS RULES:
 import logging
 import os
 import uuid
-from typing import List, Optional
+from typing import AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import and_, desc, func, select
@@ -41,12 +41,39 @@ from app.schemas.clinical import (
     ReceptionistPatientPatch,
     AppointmentSchedulingCreate,
     AppointmentUpdate,
+    AppointmentStatusUpdate,
+    AppointmentCancelUpdate,
     PatientCheckInCreate,
 )
 from app.core.response_utils import success_response
 
 router = APIRouter(prefix="/receptionist")
 logger = logging.getLogger(__name__)
+
+
+async def get_receptionist_clinical_service(
+    current_user: User = Depends(require_receptionist()),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
+) -> AsyncGenerator[ClinicalService, None]:
+    """
+    OPD writes stay on platform; reads also query tenant DB when provisioned
+    (same pattern as doctor sidebar / IPD).
+    """
+    from app.database.tenant_context import resolve_tenant_database_name_for_hospital
+    from app.database.session import get_tenant_session_factory
+
+    if current_user.hospital_id:
+        tenant_name = await resolve_tenant_database_name_for_hospital(current_user.hospital_id)
+        if tenant_name:
+            factory = get_tenant_session_factory(tenant_name)
+            async with factory() as tenant_db:
+                yield ClinicalService(
+                    platform_db,
+                    platform_db=platform_db,
+                    tenant_db=tenant_db,
+                )
+            return
+    yield ClinicalService(platform_db, platform_db=platform_db)
 
 TAG_DASHBOARD = "Receptionist - Dashboard"
 TAG_PATIENT_REGISTRATION = "Receptionist - Patient Registration"
@@ -192,7 +219,7 @@ def _receptionist_profile_base_dict(current_user: User) -> dict:
 @router.get("/dashboard", tags=[TAG_DASHBOARD])
 async def get_receptionist_dashboard(
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session)
+    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
 ):
     """
     Get receptionist dashboard with key metrics and information.
@@ -209,7 +236,6 @@ async def get_receptionist_dashboard(
     - Pending registrations
     - Department-wise breakdown
     """
-    clinical_service = ClinicalService(db)
     result = await clinical_service.get_opd_dashboard(current_user)
     return success_response(message="Dashboard loaded successfully", data=result)
 
@@ -338,7 +364,7 @@ async def patch_opd_patient(
 async def schedule_appointment(
     appointment_data: AppointmentSchedulingCreate,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session)
+    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
 ):
     """
     Schedule appointment for an existing patient.
@@ -351,14 +377,16 @@ async def schedule_appointment(
     Access Control:
     - Receptionist (or authenticated user with access to this router)
     
+    Request body uses human-readable names only (`doctor_name`, optional `department_name`);
+    UUIDs for doctor/department are resolved server-side.
+
     Features:
     - Conflict detection
     - Doctor / department validation
-    
+
     Returns:
     - appointment_ref and scheduling confirmation
     """
-    clinical_service = ClinicalService(db)
     result = await clinical_service.schedule_opd_appointment(
         appointment_data.model_dump(), current_user
     )
@@ -369,11 +397,15 @@ async def schedule_appointment(
 async def get_todays_appointments(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
+    search: Optional[str] = Query(
+        None,
+        description="Search by patient name, appointment ref, or doctor name",
+    ),
     department_name: Optional[str] = Query(None, description="Filter by department"),
     doctor_name: Optional[str] = Query(None, description="Filter by doctor"),
     status: Optional[str] = Query(None, description="Filter by status: SCHEDULED, CHECKED_IN, IN_PROGRESS, COMPLETED, CANCELLED"),
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session)
+    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
 ):
     """
     Get today's appointments for the hospital.
@@ -394,13 +426,13 @@ async def get_todays_appointments(
     - Appointment status
     - Check-in status
     """
-    clinical_service = ClinicalService(db)
     filters = {
         "page": page,
         "limit": limit,
+        "search": search,
         "department_name": department_name,
         "doctor_name": doctor_name,
-        "status": status
+        "status": status,
     }
     result = await clinical_service.get_todays_opd_appointments(filters, current_user)
     return success_response(message="Appointments retrieved successfully", data=result)
@@ -410,10 +442,9 @@ async def get_todays_appointments(
 async def get_appointment_by_ref(
     appointment_ref: str,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
 ):
     """Get a single appointment by reference (same hospital as receptionist)."""
-    clinical_service = ClinicalService(db)
     data = await clinical_service.get_opd_appointment_by_ref(appointment_ref, current_user)
     return success_response(message="Appointment retrieved successfully", data=data)
 
@@ -423,7 +454,7 @@ async def modify_appointment(
     appointment_ref: str,
     modification_data: AppointmentUpdate,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session)
+    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
 ):
     """
     Modify existing appointment.
@@ -442,13 +473,48 @@ async def modify_appointment(
     - Updated appointment details
     - Confirmation
     """
-    clinical_service = ClinicalService(db)
     result = await clinical_service.modify_opd_appointment(
         appointment_ref,
         modification_data.model_dump(exclude_unset=True),
         current_user,
     )
     return success_response(message="Appointment modified successfully", data=result)
+
+
+@router.patch("/appointments/{appointment_ref}/status", tags=[TAG_APPOINTMENTS])
+async def update_appointment_status(
+    appointment_ref: str,
+    body: AppointmentStatusUpdate,
+    current_user: User = Depends(require_receptionist()),
+    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
+):
+    result = await clinical_service.update_opd_appointment_status(
+        appointment_ref, body.status, current_user
+    )
+    return success_response(message="Appointment status updated successfully", data=result)
+
+
+@router.patch("/appointments/{appointment_ref}/cancel", tags=[TAG_APPOINTMENTS])
+async def cancel_appointment(
+    appointment_ref: str,
+    body: AppointmentCancelUpdate,
+    current_user: User = Depends(require_receptionist()),
+    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
+):
+    result = await clinical_service.cancel_opd_appointment(
+        appointment_ref, body.model_dump(), current_user
+    )
+    return success_response(message="Appointment cancelled successfully", data=result)
+
+
+@router.delete("/appointments/{appointment_ref}", tags=[TAG_APPOINTMENTS])
+async def delete_appointment(
+    appointment_ref: str,
+    current_user: User = Depends(require_receptionist()),
+    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
+):
+    result = await clinical_service.delete_opd_appointment(appointment_ref, current_user)
+    return success_response(message="Appointment deleted successfully", data=result)
 
 
 # ============================================================================
@@ -460,7 +526,7 @@ async def check_in_patient(
     appointment_ref: str,
     checkin_data: PatientCheckInCreate,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session)
+    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
 ):
     """
     Check-in patient for their appointment.
@@ -480,7 +546,6 @@ async def check_in_patient(
     - Queue position
     - Estimated wait time
     """
-    clinical_service = ClinicalService(db)
     result = await clinical_service.check_in_patient(
         appointment_ref,
         checkin_data.model_dump(),
@@ -783,7 +848,7 @@ async def receptionist_list_patient_documents(
 async def get_appointment_statistics(
     date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (default: today)"),
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session)
+    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
 ):
     """
     Get appointment statistics for the day.
@@ -802,11 +867,8 @@ async def get_appointment_statistics(
     - Department-wise breakdown
     - Doctor-wise breakdown
     """
-    from app.services.appointment_service import AppointmentService
-    
-    appointment_service = AppointmentService(db)
-    result = await appointment_service.get_appointment_statistics(date, current_user)
-    return success_response(message="Statistics retrieved successfully", data=result)
+    stats = await clinical_service.get_opd_appointment_dashboard_stats(current_user, date)
+    return success_response(message="Statistics retrieved successfully", data=stats)
 
 
 # ============================================================================
@@ -816,7 +878,7 @@ async def get_appointment_statistics(
 @router.get("/quick-actions", tags=[TAG_DASHBOARD])
 async def get_quick_actions(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_platform_db_session)
+    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
 ):
     """
     Get quick action items for receptionist.
@@ -836,23 +898,17 @@ async def get_quick_actions(
     - Priority tasks
     - Action items
     """
-    clinical_service = ClinicalService(db)
-    
-    # Get quick action data
+    stats = await clinical_service.get_opd_appointment_dashboard_stats(current_user)
     result = {
-        "pending_checkins": [],  # Appointments scheduled but not checked in
-        "upcoming_appointments": [],  # Next 2 hours
-        "patients_waiting": [],  # Checked in but not in consultation
-        "recent_registrations": [],  # Last 10 registrations
+        **stats,
         "quick_links": [
             {"action": "register_patient", "label": "Register New Patient", "icon": "user-plus"},
             {"action": "schedule_appointment", "label": "Schedule Appointment", "icon": "calendar-plus"},
             {"action": "search_patient", "label": "Search Patient", "icon": "search"},
             {"action": "view_appointments", "label": "Today's Appointments", "icon": "calendar"},
-            {"action": "check_in", "label": "Check-in Patient", "icon": "check-circle"}
-        ]
+            {"action": "check_in", "label": "Check-in Patient", "icon": "check-circle"},
+        ],
     }
-    
     return success_response(message="Quick actions retrieved successfully", data=result)
 
 

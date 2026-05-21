@@ -317,25 +317,14 @@ class AppointmentSchedulingCreate(BaseModel):
         validation_alias=AliasChoices("patient_name", "patientName", "name"),
         description="Full name as registered (e.g. 'Jane Doe'). Used to resolve patient when patient_ref is omitted.",
     )
-    doctor_name: Optional[str] = Field(
-        default=None,
+    doctor_name: str = Field(
         validation_alias=AliasChoices("doctor_name", "doctorName", "doctor"),
-        description="Doctor display name, e.g. Dr. John Smith. Optional if doctor_id is provided.",
-    )
-    doctor_id: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("doctor_id", "doctorId", "doctor_user_id", "doctorUserId"),
-        description="Doctor user UUID. Preferred when available.",
-    )
-    department_id: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("department_id", "departmentId"),
-        description="Optional department UUID. If omitted/invalid, the department is derived from the selected doctor.",
+        description="Doctor display name, e.g. Dr. John Smith (must match a doctor in this hospital).",
     )
     department_name: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("department_name", "departmentName", "department"),
-        description="Optional department name/code (e.g. Cardiology). If omitted, derive from doctor assignment.",
+        description="Optional department name/code (e.g. Cardiology). If omitted, derived from the doctor's assignment.",
     )
     appointment_date: str = Field(validation_alias=AliasChoices("appointment_date", "appointmentDate", "date"))
     appointment_time: str = Field(validation_alias=AliasChoices("appointment_time", "appointmentTime", "time"))
@@ -355,10 +344,8 @@ class AppointmentSchedulingCreate(BaseModel):
         name = (self.patient_name or "").strip()
         if not ref and not name:
             raise ValueError("Either patient_ref or patient_name is required")
-        doctor_ref = (self.doctor_id or "").strip()
-        doctor_name = (self.doctor_name or "").strip()
-        if not doctor_ref and not doctor_name:
-            raise ValueError("Either doctor_id or doctor_name is required")
+        if not (self.doctor_name or "").strip():
+            raise ValueError("doctor_name is required")
         return self
 
 
@@ -460,18 +447,12 @@ class AppointmentUpdate(BaseModel):
     doctor_name: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("doctor_name", "doctorName", "doctor"),
-    )
-    doctor_id: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("doctor_id", "doctorId", "doctor_user_id", "doctorUserId"),
+        description="Doctor display name to reassign the appointment.",
     )
     department_name: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("department_name", "departmentName", "department"),
-    )
-    department_id: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("department_id", "departmentId"),
+        description="Optional department name/code when changing department.",
     )
     patient_ref: Optional[str] = Field(
         default=None,
@@ -494,6 +475,27 @@ class PatientCheckInCreate(BaseModel):
     appointment_ref: Optional[str] = None
     arrival_time: Optional[str] = None  # HH:MM, defaults to current time
     notes: Optional[str] = None
+    checked_in_by: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("checked_in_by", "checkedInBy"),
+        description="Optional receptionist/staff display id for audit",
+    )
+
+
+class AppointmentStatusUpdate(BaseModel):
+    """Update appointment workflow status (receptionist)."""
+    status: str = Field(
+        description="SCHEDULED, CONFIRMED, CHECKED_IN, WAITING, IN_CONSULTATION, COMPLETED, CANCELLED, NO_SHOW",
+    )
+
+
+class AppointmentCancelUpdate(BaseModel):
+    """Cancel an appointment."""
+    status: str = Field(default="CANCELLED")
+    cancel_reason: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("cancel_reason", "cancelReason", "cancellation_reason"),
+    )
 
 
 # ============================================================================

@@ -166,6 +166,38 @@ def serialize_department_for_receptionist(dept: Department) -> Dict[str, Any]:
     }
 
 
+def serialize_opd_appointment_table_row(a: Appointment) -> Dict[str, Any]:
+    """Lightweight row for receptionist appointment scheduling table."""
+    pt = a.appointment_time or ""
+    time_disp = pt[:5] if len(pt) >= 5 else pt
+    ref = a.appointment_ref or str(a.id)
+    patient = a.patient
+    doctor = a.doctor
+    dept = a.department
+    patient_name = ""
+    patient_ref = ""
+    if patient and getattr(patient, "user", None):
+        patient_name = f"{patient.user.first_name or ''} {patient.user.last_name or ''}".strip()
+        patient_ref = patient.patient_id or ""
+    doctor_name = ""
+    if doctor:
+        doctor_name = f"Dr. {doctor.first_name or ''} {doctor.last_name or ''}".strip()
+    return {
+        "id": ref,
+        "appointment_ref": ref,
+        "patient_name": patient_name,
+        "patient_ref": patient_ref,
+        "doctor_name": doctor_name,
+        "department_name": dept.name if dept else "",
+        "appointment_date": a.appointment_date,
+        "appointment_time": time_disp,
+        "appointment_type": a.appointment_type,
+        "chief_complaint": a.chief_complaint,
+        "status": a.status,
+        "is_checked_in": a.checked_in_at is not None,
+    }
+
+
 def serialize_opd_appointment_full(a: Appointment) -> Dict[str, Any]:
     """Every Appointment column plus nested patient (full), doctor user, department."""
     pt = a.appointment_time or ""
