@@ -924,6 +924,9 @@ class AuthService:
         normalized_email = (email or "").strip().lower()
         user = await self._get_user_by_email(normalized_email)
         if not user:
+            await self._heal_platform_patient_from_tenant_by_email(normalized_email)
+            user = await self._get_user_by_email(normalized_email)
+        if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"code": "AUTH_001", "message": "Invalid credentials"}
@@ -1386,7 +1389,66 @@ class AuthService:
                     db_name,
                     normalized_email,
                 )
-    
+
+    async def _heal_platform_patient_from_tenant_by_email(self, normalized_email: str) -> None:
+        """Copy a tenant PATIENT user onto the platform DB when missing (OPD registration)."""
+        if not normalized_email:
+            return
+
+        from sqlalchemy.orm import selectinload
+
+        from app.database.session import get_tenant_session_factory
+        from app.services.patient_tenant_bridge import mirror_opd_patient_to_platform
+
+        res = await self.db.execute(
+            select(Hospital.tenant_database_name).where(
+                and_(
+                    Hospital.tenant_database_name.isnot(None),
+                    Hospital.tenant_database_name != "",
+                )
+            )
+        )
+        tenant_db_names = [str(row[0]).strip() for row in res.all() if row[0] and str(row[0]).strip()]
+
+        for db_name in tenant_db_names:
+            try:
+                fac = get_tenant_session_factory(db_name)
+                async with fac() as tdb:
+                    r = await tdb.execute(
+                        select(User)
+                        .options(selectinload(User.roles))
+                        .where(func.lower(func.trim(User.email)) == normalized_email)
+                    )
+                    tu = r.scalar_one_or_none()
+                    if not tu:
+                        continue
+                    role_names = [getattr(role, "name", "") for role in (tu.roles or [])]
+                    if UserRole.PATIENT.value not in role_names:
+                        continue
+                    pr = await tdb.execute(
+                        select(PatientProfile)
+                        .where(PatientProfile.user_id == tu.id)
+                        .limit(1)
+                    )
+                    profile = pr.scalar_one_or_none()
+                    if not profile:
+                        continue
+                    await mirror_opd_patient_to_platform(self.db, profile, tu)
+                    await self.db.commit()
+                    logger.info(
+                        "Auth heal: synced patient from tenant db=%s to platform email=%s",
+                        db_name,
+                        normalized_email,
+                    )
+                    return
+            except Exception:
+                await self.db.rollback()
+                logger.exception(
+                    "Auth heal: patient platform upsert failed tenant db=%s email=%s",
+                    db_name,
+                    normalized_email,
+                )
+
     async def _get_user_by_id(self, user_id: uuid.UUID) -> Optional[User]:
         """Get user by ID with roles loaded"""
         from sqlalchemy.orm import selectinload

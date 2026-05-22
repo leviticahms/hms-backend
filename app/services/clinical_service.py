@@ -27,7 +27,10 @@ from app.utils.receptionist_serializers import (
     serialize_opd_appointment_full,
     serialize_opd_appointment_table_row,
 )
-from app.services.patient_tenant_bridge import resolve_patient_profile_id_for_tenant
+from app.services.patient_tenant_bridge import (
+    mirror_opd_patient_to_platform,
+    resolve_patient_profile_id_for_tenant,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +198,12 @@ class ClinicalService:
                 detail="Invalid hospital_id in user context.",
             )
 
+    def _opd_patient_db(self) -> AsyncSession:
+        """Tenant session for OPD patient CRUD when provisioned; else platform."""
+        if not self._sessions_share_connection():
+            return self.tenant_db
+        return self.db
+
     def _opd_db_sessions(self) -> List[AsyncSession]:
         """Platform + tenant sessions for OPD reads (deduplicated)."""
         seen: set[int] = set()
@@ -249,7 +258,12 @@ class ClinicalService:
     async def _load_opd_patient_by_ref(
         self, patient_ref: str, hospital_id_uuid: uuid.UUID
     ) -> Optional[PatientProfile]:
-        for sess in self._opd_db_sessions():
+        sessions = (
+            [self._opd_patient_db()]
+            if not self._sessions_share_connection()
+            else self._opd_db_sessions()
+        )
+        for sess in sessions:
             result = await sess.execute(
                 select(PatientProfile)
                 .where(
@@ -655,8 +669,10 @@ class ClinicalService:
                 detail="phone is required",
             )
         
-        # Check if phone already exists
-        existing_phone = await self.platform_db.execute(
+        patient_db = self._opd_patient_db()
+
+        # Check if phone already exists (tenant DB — source of truth for OPD patients)
+        existing_phone = await patient_db.execute(
             select(User).where(and_(User.phone == phone_norm, User.hospital_id == hospital_id_uuid))
         )
         if existing_phone.first():
@@ -668,7 +684,7 @@ class ClinicalService:
         # Check if email already exists (if provided)
         email_norm = (patient_data.get("email") or "").strip().lower() if patient_data.get("email") else None
         if email_norm:
-            existing_email = await self.platform_db.execute(
+            existing_email = await patient_db.execute(
                 select(User).where(and_(User.email == email_norm, User.hospital_id == hospital_id_uuid))
             )
             if existing_email.first():
@@ -724,12 +740,12 @@ class ClinicalService:
             phone_verified=False
         )
         
-        # Add user to database first
-        self.platform_db.add(user)
-        await self.platform_db.flush()  # Flush to get the user ID
-        
+        # Persist on tenant DB (platform mirror below for portal login)
+        patient_db.add(user)
+        await patient_db.flush()
+
         # Assign PATIENT role (must succeed or patient portal login fails with AUTH_002).
-        role_result = await self.platform_db.execute(
+        role_result = await patient_db.execute(
             select(Role).where(Role.name == UserRole.PATIENT.value)
         )
         role = role_result.scalar_one_or_none()
@@ -741,10 +757,10 @@ class ClinicalService:
                 description="Patient Role",
                 level=10,
             )
-            self.platform_db.add(role)
-            await self.platform_db.flush()
+            patient_db.add(role)
+            await patient_db.flush()
 
-        await self.platform_db.execute(
+        await patient_db.execute(
             user_roles.insert().values(
                 user_id=user.id,
                 role_id=role.id,
@@ -784,9 +800,14 @@ class ClinicalService:
             emergency_contact_relation=patient_data.get("emergency_contact_relation"),
         )
         
-        self.platform_db.add(patient_profile)
-        await self.platform_db.flush()
-        
+        patient_db.add(patient_profile)
+        await patient_db.flush()
+
+        if not self._sessions_share_connection():
+            await mirror_opd_patient_to_platform(
+                self.platform_db, patient_profile, user
+            )
+
         hospital_name = None
         try:
             hospital_result = await self.platform_db.execute(
@@ -902,7 +923,8 @@ class ClinicalService:
                 detail="No fields to update. Send at least one profile field or password.",
             )
 
-        result = await self.tenant_db.execute(
+        patient_db = self._opd_patient_db()
+        result = await patient_db.execute(
             select(PatientProfile)
             .where(
                 and_(
@@ -910,6 +932,7 @@ class ClinicalService:
                     PatientProfile.hospital_id == hospital_id_uuid,
                 )
             )
+            .options(selectinload(PatientProfile.user).selectinload(User.roles))
         )
         profile = result.scalar_one_or_none()
         if not profile or not profile.user:
@@ -933,7 +956,7 @@ class ClinicalService:
             phone_norm = str(phone_norm).strip()
             if not phone_norm:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="phone cannot be empty")
-            dup_phone = await self.platform_db.execute(
+            dup_phone = await patient_db.execute(
                 select(User.id).where(
                     and_(
                         User.phone == phone_norm,
@@ -957,7 +980,7 @@ class ClinicalService:
                     detail="email cannot be removed; omit the field to leave unchanged.",
                 )
             email_norm = str(raw_em).strip().lower()
-            dup_em = await self.platform_db.execute(
+            dup_em = await patient_db.execute(
                 select(User.id).where(
                     and_(
                         User.email == email_norm,
@@ -1066,6 +1089,9 @@ class ClinicalService:
         except Exception:
             hospital_name = None
 
+        if not self._sessions_share_connection():
+            await mirror_opd_patient_to_platform(self.platform_db, profile, pu)
+
         await self._commit_sessions()
 
         out = self._receptionist_patient_detail_dict(profile)
@@ -1143,7 +1169,7 @@ class ClinicalService:
                 )
             )
         )
-        patient_result = await self.db.execute(
+        patient_result = await self._opd_patient_db().execute(
             select(PatientProfile)
             .join(User, PatientProfile.user_id == User.id)
             .where(
@@ -1938,7 +1964,7 @@ class ClinicalService:
         
         # Get total patients registered today
         today_date = date.today()  # Use actual date object instead of string
-        patients_today_result = await self.db.execute(
+        patients_today_result = await self._opd_patient_db().execute(
             select(func.count(PatientProfile.id))
             .where(
                 and_(

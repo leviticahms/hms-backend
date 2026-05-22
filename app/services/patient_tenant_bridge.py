@@ -127,3 +127,31 @@ async def resolve_patient_profile_id_for_tenant(
         tenant_db.add(PatientProfile(**patient_data))
     await tenant_db.flush()
     return platform_patient.id
+
+
+async def mirror_opd_patient_to_platform(
+    platform_db: AsyncSession,
+    tenant_patient: PatientProfile,
+    tenant_user: User,
+) -> None:
+    """
+    Copy tenant OPD patient + portal user onto the platform DB (same UUIDs).
+
+    Patient login reads the platform ``users`` table; receptionist CRUD is tenant-first.
+    """
+    await upsert_tenant_user_from_platform_user(
+        platform_db, tenant_user, UserRole.PATIENT.value
+    )
+
+    patient_data = {
+        column.name: getattr(tenant_patient, column.name)
+        for column in PatientProfile.__table__.columns
+    }
+    existing = await platform_db.get(PatientProfile, tenant_patient.id)
+    if existing:
+        for key, value in patient_data.items():
+            if key != "id":
+                setattr(existing, key, value)
+    else:
+        platform_db.add(PatientProfile(**patient_data))
+    await platform_db.flush()

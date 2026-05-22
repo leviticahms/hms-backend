@@ -1,8 +1,8 @@
 """
 Resolve OPD patients across platform + tenant databases.
 
-Receptionist registration stores PatientProfile on the platform DB; clinical modules
-often run on the hospital tenant DB. Use these helpers instead of single-session lookups.
+Receptionist registration stores PatientProfile on the hospital tenant DB (mirrored to
+platform for portal login). Use these helpers for cross-module lookups when needed.
 """
 from __future__ import annotations
 

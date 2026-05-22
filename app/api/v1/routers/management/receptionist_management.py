@@ -2,11 +2,10 @@
 Receptionist Management API
 Dedicated receptionist functionality for front desk operations, patient registration, and appointment management.
 
-DATABASE NOTE (patient portal login):
-Patient auth (`POST /api/v1/auth/patient/login`) always loads `users` from the **platform** DB (`get_platform_db_session`).
-This router therefore uses `get_platform_db_session` for all endpoints—not `get_db_session`—so OPD-registered patients
-and their `user_roles` rows exist where login reads them. Using tenant-routed sessions here caused “Invalid credentials”
-(AUTH_001) because users were written to the tenant DB only.
+DATABASE NOTE (OPD patients):
+Patient profiles and portal ``users`` are stored on the **hospital tenant DB**. After each write, a copy is mirrored
+to the platform DB so ``POST /api/v1/auth/patient/login`` can resolve credentials. Reads for receptionist patient
+APIs use the tenant session only.
 
 BUSINESS RULES:
 - Receptionists are created by Hospital Admin only
@@ -21,6 +20,7 @@ import uuid
 from typing import AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
+from app.database.session import get_db_session
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -51,13 +51,38 @@ router = APIRouter(prefix="/receptionist")
 logger = logging.getLogger(__name__)
 
 
+async def get_receptionist_tenant_clinical_service(
+    current_user: User = Depends(require_receptionist()),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
+) -> AsyncGenerator[ClinicalService, None]:
+    """Tenant-first clinical service for OPD patient CRUD (profiles live on tenant DB)."""
+    from app.database.tenant_context import resolve_tenant_database_name_for_hospital
+    from app.database.session import get_tenant_session_factory
+
+    if not current_user.hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Receptionist must be assigned to a hospital",
+        )
+    tenant_name = await resolve_tenant_database_name_for_hospital(current_user.hospital_id)
+    if tenant_name:
+        factory = get_tenant_session_factory(tenant_name)
+        async with factory() as tenant_db:
+            yield ClinicalService(
+                tenant_db,
+                platform_db=platform_db,
+                tenant_db=tenant_db,
+            )
+        return
+    yield ClinicalService(platform_db, platform_db=platform_db)
+
+
 async def get_receptionist_clinical_service(
     current_user: User = Depends(require_receptionist()),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ) -> AsyncGenerator[ClinicalService, None]:
     """
-    OPD writes stay on platform; reads also query tenant DB when provisioned
-    (same pattern as doctor sidebar / IPD).
+    Appointments: writes on platform; reads merge platform + tenant when provisioned.
     """
     from app.database.tenant_context import resolve_tenant_database_name_for_hospital
     from app.database.session import get_tenant_session_factory
@@ -249,7 +274,7 @@ async def register_patient(
     patient_data: PatientRegistrationCreate,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session)
+    clinical_service: ClinicalService = Depends(get_receptionist_tenant_clinical_service),
 ):
     """
     Register new patient for OPD services.
@@ -270,7 +295,6 @@ async def register_patient(
     Returns:
     - Patient ID, optional temp_password, portal_login_enabled, `credentials_email_queued` when email is scheduled
     """
-    clinical_service = ClinicalService(db)
     result = await clinical_service.register_opd_patient(patient_data.model_dump(), current_user)
 
     pwd = (patient_data.password or "").strip() or None
@@ -310,7 +334,7 @@ async def patch_opd_patient(
     body: ReceptionistPatientPatch,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    clinical_service: ClinicalService = Depends(get_receptionist_tenant_clinical_service),
 ):
     """
     Update an existing OPD patient (same hospital as receptionist).
@@ -323,7 +347,6 @@ async def patch_opd_patient(
     send_cred = payload.pop("send_credentials_email", True)
     pwd_plain = payload.pop("password", None)
 
-    clinical_service = ClinicalService(db)
     result = await clinical_service.patch_opd_patient(
         patient_ref,
         payload,
@@ -568,7 +591,7 @@ async def list_all_patients(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """
     List all registered OPD patients for the receptionist's hospital (paginated, newest first).
@@ -601,7 +624,7 @@ async def search_patients(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_platform_db_session)
+    db: AsyncSession = Depends(get_db_session),
 ):
     """
     Search for patients in the hospital.
@@ -644,7 +667,7 @@ async def search_patients(
 async def get_patient_profile_for_schedule(
     patient_ref: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_platform_db_session),
+    clinical_service: ClinicalService = Depends(get_receptionist_tenant_clinical_service),
 ):
     """
     Load full patient details for autofill (e.g. Schedule Appointment form after choosing a name).
@@ -655,7 +678,6 @@ async def get_patient_profile_for_schedule(
     is still the emergency phone string (same as `emergency_contact_phone`). Portal `password` is
     never returned (always null); use `has_portal_password` / `portal_login_enabled` for UX.
     """
-    clinical_service = ClinicalService(db)
     data = await clinical_service.get_receptionist_patient_by_ref(patient_ref, current_user)
     return success_response(message="Patient profile loaded successfully", data=data)
 
@@ -679,7 +701,7 @@ async def receptionist_upload_patient_documents(
     ),
     files: List[UploadFile] = File(..., description="One or more files"),
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """
     Upload one or more documents for a patient (multipart/form-data).
@@ -804,7 +826,7 @@ async def receptionist_upload_patient_documents(
 async def receptionist_list_patient_documents(
     patient_ref: str,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """
     Document list for the patient card (no pagination; capped at 500 newest first).
