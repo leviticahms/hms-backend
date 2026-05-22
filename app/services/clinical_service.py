@@ -1234,20 +1234,27 @@ class ClinicalService:
         )
 
         hid = user_context.get("hospital_id")
-        department = await self.get_department_by_id_or_name(
-            None,
-            appointment_data.get("department_name"),
-            hid,
-        )
         doctor = await self._resolve_doctor_for_scheduling(
             None,
             appointment_data.get("doctor_name"),
             hospital_id_uuid,
-            department_id=department.id if department else None,
+            department_id=None,
         )
-        if department is None:
-            department = await self.get_primary_department_for_doctor(doctor.id, hospital_id_uuid)
+        dname = (appointment_data.get("department_name") or "").strip()
+        if dname:
+            department = await self.get_department_by_name(
+                dname, hid, doctor_user_id=doctor.id
+            )
         else:
+            department = await self.get_primary_department_for_doctor(
+                doctor.id, hospital_id_uuid
+            )
+        if department is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Could not resolve department for this doctor. Provide department_name or assign the doctor to a department.",
+            )
+        if dname:
             in_dept = False
             for session in self._opd_db_sessions():
                 dept_check = await session.execute(
@@ -1607,7 +1614,9 @@ class ClinicalService:
 
         if modification_data.get("department_name"):
             department = await self.get_department_by_name(
-                modification_data["department_name"], user_context["hospital_id"]
+                modification_data["department_name"],
+                user_context["hospital_id"],
+                doctor_user_id=appointment.doctor_id,
             )
             appointment.department_id = department.id
 
@@ -3308,7 +3317,7 @@ class ClinicalService:
         dname = (department_name or "").strip()
         if dname:
             try:
-                return await self.get_department_by_name(dname, hospital_id)
+                return await self.get_department_by_name(dname, hospital_id, doctor_user_id=None)
             except HTTPException as exc:
                 # A stale/free-text UI value should not block scheduling if the doctor has a department.
                 if exc.status_code != status.HTTP_404_NOT_FOUND:
@@ -3567,8 +3576,89 @@ class ClinicalService:
             )
             return None
 
-    async def get_department_by_name(self, department_name: str, hospital_id: str) -> Department:
-        """Resolve department by name (exact case-insensitive, then partial match if unique)."""
+    async def _departments_matching_name(
+        self,
+        dname: str,
+        hospital_id: uuid.UUID,
+        *,
+        partial: bool = False,
+    ) -> List[Department]:
+        """Find active departments by name/code across platform + tenant (deduped by id)."""
+        norm = dname.strip().lower()
+        pattern = f"%{norm}%" if partial else norm
+        seen: set[uuid.UUID] = set()
+        rows: List[Department] = []
+
+        for sess in self._opd_db_sessions():
+            conditions = [
+                Department.hospital_id == hospital_id,
+                Department.is_active == True,
+            ]
+            if partial:
+                conditions.append(
+                    or_(
+                        Department.name.ilike(pattern),
+                        Department.code.ilike(pattern),
+                    )
+                )
+            else:
+                conditions.append(
+                    or_(
+                        func.lower(func.trim(Department.name)) == norm,
+                        func.lower(func.trim(Department.code)) == norm,
+                        Department.name.ilike(dname),
+                    )
+                )
+            result = await sess.execute(select(Department).where(and_(*conditions)))
+            for dept in result.scalars().all():
+                if dept.id not in seen:
+                    seen.add(dept.id)
+                    rows.append(dept)
+        return rows
+
+    async def _doctor_assigned_department_ids(
+        self,
+        doctor_user_id: uuid.UUID,
+        hospital_id: uuid.UUID,
+    ) -> set[uuid.UUID]:
+        ids: set[uuid.UUID] = set()
+        for sess in self._opd_db_sessions():
+            result = await sess.execute(
+                select(StaffDepartmentAssignment.department_id).where(
+                    and_(
+                        StaffDepartmentAssignment.staff_id == doctor_user_id,
+                        StaffDepartmentAssignment.hospital_id == hospital_id,
+                        StaffDepartmentAssignment.is_active == True,
+                    )
+                )
+            )
+            ids.update(result.scalars().all())
+        return ids
+
+    def _pick_department_from_candidates(
+        self,
+        rows: List[Department],
+        dname: str,
+    ) -> Department:
+        """Choose one row when several share a similar name (name-only API; no UUID)."""
+        exact = [
+            d
+            for d in rows
+            if (d.name or "").strip().lower() == dname.strip().lower()
+            or (d.code or "").strip().lower() == dname.strip().lower()
+        ]
+        pool = exact if exact else rows
+        pool.sort(key=lambda d: ((d.name or "").lower(), str(d.id)))
+        return pool[0]
+
+    async def get_department_by_name(
+        self,
+        department_name: str,
+        hospital_id: str,
+        *,
+        doctor_user_id: Optional[uuid.UUID] = None,
+    ) -> Department:
+        """Resolve department by display name; uses doctor assignment when name is ambiguous."""
         dname = (department_name or "").strip()
         if not dname:
             raise HTTPException(
@@ -3576,50 +3666,31 @@ class ClinicalService:
                 detail="department_name is required",
             )
         hid = hospital_id if isinstance(hospital_id, uuid.UUID) else uuid.UUID(str(hospital_id))
-        result = await self.db.execute(
-            select(Department).where(
-                and_(
-                    Department.hospital_id == hid,
-                    Department.name.ilike(dname),
-                    Department.is_active == True,
-                )
-            )
-            .limit(2)
-        )
-        rows = result.scalars().all()
-        if len(rows) == 1:
-            return rows[0]
-        if len(rows) > 1:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "AMBIGUOUS_DEPARTMENT",
-                    "message": f"Multiple departments match '{department_name}'. Use department_id (UUID).",
-                },
-            )
-        result = await self.db.execute(
-            select(Department)
-            .where(
-                and_(
-                    Department.hospital_id == hid,
-                    Department.name.ilike(f"%{dname}%"),
-                    Department.is_active == True,
-                )
-            )
-            .limit(2)
-        )
-        rows = result.scalars().all()
-        if len(rows) == 1:
-            return rows[0]
+
+        rows = await self._departments_matching_name(dname, hid, partial=False)
+        if not rows:
+            rows = await self._departments_matching_name(dname, hid, partial=True)
+
         if not rows:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Department '{department_name}' not found",
             )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "AMBIGUOUS_DEPARTMENT",
-                "message": f"Multiple departments match '{department_name}'. Use the exact department name.",
-            },
-        )
+
+        if len(rows) == 1:
+            return rows[0]
+
+        if doctor_user_id is not None:
+            assigned = await self._doctor_assigned_department_ids(doctor_user_id, hid)
+            narrowed = [d for d in rows if d.id in assigned]
+            if len(narrowed) == 1:
+                return narrowed[0]
+            if len(narrowed) > 1:
+                return self._pick_department_from_candidates(narrowed, dname)
+            primary = await self.get_primary_department_for_doctor(doctor_user_id, hid)
+            if primary is not None:
+                for d in rows:
+                    if d.id == primary.id:
+                        return primary
+
+        return self._pick_department_from_candidates(rows, dname)
