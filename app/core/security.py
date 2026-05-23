@@ -28,6 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from passlib.context import CryptContext
 
+import bcrypt
+
 from app.core.config import settings
 from app.core.database import get_platform_db_session
 
@@ -57,37 +59,26 @@ class SecurityManager:
 
     @staticmethod
     def hash_password(password: str) -> str:
-        """
-        Hash password using bcrypt.
-        """
-
-        return pwd_context.hash(password)
+        """Hash password using bcrypt (compatible with bcrypt 4.x)."""
+        salt = bcrypt.gensalt()
+        return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
 
     @staticmethod
     def verify_password(
         plain_password: str,
         hashed_password: str
     ) -> bool:
-        """
-        Verify password against bcrypt hash.
-        """
-
+        """Verify password against bcrypt hash."""
         if not hashed_password:
             return False
 
         try:
-
-            return pwd_context.verify(
-                plain_password,
-                hashed_password
-            )
-
+            hp = hashed_password.encode("utf-8")
+            if hp.startswith(b"$2"):
+                return bcrypt.checkpw(plain_password.encode("utf-8"), hp)
+            return pwd_context.verify(plain_password, hashed_password)
         except Exception as e:
-
-            logger.error(
-                f"Password verification failed: {e}"
-            )
-
+            logger.error("Password verification failed: %s", e)
             return False
 
     @staticmethod

@@ -465,78 +465,15 @@ async def _post_daily_bed_charges():
 
 
 async def sync_superadmin_credentials():
-    """
-    Ensure SUPERADMIN_EMAIL/SUPERADMIN_PASSWORD from environment
-    are applied to the existing superadmin user.
-    Runs independently from migration lock flow.
-    """
+    """Ensure SUPERADMIN_EMAIL/SUPERADMIN_PASSWORD from environment are applied."""
     from app.database.session import AsyncSessionLocal
-    from app.models.user import User, Role, user_roles
-    from app.core.security import SecurityManager
-    from sqlalchemy import select, func
+    from app.services.superadmin_bootstrap import ensure_superadmin_account
 
-    superadmin_email = (settings.SUPERADMIN_EMAIL or "").strip().lower()
-    superadmin_password = (settings.SUPERADMIN_PASSWORD or "").strip()
-    if not superadmin_email or not superadmin_password:
-        return
-
-    async with AsyncSessionLocal() as db:
-        role_result = await db.execute(select(Role).where(Role.name == "SUPER_ADMIN").limit(1))
-        super_role = role_result.scalar_one_or_none()
-        result = await db.execute(
-            select(User).where(func.lower(User.email) == superadmin_email).limit(1)
-        )
-        user = result.scalar_one_or_none()
-        if not user:
-            result = await db.execute(
-                select(User)
-                .join(user_roles, User.id == user_roles.c.user_id)
-                .join(Role, user_roles.c.role_id == Role.id)
-                .where(Role.name == "SUPER_ADMIN")
-                .limit(1)
-            )
-            user = result.scalar_one_or_none()
-        if not user:
-            logger.warning("SuperAdmin sync skipped: user not found in database yet")
-            return
-
-        security = SecurityManager()
-        changed = False
-        if (user.email or "").strip().lower() != superadmin_email:
-            user.email = superadmin_email
-            changed = True
-        if not security.verify_password(superadmin_password, user.password_hash):
-            user.password_hash = security.hash_password(superadmin_password)
-            changed = True
-        if user.status != "ACTIVE":
-            user.status = "ACTIVE"
-            changed = True
-        if not user.email_verified:
-            user.email_verified = True
-            changed = True
-        first = (settings.SUPERADMIN_FIRST_NAME or "").strip() or "Super"
-        last = (settings.SUPERADMIN_LAST_NAME or "").strip() or "Admin"
-        if user.first_name != first:
-            user.first_name = first
-            changed = True
-        if user.last_name != last:
-            user.last_name = last
-            changed = True
-        if super_role:
-            link_result = await db.execute(
-                select(user_roles.c.user_id).where(
-                    user_roles.c.user_id == user.id,
-                    user_roles.c.role_id == super_role.id,
-                )
-            )
-            if not link_result.first():
-                await db.execute(
-                    user_roles.insert().values(user_id=user.id, role_id=super_role.id)
-                )
-                changed = True
-        if changed:
-            await db.commit()
-            logger.info("SuperAdmin credentials synced from environment")
+    try:
+        async with AsyncSessionLocal() as db:
+            await ensure_superadmin_account(db)
+    except Exception as exc:
+        logger.warning("SuperAdmin credential sync failed: %s", exc)
 
 
 async def lifespan(app: FastAPI):

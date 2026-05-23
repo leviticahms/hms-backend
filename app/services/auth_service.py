@@ -870,6 +870,13 @@ class AuthService:
         from app.core.role_aliases import normalize_staff_role_name, user_can_use_staff_login
 
         normalized_email = (email or "").strip().lower()
+
+        env_superadmin = (settings.SUPERADMIN_EMAIL or "").strip().lower()
+        if env_superadmin and normalized_email == env_superadmin:
+            from app.services.superadmin_bootstrap import ensure_superadmin_account
+
+            await ensure_superadmin_account(self.db)
+
         user = await self._get_user_by_email(normalized_email)
         if not user:
             await self._heal_platform_auth_row_from_tenant_by_email(normalized_email)
