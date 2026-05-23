@@ -3,9 +3,9 @@ Receptionist Management API
 Dedicated receptionist functionality for front desk operations, patient registration, and appointment management.
 
 DATABASE NOTE (OPD patients):
-Patient profiles and portal ``users`` are stored on the **hospital tenant DB**. After each write, a copy is mirrored
-to the platform DB so ``POST /api/v1/auth/patient/login`` can resolve credentials. Reads for receptionist patient
-APIs use the tenant session only.
+Patient profiles and portal users are stored on the **hospital tenant DB** only.
+Login credentials (users + PATIENT role) are mirrored to the platform DB for
+``POST /api/v1/auth/patient/login``. All receptionist patient reads use the tenant session.
 
 BUSINESS RULES:
 - Receptionists are created by Hospital Admin only
@@ -20,7 +20,6 @@ import uuid
 from typing import AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
-from app.database.session import get_db_session
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -51,12 +50,28 @@ router = APIRouter(prefix="/receptionist")
 logger = logging.getLogger(__name__)
 
 
-async def get_receptionist_tenant_clinical_service(
-    current_user: User = Depends(require_receptionist()),
-    platform_db: AsyncSession = Depends(get_platform_db_session),
-) -> AsyncGenerator[ClinicalService, None]:
-    """Tenant-first clinical service for OPD patient CRUD (profiles live on tenant DB)."""
+async def _require_hospital_tenant_database_name(hospital_id: uuid.UUID) -> str:
     from app.database.tenant_context import resolve_tenant_database_name_for_hospital
+
+    tenant_name = await resolve_tenant_database_name_for_hospital(hospital_id)
+    if not tenant_name or not str(tenant_name).strip():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "TENANT_DB_NOT_CONFIGURED",
+                "message": (
+                    "Hospital tenant database is not configured. "
+                    "Super Admin must set hospitals.tenant_database_name for this hospital."
+                ),
+            },
+        )
+    return str(tenant_name).strip()
+
+
+async def get_receptionist_tenant_db(
+    current_user: User = Depends(require_receptionist()),
+) -> AsyncGenerator[AsyncSession, None]:
+    """Tenant DB session for receptionist patient list/search/documents."""
     from app.database.session import get_tenant_session_factory
 
     if not current_user.hospital_id:
@@ -64,17 +79,32 @@ async def get_receptionist_tenant_clinical_service(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Receptionist must be assigned to a hospital",
         )
-    tenant_name = await resolve_tenant_database_name_for_hospital(current_user.hospital_id)
-    if tenant_name:
-        factory = get_tenant_session_factory(tenant_name)
-        async with factory() as tenant_db:
-            yield ClinicalService(
-                tenant_db,
-                platform_db=platform_db,
-                tenant_db=tenant_db,
-            )
-        return
-    yield ClinicalService(platform_db, platform_db=platform_db)
+    tenant_name = await _require_hospital_tenant_database_name(current_user.hospital_id)
+    factory = get_tenant_session_factory(tenant_name)
+    async with factory() as tenant_db:
+        yield tenant_db
+
+
+async def get_receptionist_tenant_clinical_service(
+    current_user: User = Depends(require_receptionist()),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
+) -> AsyncGenerator[ClinicalService, None]:
+    """Tenant-only OPD patient CRUD (profiles + users on tenant DB)."""
+    from app.database.session import get_tenant_session_factory
+
+    if not current_user.hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Receptionist must be assigned to a hospital",
+        )
+    tenant_name = await _require_hospital_tenant_database_name(current_user.hospital_id)
+    factory = get_tenant_session_factory(tenant_name)
+    async with factory() as tenant_db:
+        yield ClinicalService(
+            tenant_db,
+            platform_db=platform_db,
+            tenant_db=tenant_db,
+        )
 
 
 async def get_receptionist_clinical_service(
@@ -591,7 +621,7 @@ async def list_all_patients(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_receptionist_tenant_db),
 ):
     """
     List all registered OPD patients for the receptionist's hospital (paginated, newest first).
@@ -624,7 +654,7 @@ async def search_patients(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_receptionist_tenant_db),
 ):
     """
     Search for patients in the hospital.
@@ -701,7 +731,7 @@ async def receptionist_upload_patient_documents(
     ),
     files: List[UploadFile] = File(..., description="One or more files"),
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_receptionist_tenant_db),
 ):
     """
     Upload one or more documents for a patient (multipart/form-data).
@@ -826,7 +856,7 @@ async def receptionist_upload_patient_documents(
 async def receptionist_list_patient_documents(
     patient_ref: str,
     current_user: User = Depends(require_receptionist()),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_receptionist_tenant_db),
 ):
     """
     Document list for the patient card (no pagination; capped at 500 newest first).

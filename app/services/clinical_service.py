@@ -28,7 +28,7 @@ from app.utils.receptionist_serializers import (
     serialize_opd_appointment_table_row,
 )
 from app.services.patient_tenant_bridge import (
-    mirror_opd_patient_to_platform,
+    mirror_patient_auth_to_platform,
     resolve_patient_profile_id_for_tenant,
 )
 
@@ -204,6 +204,31 @@ class ClinicalService:
             return self.tenant_db
         return self.db
 
+    def _require_tenant_patient_db(self) -> AsyncSession:
+        """OPD patient rows must use the hospital tenant database."""
+        if self._sessions_share_connection():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "TENANT_DB_NOT_CONFIGURED",
+                    "message": (
+                        "This hospital has no dedicated tenant database. "
+                        "Set hospitals.tenant_database_name (Super Admin / hospital provisioning) "
+                        "before registering OPD patients."
+                    ),
+                },
+            )
+        return self.tenant_db
+
+    async def _commit_opd_patient_write(self, *, mirror_auth: bool = False) -> None:
+        """Commit tenant patient data; optionally commit platform auth mirror."""
+        if self._sessions_share_connection():
+            await self.db.commit()
+            return
+        await self.tenant_db.commit()
+        if mirror_auth:
+            await self.platform_db.commit()
+
     def _opd_db_sessions(self) -> List[AsyncSession]:
         """Platform + tenant sessions for OPD reads (deduplicated)."""
         seen: set[int] = set()
@@ -258,12 +283,7 @@ class ClinicalService:
     async def _load_opd_patient_by_ref(
         self, patient_ref: str, hospital_id_uuid: uuid.UUID
     ) -> Optional[PatientProfile]:
-        sessions = (
-            [self._opd_patient_db()]
-            if not self._sessions_share_connection()
-            else self._opd_db_sessions()
-        )
-        for sess in sessions:
+        for sess in [self._require_tenant_patient_db() if not self._sessions_share_connection() else self._opd_patient_db()]:
             result = await sess.execute(
                 select(PatientProfile)
                 .where(
@@ -669,7 +689,7 @@ class ClinicalService:
                 detail="phone is required",
             )
         
-        patient_db = self._opd_patient_db()
+        patient_db = self._require_tenant_patient_db()
 
         # Check if phone already exists (tenant DB — source of truth for OPD patients)
         existing_phone = await patient_db.execute(
@@ -803,10 +823,7 @@ class ClinicalService:
         patient_db.add(patient_profile)
         await patient_db.flush()
 
-        if not self._sessions_share_connection():
-            await mirror_opd_patient_to_platform(
-                self.platform_db, patient_profile, user
-            )
+        await mirror_patient_auth_to_platform(self.platform_db, user)
 
         hospital_name = None
         try:
@@ -820,7 +837,7 @@ class ClinicalService:
             hospital_name = None
 
         try:
-            await self._commit_sessions()
+            await self._commit_opd_patient_write(mirror_auth=True)
         except IntegrityError as exc:
             await self._rollback_sessions()
             detail = str(getattr(exc, "orig", exc))
@@ -841,6 +858,7 @@ class ClinicalService:
 
         result = {
             "patient_ref": patient_ref,
+            "storage_database": "tenant",
             "patient_name": f"{patient_data['first_name']} {patient_data['last_name']}",
             "phone": patient_data["phone"],
             "email": email_norm,
@@ -923,7 +941,7 @@ class ClinicalService:
                 detail="No fields to update. Send at least one profile field or password.",
             )
 
-        patient_db = self._opd_patient_db()
+        patient_db = self._require_tenant_patient_db()
         result = await patient_db.execute(
             select(PatientProfile)
             .where(
@@ -1089,10 +1107,9 @@ class ClinicalService:
         except Exception:
             hospital_name = None
 
-        if not self._sessions_share_connection():
-            await mirror_opd_patient_to_platform(self.platform_db, profile, pu)
+        await mirror_patient_auth_to_platform(self.platform_db, pu)
 
-        await self._commit_sessions()
+        await self._commit_opd_patient_write(mirror_auth=True)
 
         out = self._receptionist_patient_detail_dict(profile)
         out["patient_ref"] = profile.patient_id
@@ -1169,7 +1186,7 @@ class ClinicalService:
                 )
             )
         )
-        patient_result = await self._opd_patient_db().execute(
+        patient_result = await self._require_tenant_patient_db().execute(
             select(PatientProfile)
             .join(User, PatientProfile.user_id == User.id)
             .where(
@@ -1973,7 +1990,11 @@ class ClinicalService:
         
         # Get total patients registered today
         today_date = date.today()  # Use actual date object instead of string
-        patients_today_result = await self._opd_patient_db().execute(
+        patients_today_result = await (
+            self._require_tenant_patient_db()
+            if not self._sessions_share_connection()
+            else self._opd_patient_db()
+        ).execute(
             select(func.count(PatientProfile.id))
             .where(
                 and_(
@@ -3411,42 +3432,13 @@ class ClinicalService:
         hospital_id: uuid.UUID,
     ) -> Department:
         """Resolve the doctor's active department from assignment first, then doctor profile."""
-        from app.models.doctor import DoctorProfile
+        from app.utils.doctor_department_resolve import resolve_doctor_primary_department
 
-        result = await self.db.execute(
-            select(Department)
-            .join(
-                StaffDepartmentAssignment,
-                StaffDepartmentAssignment.department_id == Department.id,
-            )
-            .where(
-                and_(
-                    StaffDepartmentAssignment.staff_id == doctor_id,
-                    StaffDepartmentAssignment.hospital_id == hospital_id,
-                    StaffDepartmentAssignment.is_active == True,
-                    Department.is_active == True,
-                )
-            )
-            .order_by(desc(StaffDepartmentAssignment.is_primary))
-            .limit(1)
+        department = await resolve_doctor_primary_department(
+            self._opd_db_sessions(),
+            hospital_id,
+            doctor_id,
         )
-        department = result.scalar_one_or_none()
-        if department:
-            return department
-
-        result = await self.db.execute(
-            select(Department)
-            .join(DoctorProfile, DoctorProfile.department_id == Department.id)
-            .where(
-                and_(
-                    DoctorProfile.user_id == doctor_id,
-                    DoctorProfile.hospital_id == hospital_id,
-                    Department.is_active == True,
-                )
-            )
-            .limit(1)
-        )
-        department = result.scalar_one_or_none()
         if department:
             return department
 

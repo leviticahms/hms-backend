@@ -13,7 +13,7 @@ from fastapi import HTTPException, status
 from app.models.patient import Appointment, PatientProfile
 from app.models.doctor import DoctorProfile
 from app.models.schedule import DoctorSchedule
-from app.models.hospital import Department
+from app.models.hospital import Department, StaffDepartmentAssignment
 from app.models.user import User
 from app.core.enums import AppointmentStatus, UserRole
 from app.core.utils import generate_appointment_ref, generate_patient_ref
@@ -68,14 +68,30 @@ class AppointmentService:
         ]
     
     async def get_doctors_by_department(self, department_id: str, hospital_id: str) -> List[Dict[str, Any]]:
-        """Get all doctors in a specific department"""
+        """Get all doctors in a specific department (profile link or staff assignment)."""
+        dept_uuid = uuid.UUID(str(department_id))
+        hid = uuid.UUID(str(hospital_id))
+        assigned_staff = (
+            select(StaffDepartmentAssignment.staff_id)
+            .where(
+                and_(
+                    StaffDepartmentAssignment.hospital_id == hid,
+                    StaffDepartmentAssignment.department_id == dept_uuid,
+                    StaffDepartmentAssignment.is_active == True,
+                )
+            )
+            .distinct()
+        )
         result = await self.db.execute(
             select(DoctorProfile)
             .join(User, DoctorProfile.user_id == User.id)
             .where(
-                DoctorProfile.department_id == department_id,
-                DoctorProfile.hospital_id == hospital_id,
-                User.is_active == True
+                DoctorProfile.hospital_id == hid,
+                User.is_active == True,
+                or_(
+                    DoctorProfile.department_id == dept_uuid,
+                    DoctorProfile.user_id.in_(assigned_staff),
+                ),
             )
             .options(selectinload(DoctorProfile.user))
             .order_by(User.first_name, User.last_name)

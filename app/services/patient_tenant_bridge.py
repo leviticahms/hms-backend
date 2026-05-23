@@ -1,9 +1,8 @@
 """
-Bridge OPD/receptionist patients (platform DB) into the hospital tenant DB.
+Bridge OPD/receptionist patients between platform (auth/login) and hospital tenant DB.
 
-Receptionist APIs persist ``PatientProfile`` + portal ``User`` on the platform database so
-patient login resolves them. IPD, pharmacy, and other tenant-routed modules need the same
-UUID rows on the tenant database for FK integrity (``admissions.patient_id``, etc.).
+Receptionist APIs persist ``PatientProfile`` + portal ``User`` on the **tenant** database.
+Only ``users`` + ``user_roles`` are mirrored to platform for ``POST /auth/patient/login``.
 """
 from __future__ import annotations
 
@@ -129,29 +128,24 @@ async def resolve_patient_profile_id_for_tenant(
     return platform_patient.id
 
 
-async def mirror_opd_patient_to_platform(
+async def mirror_patient_auth_to_platform(
     platform_db: AsyncSession,
-    tenant_patient: PatientProfile,
     tenant_user: User,
 ) -> None:
     """
-    Copy tenant OPD patient + portal user onto the platform DB (same UUIDs).
+    Copy portal login credentials to platform DB only (users + PATIENT role).
 
-    Patient login reads the platform ``users`` table; receptionist CRUD is tenant-first.
+    ``PatientProfile`` stays on the tenant DB — not duplicated on platform.
     """
     await upsert_tenant_user_from_platform_user(
         platform_db, tenant_user, UserRole.PATIENT.value
     )
 
-    patient_data = {
-        column.name: getattr(tenant_patient, column.name)
-        for column in PatientProfile.__table__.columns
-    }
-    existing = await platform_db.get(PatientProfile, tenant_patient.id)
-    if existing:
-        for key, value in patient_data.items():
-            if key != "id":
-                setattr(existing, key, value)
-    else:
-        platform_db.add(PatientProfile(**patient_data))
-    await platform_db.flush()
+
+async def mirror_opd_patient_to_platform(
+    platform_db: AsyncSession,
+    tenant_patient: PatientProfile,
+    tenant_user: User,
+) -> None:
+    """Legacy full mirror; prefer ``mirror_patient_auth_to_platform`` for new OPD writes."""
+    await mirror_patient_auth_to_platform(platform_db, tenant_user)

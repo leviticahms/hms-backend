@@ -24,12 +24,16 @@ from app.core.database import get_db_session, get_platform_db_session
 from app.core.enums import AppointmentStatus, UserRole
 from app.core.response_utils import success_response
 from app.models.doctor import DoctorProfile
-from app.models.hospital import Department
+from app.models.hospital import Department, StaffDepartmentAssignment
 from app.models.nurse import NurseProfile
 from app.models.patient import Admission, Appointment, PatientProfile
 from app.models.user import Role, User, user_roles
 from app.services.appointment_service import AppointmentService
 from app.utils.hospital_id_resolve import resolve_effective_hospital_id
+from app.utils.doctor_department_resolve import (
+    doctor_department_display,
+    resolve_doctor_departments_multi_session,
+)
 from app.utils.receptionist_serializers import serialize_opd_appointment_full
 
 directory_router = APIRouter()
@@ -117,9 +121,18 @@ async def _active_doctor_user_ids_for_today(
     return {str(row) for row in result.scalars().all()}
 
 
-def _doctor_payload(doctor: DoctorProfile, active_statuses: set[str]) -> dict[str, Any]:
+def _doctor_payload(
+    doctor: DoctorProfile,
+    active_statuses: set[str],
+    department_override: Optional[Department] = None,
+) -> dict[str, Any]:
     user = doctor.user
-    department = doctor.department
+    department = department_override or doctor.department
+    dept_name, dept_id = doctor_department_display(
+        department,
+        user,
+        specialization=doctor.specialization,
+    )
     availability = _availability_label(doctor, active_statuses)
     return {
         "id": str(user.id),
@@ -132,8 +145,8 @@ def _doctor_payload(doctor: DoctorProfile, active_statuses: set[str]) -> dict[st
         "specialization": doctor.specialization,
         "experience": doctor.experience_years,
         "experienceUnit": "Years",
-        "department": department.name if department else "",
-        "departmentId": str(doctor.department_id),
+        "department": dept_name,
+        "departmentId": str(dept_id or doctor.department_id or ""),
         "consultationFee": float(doctor.consultation_fee or 0),
         "email": user.email,
         "phone": user.phone,
@@ -158,6 +171,7 @@ async def _doctor_query(
     department: Optional[str] = None,
     status_filter: Optional[str] = None,
     availability: Optional[str] = None,
+    platform_db: Optional[AsyncSession] = None,
 ):
     query = (
         select(DoctorProfile)
@@ -177,7 +191,23 @@ async def _doctor_query(
     if dept_ids is not None:
         if not dept_ids:
             return []
-        query = query.where(DoctorProfile.department_id.in_(dept_ids))
+        assigned_staff = (
+            select(StaffDepartmentAssignment.staff_id)
+            .where(
+                and_(
+                    StaffDepartmentAssignment.hospital_id == hospital_id,
+                    StaffDepartmentAssignment.department_id.in_(dept_ids),
+                    StaffDepartmentAssignment.is_active == True,
+                )
+            )
+            .distinct()
+        )
+        query = query.where(
+            or_(
+                DoctorProfile.department_id.in_(dept_ids),
+                DoctorProfile.user_id.in_(assigned_staff),
+            )
+        )
     if keyword:
         term = f"%{keyword.strip()}%"
         full_name = func.concat(User.first_name, " ", User.last_name)
@@ -200,7 +230,23 @@ async def _doctor_query(
     result = await db.execute(query.order_by(User.first_name, User.last_name))
     doctors = result.scalars().all()
     active_statuses = await _active_doctor_user_ids_for_today(db, hospital_id)
-    rows = [_doctor_payload(doctor, active_statuses) for doctor in doctors]
+
+    doctor_user_ids = [d.user_id for d in doctors if d.user_id]
+    sessions = [db]
+    if platform_db is not None and id(platform_db) != id(db):
+        sessions.append(platform_db)
+    dept_by_user = await resolve_doctor_departments_multi_session(
+        sessions, hospital_id, doctor_user_ids
+    )
+
+    rows = [
+        _doctor_payload(
+            doctor,
+            active_statuses,
+            department_override=dept_by_user.get(doctor.user_id),
+        )
+        for doctor in doctors
+    ]
     if availability:
         wanted = availability.strip().lower()
         rows = [row for row in rows if row["availability"].strip().lower() == wanted]
@@ -215,6 +261,7 @@ async def get_all_doctors(
     keyword: Optional[str] = Query(None, description="Optional search keyword"),
     current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     doctors = await _doctor_query(
@@ -224,6 +271,7 @@ async def get_all_doctors(
         department=department,
         status_filter=status,
         availability=availability,
+        platform_db=platform_db,
     )
     return success_response(message="Doctors retrieved successfully", data={"doctors": doctors, "total": len(doctors)})
 
@@ -233,9 +281,12 @@ async def search_doctors(
     keyword: str = Query(..., min_length=1),
     current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
-    doctors = await _doctor_query(db, hospital_id, keyword=keyword)
+    doctors = await _doctor_query(
+        db, hospital_id, keyword=keyword, platform_db=platform_db
+    )
     return success_response(message="Doctor search completed successfully", data={"doctors": doctors, "total": len(doctors)})
 
 
@@ -244,9 +295,16 @@ async def get_doctor_dropdown(
     department: Optional[str] = Query(None, description="Optional department name/code/UUID"),
     current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
-    doctors = await _doctor_query(db, hospital_id, department=department, status_filter="ACTIVE")
+    doctors = await _doctor_query(
+        db,
+        hospital_id,
+        department=department,
+        status_filter="ACTIVE",
+        platform_db=platform_db,
+    )
     items = [
         {
             "id": row["doctorId"],
@@ -266,9 +324,10 @@ async def get_doctor_dropdown(
 async def get_doctor_statistics(
     current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
-    doctors = await _doctor_query(db, hospital_id)
+    doctors = await _doctor_query(db, hospital_id, platform_db=platform_db)
     return success_response(
         message="Doctor statistics retrieved successfully",
         data={
@@ -287,6 +346,7 @@ async def get_doctor_by_id(
     doctor_id: str,
     current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     hospital_id = await _hospital_id(db, current_user)
     try:
@@ -308,7 +368,20 @@ async def get_doctor_by_id(
     if not doctor:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor not found")
     active_statuses = await _active_doctor_user_ids_for_today(db, hospital_id)
-    return success_response(message="Doctor retrieved successfully", data=_doctor_payload(doctor, active_statuses))
+    sessions = [db]
+    if id(platform_db) != id(db):
+        sessions.append(platform_db)
+    dept_map = await resolve_doctor_departments_multi_session(
+        sessions, hospital_id, [doctor.user_id]
+    )
+    return success_response(
+        message="Doctor retrieved successfully",
+        data=_doctor_payload(
+            doctor,
+            active_statuses,
+            department_override=dept_map.get(doctor.user_id),
+        ),
+    )
 
 
 def _department_payload(

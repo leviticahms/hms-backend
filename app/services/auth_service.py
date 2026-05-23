@@ -1398,7 +1398,7 @@ class AuthService:
         from sqlalchemy.orm import selectinload
 
         from app.database.session import get_tenant_session_factory
-        from app.services.patient_tenant_bridge import mirror_opd_patient_to_platform
+        from app.services.patient_tenant_bridge import mirror_patient_auth_to_platform
 
         res = await self.db.execute(
             select(Hospital.tenant_database_name).where(
@@ -1425,18 +1425,10 @@ class AuthService:
                     role_names = [getattr(role, "name", "") for role in (tu.roles or [])]
                     if UserRole.PATIENT.value not in role_names:
                         continue
-                    pr = await tdb.execute(
-                        select(PatientProfile)
-                        .where(PatientProfile.user_id == tu.id)
-                        .limit(1)
-                    )
-                    profile = pr.scalar_one_or_none()
-                    if not profile:
-                        continue
-                    await mirror_opd_patient_to_platform(self.db, profile, tu)
+                    await mirror_patient_auth_to_platform(self.db, tu)
                     await self.db.commit()
                     logger.info(
-                        "Auth heal: synced patient from tenant db=%s to platform email=%s",
+                        "Auth heal: synced patient login to platform from tenant db=%s email=%s",
                         db_name,
                         normalized_email,
                     )

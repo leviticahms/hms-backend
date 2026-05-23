@@ -2427,10 +2427,26 @@ class HospitalAdminService:
         query = query.offset(offset).limit(limit).order_by(DoctorProfile.created_at.desc())
         result = await self.db.execute(query)
         doctors = result.scalars().all()
-        
+
+        from app.utils.doctor_department_resolve import (
+            doctor_department_display,
+            resolve_doctor_departments_batch,
+        )
+
+        doctor_user_ids = [d.user_id for d in doctors if d.user_id]
+        dept_by_user = await resolve_doctor_departments_batch(
+            self.db, self.hospital_id, doctor_user_ids
+        )
+
         # Format response
         doctor_list = []
         for doctor in doctors:
+            resolved = dept_by_user.get(doctor.user_id)
+            dept_name, resolved_dept_id = doctor_department_display(
+                resolved or doctor.department,
+                doctor.user,
+                specialization=doctor.specialization,
+            )
             doctor_list.append({
                 "id": str(doctor.id),
                 "doctor_id": doctor.doctor_id,
@@ -2438,8 +2454,8 @@ class HospitalAdminService:
                 "user_name": f"{doctor.user.first_name} {doctor.user.last_name}",
                 "email": doctor.user.email,
                 "phone": doctor.user.phone,
-                "department_id": str(doctor.department_id) if doctor.department_id else None,
-                "department_name": doctor.department.name if doctor.department else None,
+                "department_id": str(resolved_dept_id or doctor.department_id or "") or None,
+                "department_name": dept_name or None,
                 "designation": doctor.designation,
                 "specialization": doctor.specialization,
                 "sub_specialization": doctor.sub_specialization,

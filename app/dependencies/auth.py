@@ -274,48 +274,63 @@ def require_patient() -> Callable:
 
 async def get_current_patient(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_platform_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
 ) -> PatientProfile:
     """
-    Get current authenticated patient from JWT token.
-    Patient identity is derived from token - no need to pass patient_id/patient_ref.
-    
-    Usage:
-        @router.get("/my/documents")
-        async def get_my_documents(
-            current_patient: PatientProfile = Depends(get_current_patient),
-            db: AsyncSession = Depends(get_db_session)
-        ):
-            # current_patient is the logged-in patient
+    Resolve the logged-in patient's profile from the **hospital tenant DB**.
+
+    Portal login still validates credentials on the platform ``users`` table; clinical
+  profile data lives on the tenant database after receptionist registration.
     """
     from sqlalchemy.orm import selectinload
-    
+
+    from app.database.session import get_tenant_session_factory
+    from app.database.tenant_context import resolve_tenant_database_name_for_hospital
+
     user_roles = [getattr(role, "name", "") for role in (current_user.roles or [])]
     if UserRole.PATIENT.value not in user_roles:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only patients can access this endpoint. Please login with patient credentials."
+            detail="Only patients can access this endpoint. Please login with patient credentials.",
         )
-    
+
+    hospital_id = getattr(current_user, "hospital_id", None)
+    if not hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Patient profile not found. Please contact support.",
+        )
+
+    tenant_name = await resolve_tenant_database_name_for_hospital(hospital_id)
+    if not tenant_name:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "TENANT_DB_NOT_CONFIGURED",
+                "message": "Hospital tenant database is not configured for this patient.",
+            },
+        )
+
     stmt = (
         select(PatientProfile)
-        .where(PatientProfile.user_id == current_user.id)
+        .where(
+            PatientProfile.user_id == current_user.id,
+            PatientProfile.hospital_id == hospital_id,
+        )
         .options(selectinload(PatientProfile.user))
     )
-    # When hospital_id is present on the token/user, enforce it for isolation.
-    # Receptionist registrations write to the platform DB, so patient portal must read from platform DB too.
-    if getattr(current_user, "hospital_id", None):
-        stmt = stmt.where(PatientProfile.hospital_id == current_user.hospital_id)
 
-    result = await db.execute(stmt)
-    patient = result.scalar_one_or_none()
-    
+    factory = get_tenant_session_factory(str(tenant_name).strip())
+    async with factory() as tenant_db:
+        result = await tenant_db.execute(stmt)
+        patient = result.scalar_one_or_none()
+
     if not patient:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Patient profile not found. Please contact support."
+            detail="Patient profile not found. Please contact support.",
         )
-    
+
     return patient
 
 
