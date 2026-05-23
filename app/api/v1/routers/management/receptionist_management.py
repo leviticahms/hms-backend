@@ -431,7 +431,7 @@ async def schedule_appointment(
     - Receptionist (or authenticated user with access to this router)
     
     Request body uses human-readable names only (`doctor_name`, optional `department_name`);
-    UUIDs for doctor/department are resolved server-side.
+    UUIDs for doctor/department are resolved server-side when the UI sends legacy `departmentId`.
 
     Features:
     - Conflict detection

@@ -524,9 +524,11 @@ async def get_department_dropdown(
         {
             "id": row["departmentId"],
             "departmentId": row["departmentId"],
+            "department_name": row["name"],
             "name": row["name"],
             "code": row["code"],
             "emergencyAvailable": row["emergencyAvailable"],
+            "scheduleField": "department_name",
         }
         for row in departments
     ]

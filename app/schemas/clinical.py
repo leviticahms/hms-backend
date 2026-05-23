@@ -321,10 +321,15 @@ class AppointmentSchedulingCreate(BaseModel):
         validation_alias=AliasChoices("doctor_name", "doctorName", "doctor"),
         description="Doctor display name, e.g. Dr. John Smith (must match a doctor in this hospital).",
     )
+    department_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("department_id", "departmentId"),
+        description="Optional legacy field; prefer department_name (e.g. Cardiology).",
+    )
     department_name: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("department_name", "departmentName", "department"),
-        description="Optional department name/code (e.g. Cardiology). If omitted, derived from the doctor's assignment.",
+        description="Department name or code (e.g. Cardiology). If omitted, derived from the doctor's assignment.",
     )
     appointment_date: str = Field(validation_alias=AliasChoices("appointment_date", "appointmentDate", "date"))
     appointment_time: str = Field(validation_alias=AliasChoices("appointment_time", "appointmentTime", "time"))
@@ -346,6 +351,21 @@ class AppointmentSchedulingCreate(BaseModel):
             raise ValueError("Either patient_ref or patient_name is required")
         if not (self.doctor_name or "").strip():
             raise ValueError("doctor_name is required")
+        return self
+
+    @model_validator(mode="after")
+    def normalize_department_input(self):
+        """If UI sends a UUID in department/department_name, treat it as department_id."""
+        import uuid as uuid_mod
+
+        dname = (self.department_name or "").strip()
+        did = (self.department_id or "").strip()
+        if dname and not did:
+            try:
+                uuid_mod.UUID(dname)
+                return self.model_copy(update={"department_id": dname, "department_name": None})
+            except ValueError:
+                pass
         return self
 
 
@@ -449,6 +469,11 @@ class AppointmentUpdate(BaseModel):
         validation_alias=AliasChoices("doctor_name", "doctorName", "doctor"),
         description="Doctor display name to reassign the appointment.",
     )
+    department_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("department_id", "departmentId"),
+        description="Optional legacy field; prefer department_name.",
+    )
     department_name: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("department_name", "departmentName", "department"),
@@ -468,6 +493,20 @@ class AppointmentUpdate(BaseModel):
     )
     notes: Optional[str] = None
     status: Optional[str] = None  # CONFIRMED, CANCELLED, RESCHEDULED
+
+    @model_validator(mode="after")
+    def normalize_department_input(self):
+        import uuid as uuid_mod
+
+        dname = (self.department_name or "").strip()
+        did = (self.department_id or "").strip()
+        if dname and not did:
+            try:
+                uuid_mod.UUID(dname)
+                return self.model_copy(update={"department_id": dname, "department_name": None})
+            except ValueError:
+                pass
+        return self
 
 
 class PatientCheckInCreate(BaseModel):

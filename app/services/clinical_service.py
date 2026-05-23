@@ -1258,42 +1258,26 @@ class ClinicalService:
             department_id=None,
         )
         dname = (appointment_data.get("department_name") or "").strip()
-        if dname:
-            department = await self.get_department_by_name(
-                dname, hid, doctor_user_id=doctor.id
-            )
-        else:
-            department = await self.get_primary_department_for_doctor(
-                doctor.id, hospital_id_uuid
-            )
+        dept_id_raw = appointment_data.get("department_id")
+        user_picked_dept = bool(dname or dept_id_raw)
+
+        department = await self._resolve_scheduling_department(
+            appointment_data,
+            doctor,
+            hospital_id_uuid,
+        )
         if department is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Could not resolve department for this doctor. Provide department_name or assign the doctor to a department.",
             )
-        if dname:
-            in_dept = False
-            for session in self._opd_db_sessions():
-                dept_check = await session.execute(
-                    select(StaffDepartmentAssignment.id).where(
-                        and_(
-                            StaffDepartmentAssignment.staff_id == doctor.id,
-                            StaffDepartmentAssignment.department_id == department.id,
-                            StaffDepartmentAssignment.is_active == True,
-                        )
-                    )
-                    .limit(1)
-                )
-                if dept_check.scalars().first():
-                    in_dept = True
-                    break
-            if not in_dept:
-                doc_dept = await self.get_primary_department_for_doctor(doctor.id, hospital_id_uuid)
-                if doc_dept.id != department.id:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Selected doctor is not assigned to this department",
-                    )
+        if user_picked_dept and not await self._doctor_assigned_to_department(
+            doctor.id, department, hospital_id_uuid
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Selected doctor is not assigned to department '{department.name}'",
+            )
 
         try:
             time_hhmmss = _appointment_time_to_db_hms(appointment_data.get("appointment_time"))
@@ -1629,11 +1613,11 @@ class ClinicalService:
                 )
             appointment.patient_id = patient.id
 
-        if modification_data.get("department_name"):
-            department = await self.get_department_by_name(
-                modification_data["department_name"],
-                user_context["hospital_id"],
-                doctor_user_id=appointment.doctor_id,
+        if modification_data.get("department_name") or modification_data.get("department_id"):
+            department = await self._resolve_scheduling_department(
+                modification_data,
+                await self._user_for_scheduling_doctor(appointment.doctor_id, hospital_id_uuid),
+                hospital_id_uuid,
             )
             appointment.department_id = department.id
 
@@ -3293,8 +3277,10 @@ class ClinicalService:
         department_id: Optional[Any],
         department_name: Optional[str],
         hospital_id: str,
+        *,
+        doctor_user_id: Optional[uuid.UUID] = None,
     ) -> Optional[Department]:
-        """Resolve an optional department from UUID/name; return None so caller can derive from doctor."""
+        """Resolve department from UUID or display name across platform + tenant."""
         hid = hospital_id if isinstance(hospital_id, uuid.UUID) else uuid.UUID(str(hospital_id))
         raw_id = str(department_id or "").strip()
         if raw_id:
@@ -3303,48 +3289,120 @@ class ClinicalService:
             except (TypeError, ValueError):
                 dept_uuid = None
             if dept_uuid is not None:
-                result = await self.db.execute(
-                    select(Department).where(
+                for sess in self._opd_db_sessions():
+                    result = await sess.execute(
+                        select(Department).where(
+                            and_(
+                                Department.id == dept_uuid,
+                                Department.hospital_id == hid,
+                                Department.is_active == True,
+                            )
+                        )
+                        .limit(1)
+                    )
+                    department = result.scalars().first()
+                    if department:
+                        return department
+
+            for sess in self._opd_db_sessions():
+                code_result = await sess.execute(
+                    select(Department)
+                    .where(
                         and_(
-                            Department.id == dept_uuid,
                             Department.hospital_id == hid,
                             Department.is_active == True,
+                            or_(
+                                func.upper(func.trim(Department.code)) == raw_id.upper(),
+                                func.upper(func.trim(Department.name)) == raw_id.upper(),
+                            ),
                         )
                     )
-                    .limit(1)
+                    .limit(2)
                 )
-                department = result.scalars().first()
-                if department:
-                    return department
-
-            code_result = await self.db.execute(
-                select(Department)
-                .where(
-                    and_(
-                        Department.hospital_id == hid,
-                        Department.is_active == True,
-                        or_(
-                            func.upper(func.trim(Department.code)) == raw_id.upper(),
-                            func.upper(func.trim(Department.name)) == raw_id.upper(),
-                        ),
-                    )
-                )
-                .limit(2)
-            )
-            code_rows = code_result.scalars().all()
-            if len(code_rows) == 1:
-                return code_rows[0]
+                code_rows = code_result.scalars().all()
+                if len(code_rows) == 1:
+                    return code_rows[0]
 
         dname = (department_name or "").strip()
         if dname:
             try:
-                return await self.get_department_by_name(dname, hospital_id, doctor_user_id=None)
+                return await self.get_department_by_name(
+                    dname, hospital_id, doctor_user_id=doctor_user_id
+                )
             except HTTPException as exc:
-                # A stale/free-text UI value should not block scheduling if the doctor has a department.
                 if exc.status_code != status.HTTP_404_NOT_FOUND:
                     raise
 
         return None
+
+    async def _resolve_scheduling_department(
+        self,
+        appointment_data: Dict[str, Any],
+        doctor: User,
+        hospital_id_uuid: uuid.UUID,
+    ) -> Department:
+        """Resolve department from name/id in payload, else doctor's primary assignment."""
+        department = await self.get_department_by_id_or_name(
+            appointment_data.get("department_id"),
+            appointment_data.get("department_name"),
+            str(hospital_id_uuid),
+            doctor_user_id=doctor.id,
+        )
+        if department:
+            return department
+        return await self.get_primary_department_for_doctor(doctor.id, hospital_id_uuid)
+
+    async def _user_for_scheduling_doctor(
+        self,
+        doctor_user_id: uuid.UUID,
+        hospital_id_uuid: uuid.UUID,
+    ) -> User:
+        for sess in self._opd_db_sessions():
+            result = await sess.execute(
+                select(User).where(
+                    and_(
+                        User.id == doctor_user_id,
+                        User.hospital_id == hospital_id_uuid,
+                    )
+                )
+                .limit(1)
+            )
+            user = result.scalars().first()
+            if user:
+                return user
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Doctor not found for this appointment",
+        )
+
+    async def _doctor_assigned_to_department(
+        self,
+        doctor_user_id: uuid.UUID,
+        department: Department,
+        hospital_id: uuid.UUID,
+    ) -> bool:
+        """True if doctor is assigned to this department (by id or matching name across DBs)."""
+        assigned_ids = await self._doctor_assigned_department_ids(doctor_user_id, hospital_id)
+        if department.id in assigned_ids:
+            return True
+
+        target_name = (department.name or "").strip().lower()
+        if not target_name:
+            return False
+
+        for dept_id in assigned_ids:
+            for sess in self._opd_db_sessions():
+                assigned_dept = await sess.get(Department, dept_id)
+                if assigned_dept and (assigned_dept.name or "").strip().lower() == target_name:
+                    return True
+
+        try:
+            primary = await self.get_primary_department_for_doctor(doctor_user_id, hospital_id)
+            if (primary.name or "").strip().lower() == target_name:
+                return True
+        except HTTPException:
+            pass
+        return False
 
     async def _resolve_doctor_for_scheduling(
         self,
