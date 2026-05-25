@@ -29,6 +29,7 @@ from app.utils.receptionist_serializers import (
 )
 from app.services.patient_tenant_bridge import (
     mirror_patient_auth_to_platform,
+    mirror_opd_patient_to_platform,
     resolve_patient_profile_id_for_tenant,
 )
 
@@ -1370,6 +1371,17 @@ class ClinicalService:
                 break
             appointment_ref = generate_appointment_ref()
 
+        patient_user = patient.user
+        if patient_user is None and patient.user_id:
+            patient_user = await self.tenant_db.get(User, patient.user_id)
+        if patient_user is None and patient.user_id:
+            patient_user = await self.platform_db.get(User, patient.user_id)
+
+        # Receptionist appointments still insert into platform DB in this flow.
+        # Ensure the patient profile exists there so appointments.patient_id FK succeeds.
+        if not self._sessions_share_connection():
+            await mirror_opd_patient_to_platform(self.platform_db, patient, patient_user)
+
         appt_type = _normalize_opd_appointment_type(appointment_data.get("appointment_type"))
 
         appointment = Appointment(
@@ -1393,10 +1405,6 @@ class ClinicalService:
 
         self.db.add(appointment)
         await self.db.commit()
-
-        patient_user = patient.user
-        if patient_user is None and patient.user_id:
-            patient_user = await self.platform_db.get(User, patient.user_id)
 
         return {
             "appointment_ref": appointment_ref,
