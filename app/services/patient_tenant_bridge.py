@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.enums import UserRole
+from app.models.hospital import Department
 from app.models.patient import PatientProfile
 from app.models.user import Role, User, user_roles
 
@@ -172,4 +173,33 @@ async def mirror_opd_patient_to_platform(
                 setattr(existing_patient, key, value)
     else:
         platform_db.add(PatientProfile(**patient_data))
+    await platform_db.flush()
+
+
+async def mirror_department_to_platform(
+    platform_db: AsyncSession,
+    tenant_department: Department,
+) -> None:
+    """
+    Ensure a department exists on the platform DB so ``appointments.department_id`` FK resolves.
+
+    Departments are created on the tenant DB by Hospital Admin. When a receptionist appointment
+    is written to the platform DB we copy the department across, **preserving the primary-key
+    UUID**. ``head_doctor_id`` is cleared if that user isn't on platform yet (nullable FK).
+    """
+    data = {
+        column.name: getattr(tenant_department, column.name)
+        for column in Department.__table__.columns
+    }
+    head_id = data.get("head_doctor_id")
+    if head_id is not None and await platform_db.get(User, head_id) is None:
+        data["head_doctor_id"] = None
+
+    existing = await platform_db.get(Department, tenant_department.id)
+    if existing:
+        for key, value in data.items():
+            if key != "id":
+                setattr(existing, key, value)
+    else:
+        platform_db.add(Department(**data))
     await platform_db.flush()

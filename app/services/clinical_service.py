@@ -30,6 +30,7 @@ from app.utils.receptionist_serializers import (
 from app.services.patient_tenant_bridge import (
     mirror_patient_auth_to_platform,
     mirror_opd_patient_to_platform,
+    mirror_department_to_platform,
     resolve_patient_profile_id_for_tenant,
 )
 
@@ -1378,9 +1379,12 @@ class ClinicalService:
             patient_user = await self.platform_db.get(User, patient.user_id)
 
         # Receptionist appointments still insert into platform DB in this flow.
-        # Ensure the patient profile exists there so appointments.patient_id FK succeeds.
+        # Ensure the patient profile exists there so appointments.patient_id FK succeeds, and
+        # re-resolve the department on the platform DB *by name* so a tenant-only department id
+        # never breaks appointments.department_id. The doctor user is already mirrored for auth.
         if not self._sessions_share_connection():
             await mirror_opd_patient_to_platform(self.platform_db, patient, patient_user)
+            department = await self._ensure_platform_department(department, hospital_id_uuid)
 
         appt_type = _normalize_opd_appointment_type(appointment_data.get("appointment_type"))
 
@@ -3342,6 +3346,41 @@ class ClinicalService:
                     raise
 
         return None
+
+    async def _ensure_platform_department(
+        self,
+        department: Department,
+        hospital_id_uuid: uuid.UUID,
+    ) -> Department:
+        """
+        Return a department that exists on the **platform DB** (where the appointment row lives).
+
+        Matches the resolved department **by name** within the hospital so a tenant-only
+        department id can't break ``appointments.department_id``. Falls back to creating the
+        department on platform (preserving its id) only when no name match exists.
+        """
+        existing = await self.platform_db.get(Department, department.id)
+        if existing:
+            return existing
+
+        name = (department.name or "").strip()
+        if name:
+            res = await self.platform_db.execute(
+                select(Department)
+                .where(
+                    and_(
+                        Department.hospital_id == hospital_id_uuid,
+                        func.lower(func.trim(Department.name)) == name.lower(),
+                    )
+                )
+                .limit(1)
+            )
+            match = res.scalar_one_or_none()
+            if match:
+                return match
+
+        await mirror_department_to_platform(self.platform_db, department)
+        return await self.platform_db.get(Department, department.id)
 
     async def _resolve_scheduling_department(
         self,
