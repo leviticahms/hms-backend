@@ -145,7 +145,31 @@ async def mirror_patient_auth_to_platform(
 async def mirror_opd_patient_to_platform(
     platform_db: AsyncSession,
     tenant_patient: PatientProfile,
-    tenant_user: User,
+    tenant_user: Optional[User],
 ) -> None:
-    """Legacy full mirror; prefer ``mirror_patient_auth_to_platform`` for new OPD writes."""
-    await mirror_patient_auth_to_platform(platform_db, tenant_user)
+    """
+    Ensure an OPD patient created on the tenant DB also exists on the platform DB.
+
+    Receptionist appointments are written to the platform ``appointments`` table, whose
+    ``patient_id`` FK references platform ``patient_profiles``. We therefore upsert both the
+    portal ``User`` (so ``patient_profiles.user_id`` resolves) and the ``PatientProfile``
+    itself into platform, **preserving the primary-key UUID** so it lines up with
+    ``Appointment.patient_id``.
+    """
+    # 1) Mirror the auth row first so patient_profiles.user_id FK is satisfied on platform.
+    if tenant_user is not None:
+        await mirror_patient_auth_to_platform(platform_db, tenant_user)
+
+    # 2) Upsert the PatientProfile on platform, copying all columns but keeping the same id.
+    patient_data = {
+        column.name: getattr(tenant_patient, column.name)
+        for column in PatientProfile.__table__.columns
+    }
+    existing_patient = await platform_db.get(PatientProfile, tenant_patient.id)
+    if existing_patient:
+        for key, value in patient_data.items():
+            if key != "id":
+                setattr(existing_patient, key, value)
+    else:
+        platform_db.add(PatientProfile(**patient_data))
+    await platform_db.flush()
