@@ -519,7 +519,7 @@ class AppointmentService:
         current_user: User
     ) -> Dict[str, Any]:
         """Search patients by phone, email, name, patient_id, or MRN (receptionist)."""
-        hospital_id = current_user.hospital_id or await resolve_effective_hospital_id(
+        hospital_id =  await resolve_effective_hospital_id(
             self.db, current_user
         )
         if not hospital_id:

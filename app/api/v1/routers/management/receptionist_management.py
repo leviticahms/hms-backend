@@ -637,7 +637,7 @@ async def list_all_patients(
         current_user,
     )
     return success_response(message="Patients retrieved successfully", data=result)
-
+    
 
 @router.get("/patients/search", tags=[TAG_PATIENT_RECORDS])
 async def search_patients(
