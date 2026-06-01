@@ -17,6 +17,7 @@ BUSINESS RULES:
 import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
 from typing import AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -265,6 +266,135 @@ def _receptionist_profile_base_dict(current_user: User) -> dict:
         "is_active": (getattr(current_user, "status", None) or "").upper() == "ACTIVE",
         **_receptionist_metadata_fields(current_user),
     }
+
+
+@asynccontextmanager
+async def _open_receptionist_profile_db(
+    current_user: User, platform_db: AsyncSession
+) -> AsyncGenerator[AsyncSession, None]:
+    """
+    Yield the DB session where ``ReceptionistProfile`` actually lives.
+
+    Staff profiles are created on the **hospital tenant DB** (by Hospital Admin), so when the
+    hospital has a provisioned tenant database we must read/write the profile there. Hospitals
+    running on the shared platform DB fall back to ``platform_db``.
+    """
+    tenant_name = None
+    if current_user.hospital_id:
+        from app.database.tenant_context import resolve_tenant_database_name_for_hospital
+
+        tenant_name = await resolve_tenant_database_name_for_hospital(current_user.hospital_id)
+    if tenant_name:
+        from app.database.session import get_tenant_session_factory
+
+        factory = get_tenant_session_factory(str(tenant_name).strip())
+        async with factory() as tenant_db:
+            yield tenant_db
+    else:
+        yield platform_db
+
+
+async def _resolve_receptionist_department_id(
+    profile_db: AsyncSession, current_user: User
+):
+    """
+    Pick a department for a receptionist that has no profile row yet.
+
+    Order: active staff-department assignment → ``user_metadata.department_id`` → first
+    department in the hospital. Returns ``None`` when the hospital has no department at all.
+    """
+    from app.models.hospital import StaffDepartmentAssignment
+
+    hid = current_user.hospital_id
+
+    res = await profile_db.execute(
+        select(StaffDepartmentAssignment.department_id)
+        .where(
+            and_(
+                StaffDepartmentAssignment.staff_id == current_user.id,
+                StaffDepartmentAssignment.hospital_id == hid,
+                StaffDepartmentAssignment.is_active == True,  # noqa: E712
+            )
+        )
+        .order_by(desc(StaffDepartmentAssignment.is_primary))
+    )
+    dept_id = res.scalars().first()
+    if dept_id:
+        return dept_id
+
+    md = current_user.user_metadata or {}
+    md_id = md.get("department_id")
+    if md_id:
+        try:
+            candidate = uuid.UUID(str(md_id))
+        except (TypeError, ValueError):
+            candidate = None
+        if candidate:
+            chk = await profile_db.execute(
+                select(Department.id).where(
+                    and_(Department.id == candidate, Department.hospital_id == hid)
+                )
+            )
+            if chk.scalar_one_or_none():
+                return candidate
+
+    res2 = await profile_db.execute(
+        select(Department.id)
+        .where(Department.hospital_id == hid)
+        .order_by(Department.name.asc())
+        .limit(1)
+    )
+    return res2.scalar_one_or_none()
+
+
+async def _get_or_create_receptionist_profile(
+    profile_db: AsyncSession, current_user: User
+):
+    """
+    Fetch the receptionist's profile from ``profile_db``; lazily create it when missing.
+
+    Receptionist accounts can exist (auth row) without a ``ReceptionistProfile`` row when the
+    account predates profile auto-creation or was provisioned in a different DB. This heals that
+    by creating the profile on demand so GET/PUT keep working. Returns ``None`` only when the
+    hospital has no department to attach the profile to.
+    """
+    from app.models.receptionist import ReceptionistProfile
+
+    res = await profile_db.execute(
+        select(ReceptionistProfile)
+        .options(selectinload(ReceptionistProfile.department))
+        .where(ReceptionistProfile.user_id == current_user.id)
+    )
+    receptionist = res.scalar_one_or_none()
+    if receptionist:
+        return receptionist
+
+    department_id = await _resolve_receptionist_department_id(profile_db, current_user)
+    if not department_id:
+        return None
+
+    md = current_user.user_metadata or {}
+    receptionist = ReceptionistProfile(
+        id=uuid.uuid4(),
+        hospital_id=current_user.hospital_id,
+        user_id=current_user.id,
+        department_id=department_id,
+        receptionist_id=current_user.staff_id or f"RC{uuid.uuid4().hex[:8].upper()}",
+        employee_id=f"EMP-{uuid.uuid4().hex[:12].upper()}",
+        designation=(md.get("designation") or "Front Desk Receptionist"),
+        work_area=(md.get("work_area") or "OPD"),
+        experience_years=0,
+        shift_type=(md.get("shift_timing") or "DAY"),
+    )
+    profile_db.add(receptionist)
+    await profile_db.commit()
+
+    res = await profile_db.execute(
+        select(ReceptionistProfile)
+        .options(selectinload(ReceptionistProfile.department))
+        .where(ReceptionistProfile.user_id == current_user.id)
+    )
+    return res.scalar_one_or_none()
 
 
 # ============================================================================
@@ -986,21 +1116,14 @@ async def get_receptionist_profile(
     - Work schedule
     - Performance metrics
     """
-    from app.models.receptionist import ReceptionistProfile
-
-    result = await db.execute(
-        select(ReceptionistProfile)
-        .options(selectinload(ReceptionistProfile.department))
-        .where(ReceptionistProfile.user_id == current_user.id)
-    )
-
-    receptionist = result.scalar_one_or_none()
+    async with _open_receptionist_profile_db(current_user, db) as profile_db:
+        receptionist = await _get_or_create_receptionist_profile(profile_db, current_user)
 
     base = _receptionist_profile_base_dict(current_user)
     base["role"] = "RECEPTIONIST"
 
     if not receptionist:
-        base["note"] = "Profile not yet created"
+        base["note"] = "Profile not yet created; no department exists for this hospital."
         return success_response(
             message="Receptionist profile not found",
             data=base,
@@ -1046,19 +1169,7 @@ async def update_receptionist_profile(
     user = await _receptionist_user_for_write(db, current_user)
     payload = body.model_dump(exclude_unset=True)
 
-    res = await db.execute(
-        select(ReceptionistProfile).where(ReceptionistProfile.user_id == user.id)
-    )
-    receptionist = res.scalar_one_or_none()
-    if not receptionist:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "RECEPTIONIST_PROFILE_MISSING",
-                "message": "Receptionist profile not found; contact hospital admin.",
-            },
-        )
-
+    # --- User-level fields (auth) live on the PLATFORM DB ---
     if "email" in payload and payload["email"] is not None:
         new_email = str(payload["email"]).strip().lower()
         cur = (user.email or "").strip().lower()
@@ -1113,71 +1224,87 @@ async def update_receptionist_profile(
         umd.update(md_updates)
         user.user_metadata = umd
 
-    if "employee_id" in payload and payload["employee_id"] is not None:
-        eid = str(payload["employee_id"]).strip()
-        dup_e = await db.execute(
-            select(ReceptionistProfile.id).where(
-                and_(
-                    ReceptionistProfile.hospital_id == receptionist.hospital_id,
-                    ReceptionistProfile.employee_id == eid,
-                    ReceptionistProfile.user_id != user.id,
-                )
-            )
-        )
-        if dup_e.scalar_one_or_none():
+    # --- ReceptionistProfile lives on the TENANT DB (auto-created if missing) ---
+    async with _open_receptionist_profile_db(current_user, db) as profile_db:
+        receptionist = await _get_or_create_receptionist_profile(profile_db, current_user)
+        if not receptionist:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
-                    "code": "EMPLOYEE_ID_IN_USE",
-                    "message": "This employee ID is already in use",
+                    "code": "RECEPTIONIST_DEPARTMENT_MISSING",
+                    "message": (
+                        "Cannot create your receptionist profile because the hospital has no "
+                        "department yet. Ask the hospital admin to create a department."
+                    ),
                 },
             )
-        receptionist.employee_id = eid
 
-    if "work_area" in payload:
-        receptionist.work_area = payload["work_area"]
-    if "shift_type" in payload:
-        receptionist.shift_type = (payload["shift_type"] or "").strip().upper() or receptionist.shift_type
-    if "employment_type" in payload:
-        receptionist.employment_type = (
-            (payload["employment_type"] or "").strip().upper() or receptionist.employment_type
-        )
-    if "experience_years" in payload and payload["experience_years"] is not None:
-        receptionist.experience_years = int(payload["experience_years"])
-    if "designation" in payload:
-        receptionist.designation = (payload["designation"] or "").strip() or receptionist.designation
+        if "employee_id" in payload and payload["employee_id"] is not None:
+            eid = str(payload["employee_id"]).strip()
+            dup_e = await profile_db.execute(
+                select(ReceptionistProfile.id).where(
+                    and_(
+                        ReceptionistProfile.hospital_id == receptionist.hospital_id,
+                        ReceptionistProfile.employee_id == eid,
+                        ReceptionistProfile.user_id != user.id,
+                    )
+                )
+            )
+            if dup_e.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "EMPLOYEE_ID_IN_USE",
+                        "message": "This employee ID is already in use",
+                    },
+                )
+            receptionist.employee_id = eid
 
-    await db.commit()
-    await db.refresh(user)
-    await db.refresh(receptionist)
+        if "work_area" in payload:
+            receptionist.work_area = payload["work_area"]
+        if "shift_type" in payload:
+            receptionist.shift_type = (payload["shift_type"] or "").strip().upper() or receptionist.shift_type
+        if "employment_type" in payload:
+            receptionist.employment_type = (
+                (payload["employment_type"] or "").strip().upper() or receptionist.employment_type
+            )
+        if "experience_years" in payload and payload["experience_years"] is not None:
+            receptionist.experience_years = int(payload["experience_years"])
+        if "designation" in payload:
+            receptionist.designation = (payload["designation"] or "").strip() or receptionist.designation
 
-    dept = None
-    if receptionist.department_id:
-        dr = await db.execute(
-            select(Department).where(Department.id == receptionist.department_id)
-        )
-        dept = dr.scalar_one_or_none()
+        await db.commit()
+        await db.refresh(user)
+        await profile_db.commit()
+        await profile_db.refresh(receptionist)
 
-    data = {
-        **_receptionist_profile_base_dict(user),
-        "role": "RECEPTIONIST",
-        "receptionist_id": receptionist.receptionist_id,
-        "employee_id": receptionist.employee_id,
-        "designation": receptionist.designation,
-        "work_area": receptionist.work_area,
-        "department_id": str(receptionist.department_id),
-        "department_name": dept.name if dept else None,
-        "experience_years": receptionist.experience_years,
-        "shift": receptionist.shift_type,
-        "shift_type": receptionist.shift_type,
-        "employment_type": receptionist.employment_type,
-        "permissions": {
-            "can_schedule_appointments": receptionist.can_schedule_appointments,
-            "can_modify_appointments": receptionist.can_modify_appointments,
-            "can_register_patients": receptionist.can_register_patients,
-            "can_collect_payments": receptionist.can_collect_payments,
-        },
-        "profile_is_active": receptionist.is_active,
-    }
+        dept = None
+        if receptionist.department_id:
+            dr = await profile_db.execute(
+                select(Department).where(Department.id == receptionist.department_id)
+            )
+            dept = dr.scalar_one_or_none()
+
+        data = {
+            **_receptionist_profile_base_dict(user),
+            "role": "RECEPTIONIST",
+            "receptionist_id": receptionist.receptionist_id,
+            "employee_id": receptionist.employee_id,
+            "designation": receptionist.designation,
+            "work_area": receptionist.work_area,
+            "department_id": str(receptionist.department_id),
+            "department_name": dept.name if dept else None,
+            "experience_years": receptionist.experience_years,
+            "shift": receptionist.shift_type,
+            "shift_type": receptionist.shift_type,
+            "employment_type": receptionist.employment_type,
+            "permissions": {
+                "can_schedule_appointments": receptionist.can_schedule_appointments,
+                "can_modify_appointments": receptionist.can_modify_appointments,
+                "can_register_patients": receptionist.can_register_patients,
+                "can_collect_payments": receptionist.can_collect_payments,
+            },
+            "profile_is_active": receptionist.is_active,
+        }
 
     return success_response(message="Profile updated successfully", data=data)

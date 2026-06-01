@@ -51,10 +51,18 @@ class ReceptionistProfileSelfUpdate(BaseModel):
         "shift_timing",
         "joining_date",
         "avatar_url",
+        "experience_years",
+        "employee_id",
+        "work_area",
+        "shift_type",
+        "employment_type",
+        "designation",
+        "phone",
         mode="before",
     )
     @classmethod
     def _empty_str_to_none(cls, v):
+        """Treat blank/whitespace form values as 'not provided' so saves don't 422."""
         if v is None:
             return None
         if isinstance(v, str) and not v.strip():

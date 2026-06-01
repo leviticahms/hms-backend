@@ -321,11 +321,6 @@ class AppointmentSchedulingCreate(BaseModel):
         validation_alias=AliasChoices("doctor_name", "doctorName", "doctor"),
         description="Doctor display name, e.g. Dr. John Smith (must match a doctor in this hospital).",
     )
-    department_id: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("department_id", "departmentId"),
-        description="Optional legacy field; prefer department_name (e.g. Cardiology).",
-    )
     department_name: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("department_name", "departmentName", "department"),
@@ -352,22 +347,6 @@ class AppointmentSchedulingCreate(BaseModel):
         if not (self.doctor_name or "").strip():
             raise ValueError("doctor_name is required")
         return self
-
-    @model_validator(mode="after")
-    def normalize_department_input(self):
-        """If UI sends a UUID in department/department_name, treat it as department_id."""
-        import uuid as uuid_mod
-
-        dname = (self.department_name or "").strip()
-        did = (self.department_id or "").strip()
-        if dname and not did:
-            try:
-                uuid_mod.UUID(dname)
-                return self.model_copy(update={"department_id": dname, "department_name": None})
-            except ValueError:
-                pass
-        return self
-
 
 class ReceptionistPatientDetailOut(BaseModel):
     """Full OPD patient profile for receptionist UI. Password is never returned (always null)."""
