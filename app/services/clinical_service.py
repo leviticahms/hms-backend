@@ -1281,6 +1281,7 @@ class ClinicalService:
                 detail=f"Selected doctor is not assigned to department '{department.name}'",
             )
 
+
         try:
             time_hhmmss = _appointment_time_to_db_hms(appointment_data.get("appointment_time"))
         except ValueError as e:
@@ -1309,7 +1310,7 @@ class ClinicalService:
                 detail="Appointment must be scheduled for a future date and time",
             )
 
-        svc = AppointmentService(self.db)
+        svc = AppointmentService(self.tenant_db)
         day_slots = await svc.get_available_time_slots_for_doctor_user(doctor.id, appt_date)
         if not day_slots:
             requested_weekday = appointment_datetime.strftime("%A").upper()
@@ -1332,7 +1333,7 @@ class ClinicalService:
                 detail="Time slot is not available",
             )
 
-        conflict_check = await self.db.execute(
+        conflict_check = await self.tenant_db.execute(
             select(Appointment).where(
                 and_(
                     Appointment.doctor_id == doctor.id,
@@ -1350,7 +1351,7 @@ class ClinicalService:
                 detail="Doctor is not available at this time. Please choose a different time slot.",
             )
 
-        dp_result = await self.db.execute(
+        dp_result = await self.tenant_db.execute(
             select(DoctorProfile).where(
                 and_(
                     DoctorProfile.user_id == doctor.id,
@@ -1365,7 +1366,7 @@ class ClinicalService:
 
         appointment_ref = generate_appointment_ref()
         while True:
-            existing_ref = await self.db.execute(
+            existing_ref = await self.tenant_db.execute(
                 select(Appointment).where(Appointment.appointment_ref == appointment_ref)
             )
             if not existing_ref.scalar_one_or_none():
@@ -1392,7 +1393,7 @@ class ClinicalService:
             id=uuid.uuid4(),
             hospital_id=hospital_id_uuid,
             appointment_ref=appointment_ref,
-            patient_id=patient.id,
+            patient_id=patient.patient_id,
             doctor_id=doctor.id,
             department_id=department.id,
             appointment_date=appt_date,
@@ -1407,8 +1408,8 @@ class ClinicalService:
             created_by_user=uuid.UUID(str(user_context["user_id"])),
         )
 
-        self.db.add(appointment)
-        await self.db.commit()
+        self.tenant_db.add(appointment)
+        await self.tenant_db.commit()
 
         return {
             "appointment_ref": appointment_ref,
@@ -1609,13 +1610,10 @@ class ClinicalService:
         # Update patient by patient_ref (frontend alias: patientId)
         if modification_data.get("patient_ref"):
             p_ref = str(modification_data["patient_ref"]).strip()
-            patient_result = await self.db.execute(
-                select(PatientProfile).where(
-                    and_(
-                        PatientProfile.hospital_id == hospital_id_uuid,
-                        PatientProfile.patient_id == p_ref,
-                    )
-                )
+            patient_result = await write_db.execute(
+                   select(PatientProfile).where(
+                   PatientProfile.patient_id == p_ref
+                 )
             )
             patient = patient_result.scalar_one_or_none()
             if not patient:
@@ -1634,13 +1632,37 @@ class ClinicalService:
             appointment.department_id = department.id
 
         if modification_data.get("doctor_name"):
-            doctor = await self.get_doctor_by_name(
-                modification_data["doctor_name"],
-                user_context["hospital_id"],
-                department_id=appointment.department_id,
-            )
-            appointment.doctor_id = doctor.id
+            doctor_name = modification_data["doctor_name"]
+            clean_name = doctor_name.lower().replace("dr.", "").replace("dr ", "").strip()
 
+            # STEP 1: strict match (best case)
+            result = await write_db.execute(
+               select(User).where(
+                 func.lower(func.concat(User.first_name, ' ', User.last_name)).like(f"%{clean_name}%")
+               )
+            )
+            user = result.scalar_one_or_none()
+
+            # STEP 2: fallback LIKE search (your asked code)
+            if not user:
+                raise HTTPException(
+                  status_code=404,
+                  detail=f"Doctor '{doctor_name}' not found"
+                )
+
+            result = await write_db.execute(select(DoctorProfile).where(DoctorProfile.user_id == user.id))
+            doctor = result.scalar_one_or_none()
+
+            # STEP 3: final check
+            if not doctor:
+                raise HTTPException(
+                  status_code=status.HTTP_404_NOT_FOUND,
+                  detail=f"Doctor '{modification_data['doctor_name']}' not found",
+                )
+
+            appointment.doctor_id = doctor.id  # or doctor.id (based on your schema)
+        
+        
         if "appointment_date" in modification_data and modification_data.get("appointment_date") is not None:
             s = str(modification_data["appointment_date"]).strip()
             appointment.appointment_date = s[:10] if len(s) >= 10 else s
@@ -3251,6 +3273,7 @@ class ClinicalService:
                 and_(
                     User.hospital_id == hid,
                     Role.name == UserRole.DOCTOR.value,
+                    #func.lower(Role.name) == UserRole.DOCTOR.value.lower(),
                     or_(
                         func.concat("Dr. ", User.first_name, " ", User.last_name).ilike(f"%{dn}%"),
                         func.concat(User.first_name, " ", User.last_name).ilike(f"%{dn}%"),
@@ -3269,6 +3292,8 @@ class ClinicalService:
             )
         result = await self.db.execute(q.limit(2))
         rows = result.scalars().all()
+        print("Searching doctor:", doctor_name)
+        print("Rows Found:", len(rows))
         if len(rows) == 1:
             return rows[0]
         if not rows:

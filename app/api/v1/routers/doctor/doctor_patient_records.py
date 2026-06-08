@@ -984,13 +984,15 @@ async def get_patient_summary(
     
     # Visit statistics
     visits_result = await db.execute(
-        select(
-            func.count(Appointment.id),
-            func.max(Appointment.appointment_date),
-            func.count(Appointment.id).filter(Appointment.doctor_id == doctor.id)
-        )
-        .where(Appointment.patient_id == patient.id)
+    select(
+        func.count(Appointment.id),
+        func.max(Appointment.appointment_date),
+        func.count(Appointment.id).filter(Appointment.doctor_id == doctor.user_id)
     )
+    .where(
+        Appointment.patient_id == patient.patient_id
+    )
+)
     
     visit_stats = visits_result.first()
     total_visits = visit_stats[0] if visit_stats else 0
@@ -1233,20 +1235,23 @@ async def get_patient_timeline(
     # Get all relevant medical events
     # Appointments
     appointments_result = await db.execute(
-        select(Appointment)
-        .where(
-            and_(
-                Appointment.patient_id == patient.id,
-                Appointment.appointment_date >= date_from,
-                Appointment.appointment_date <= date_to
-            )
+    select(Appointment)
+    .where(
+        and_(
+            Appointment.patient_id == patient.patient_id,
+            Appointment.appointment_date >= date_from,
+            Appointment.appointment_date <= date_to
         )
-        .options(
-            selectinload(Appointment.doctor),
-            selectinload(Appointment.department)
-        )
-        .order_by(Appointment.appointment_date, Appointment.appointment_time)
     )
+    .options(
+        selectinload(Appointment.doctor),
+        selectinload(Appointment.department)
+    )
+    .order_by(
+        Appointment.appointment_date,
+        Appointment.appointment_time
+    )
+)
     appointments = appointments_result.scalars().all()
     
     # Convert date strings to datetime objects for proper comparison
@@ -1497,18 +1502,18 @@ async def analyze_case_history(
     
     # Get appointments for outcome analysis
     appointments_result = await db.execute(
-        select(Appointment)
-        .where(
-            and_(
-                Appointment.patient_id == patient.id,
-                Appointment.created_at >= start_date,
-                Appointment.created_at <= end_date
-            )
-        )
-        .options(
-            selectinload(Appointment.doctor)
+    select(Appointment)
+    .where(
+        and_(
+            Appointment.patient_id == patient.patient_id,
+            Appointment.created_at >= start_date,
+            Appointment.created_at <= end_date
         )
     )
+    .options(
+        selectinload(Appointment.doctor)
+    )
+)
     appointments = appointments_result.scalars().all()
     
     # Get prescriptions for medication analysis
@@ -2051,7 +2056,7 @@ async def create_medical_record(
             .where(
                 and_(
                     Appointment.appointment_ref == request.appointment_ref,
-                    Appointment.patient_id == patient.id,
+                    Appointment.patient_id == patient.patient_id,
                     Appointment.doctor_id == doctor.user_id
                 )
             )

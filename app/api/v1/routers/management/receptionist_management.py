@@ -847,7 +847,36 @@ async def get_patient_profile_for_schedule(
 # ============================================================================
 
 
-@router.post("/patient-documents/upload", tags=[TAG_DOCUMENTS])
+@router.post(
+    "/patient-documents/upload",
+    tags=[TAG_DOCUMENTS],
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["patient_id", "document_type", "category", "uploaded_by", "files"],
+                        "properties": {
+                            "patient_id": {"type": "string"},
+                            "document_type": {"type": "string"},
+                            "category": {"type": "string"},
+                            "uploaded_by": {"type": "string"},
+                            "files": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "format": "binary"
+                                },
+                            },
+                        },
+                    }
+                }
+            },
+            "required": True,
+        }
+    },
+)
 async def receptionist_upload_patient_documents(
     patient_id: str = Form(
         ...,
@@ -859,13 +888,13 @@ async def receptionist_upload_patient_documents(
         ...,
         description="Display name of uploader (should match signed-in receptionist)",
     ),
-    files: List[UploadFile] = File(..., description="One or more files"),
+    files: list[UploadFile] = File(..., description="One or more files"),
     current_user: User = Depends(require_receptionist()),
     db: AsyncSession = Depends(get_receptionist_tenant_db),
 ):
     """
     Upload one or more documents for a patient (multipart/form-data).
-
+ 
     **Form fields:** ``patient_id``, ``document_type``, ``category``, ``uploaded_by``, ``files`` (repeatable).
     """
     from app.api.v1.routers.patient.patient_document_storage import (
@@ -874,7 +903,7 @@ async def receptionist_upload_patient_documents(
         validate_file_size,
         validate_file_type,
     )
-
+ 
     if not files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -890,17 +919,17 @@ async def receptionist_upload_patient_documents(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "MISSING_CATEGORY", "message": "category is required"},
         )
-
+ 
     patient = await _resolve_patient_for_documents(patient_id, current_user, db)
     dtype = _normalize_patient_document_type(document_type)
     cat = category.strip()
-
+ 
     hospital_id_for_doc = str(current_user.hospital_id)
     if patient.hospital_id:
         hospital_id_for_doc = str(patient.hospital_id)
     pref = patient.patient_id
     upload_dir = get_upload_directory(hospital_id_for_doc, pref)
-
+ 
     saved_paths: List[str] = []
     out_rows: List[dict] = []
     try:
@@ -920,7 +949,7 @@ async def receptionist_upload_patient_documents(
             file_path = os.path.join(upload_dir, unique_filename)
             file_size = await save_uploaded_file(file, file_path)
             saved_paths.append(file_path)
-
+ 
             doc = PatientDocument(
                 id=uuid.uuid4(),
                 hospital_id=uuid.UUID(hospital_id_for_doc),
@@ -975,7 +1004,7 @@ async def receptionist_upload_patient_documents(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to upload documents",
         )
-
+ 
     return success_response(
         message="Documents uploaded successfully",
         data=out_rows,
