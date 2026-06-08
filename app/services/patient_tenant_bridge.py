@@ -124,7 +124,7 @@ async def resolve_patient_profile_id_for_tenant(
             if key != "id":
                 setattr(existing_patient, key, value)
     else:
-        tenant_db.add(PatientProfile(**patient_data, id=platform_patient.id,))
+        tenant_db.add(PatientProfile(**patient_data))
     await tenant_db.flush()
     return platform_patient.id
 

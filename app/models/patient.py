@@ -20,7 +20,7 @@ class PatientProfile(TenantBaseModel):
     user_id = Column(UUID_TYPE, ForeignKey("users.id"), nullable=False, unique=True)
     
     # Patient identification
-    patient_id = Column(String(50), unique=True, nullable=False)  # Hospital-specific patient ID
+    patient_id = Column(String(50), nullable=False)  # Hospital-specific patient ID
     mrn = Column(String(50))  # Medical Record Number
     
     # Personal details
@@ -83,7 +83,7 @@ class Appointment(TenantBaseModel):
     appointment_ref = Column(String(20), nullable=False, unique=True)
     
     # Core appointment details
-    patient_id = Column(String(50), ForeignKey("patient_profiles.patient_id"), nullable=False)
+    patient_id = Column(UUID_TYPE, ForeignKey("patient_profiles.id"), nullable=False)
     doctor_id = Column(UUID_TYPE, ForeignKey("users.id"), nullable=False)
     department_id = Column(UUID_TYPE, ForeignKey("departments.id"), nullable=False)
     
