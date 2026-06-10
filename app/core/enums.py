@@ -29,8 +29,10 @@ class AppointmentStatus(str, Enum):
     """Appointment status for booking workflow"""
     REQUESTED = "REQUESTED"
     CONFIRMED = "CONFIRMED"
-    CANCELLED = "CANCELLED"
+    CHECKED_IN = "CHECKED_IN"
+    IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
 
 
 class AdmissionType(str, Enum):

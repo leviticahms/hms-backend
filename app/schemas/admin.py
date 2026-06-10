@@ -539,7 +539,7 @@ class AdmissionCreate(BaseModel):
 class BedAssignmentCreate(BaseModel):
     """Bed assignment request"""
     bed_id: str = Field(..., description="UUID of bed to assign")
-
+    admission_notes: Optional[str] = None
 
 class DischargeCreate(BaseModel):
     """Patient discharge request"""

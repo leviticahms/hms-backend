@@ -539,7 +539,7 @@ class BedAssignmentCreate(BaseModel):
     ward: str
     room_number: str
     bed_number: str
-    notes: Optional[str] = None
+    admission_notes: Optional[str] = None
 
 
 class TreatmentPlanCreate(BaseModel):

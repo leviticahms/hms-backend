@@ -454,7 +454,7 @@ async def get_todays_appointment_tracking(
     
     # Get today's appointments with patient details (doctor + hospital isolation)
     conditions = [
-        Appointment.doctor_id == doctor.id,
+        Appointment.doctor_id == doctor.user_id,
         Appointment.appointment_date == today
     ]
     if user_context.get("hospital_id"):
@@ -714,16 +714,19 @@ async def get_upcoming_appointments_tracking(
     # Calculate date range
     today = date.today()
     end_date = today + timedelta(days=days_ahead)
+    end_date_str = end_date.isoformat()
+
     
     # Get upcoming appointments (doctor + hospital isolation)
     conditions = [
         Appointment.doctor_id == doctor.user_id,
         Appointment.appointment_date >= today.isoformat(),
         Appointment.appointment_date <= end_date.isoformat(),
-        Appointment.status.in_([AppointmentStatus.REQUESTED, AppointmentStatus.CONFIRMED])
+        Appointment.status.in_([AppointmentStatus.REQUESTED, AppointmentStatus.CONFIRMED, AppointmentStatus.CHECKED_IN]) 
     ]
     if user_context.get("hospital_id"):
         conditions.append(Appointment.hospital_id == uuid.UUID(user_context["hospital_id"]))
+
     appointments_result = await db.execute(
         select(Appointment)
         .where(and_(*conditions))

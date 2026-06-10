@@ -1393,7 +1393,7 @@ class ClinicalService:
             id=uuid.uuid4(),
             hospital_id=hospital_id_uuid,
             appointment_ref=appointment_ref,
-            patient_id=patient.patient_id,
+            patient_id=patient.id,
             doctor_id=doctor.id,
             department_id=department.id,
             appointment_date=appt_date,
@@ -1413,7 +1413,7 @@ class ClinicalService:
 
         return {
             "appointment_ref": appointment_ref,
-            "patient_ref": patient.patient_id,
+            "patient_ref": patient.id,
             "patient_name": (
                 f"{patient_user.first_name} {patient_user.last_name}".strip()
                 if patient_user
