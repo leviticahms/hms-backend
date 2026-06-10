@@ -1205,7 +1205,9 @@ async def update_appointment_delay(
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "updated_by": str(doctor.user_id)
     }
-    
+    import json
+    appointment.notes = f"[DELAY]{json.dumps(delay_info)}[/DELAY]"
+    await db.commit()
     # Send notification to patient if requested
     if request.notify_patient:
         recipient = {
@@ -1287,22 +1289,27 @@ async def get_todays_delays(
     delays_summary = []
     total_delay_minutes = 0
     
-    for i, appointment in enumerate(appointments):
-        # Simulate some appointments having delays
-        if i % 3 == 0 and i > 0:  # Every 3rd appointment after the first has a delay
-            delay_minutes = 15 + (i * 5)  # Increasing delays throughout the day
-            total_delay_minutes += delay_minutes
-            
-            delays_summary.append({
-                "appointment_ref": appointment.appointment_ref,
-                "patient_name": f"{appointment.patient.user.first_name} {appointment.patient.user.last_name}",
-                "original_time": appointment.appointment_time,
-                "delay_minutes": delay_minutes,
-                "estimated_new_time": (datetime.combine(date.today(), _parse_appointment_time(appointment.appointment_time)) + timedelta(minutes=delay_minutes)).time().strftime("%H:%M:%S"),
-                "reason": "Previous appointment overran" if i < len(appointments) // 2 else "Emergency consultation",
-                "patient_notified": True,
-                "updated_at": (datetime.now() - timedelta(minutes=30)).isoformat()
-            })
+    import json
+
+    for appointment in appointments:
+        notes = appointment.notes or ""
+        if "[DELAY]" in notes:
+            try:
+                delay_json = notes.split("[DELAY]")[1].split("[/DELAY]")[0]
+                delay_info = json.loads(delay_json)
+                total_delay_minutes += delay_info.get("delay_minutes", 0)
+                delays_summary.append({
+                    "appointment_ref": appointment.appointment_ref,
+                    "patient_name": f"{appointment.patient.user.first_name} {appointment.patient.user.last_name}",
+                    "original_time": appointment.appointment_time,
+                    "delay_minutes": delay_info["delay_minutes"],
+                    "estimated_new_time": delay_info["estimated_new_time"],
+                    "reason": delay_info["reason"],
+                    "patient_notified": True,
+                    "updated_at": delay_info["updated_at"]
+                })
+            except Exception:
+                pass
     
     # Calculate running delay (cumulative effect)
     current_running_delay = 0
