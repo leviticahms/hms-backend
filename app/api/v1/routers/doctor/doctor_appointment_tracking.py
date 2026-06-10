@@ -454,7 +454,7 @@ async def get_todays_appointment_tracking(
     
     # Get today's appointments with patient details (doctor + hospital isolation)
     conditions = [
-        Appointment.doctor_id == doctor.user_id,
+        Appointment.doctor_id == doctor.id,
         Appointment.appointment_date == today
     ]
     if user_context.get("hospital_id"):
