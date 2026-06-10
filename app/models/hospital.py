@@ -64,6 +64,7 @@ class StaffProfile(TenantBaseModel):
     
     # Employment details
     employee_id = Column(String(50), nullable=False)
+    staff_name = Column(String(255), nullable=False, index=True)
     designation = Column(String(100), nullable=False)
     joining_date = Column(String(10), nullable=False)  # YYYY-MM-DD
     

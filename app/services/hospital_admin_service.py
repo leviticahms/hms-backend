@@ -1079,6 +1079,7 @@ class HospitalAdminService:
                     user_id=user.id,
                     department_id=department_for_create.id,
                     employee_id=user.staff_id or user.email,
+                    staff_name=f"Dr. {user.first_name} {user.last_name}",
                     designation="Doctor",
                     joining_date=join_date_str,
                     qualification=None,
@@ -1216,6 +1217,7 @@ class HospitalAdminService:
                         user_id=user.id,
                         department_id=department.id,
                         employee_id=user.staff_id or user.email,
+                        staff_name=f"{user.first_name} {user.last_name}",
                         designation=str(designation_map.get(role_name) or "Staff").strip(),
                         joining_date=sp_join,
                         qualification=None,
@@ -6000,12 +6002,20 @@ class HospitalAdminService:
             joining_date_str = effective_from.date().isoformat()
 
             if not staff_profile:
+                full_name = f"{staff_member.first_name} {staff_member.last_name}"
+
+                if UserRole.DOCTOR in staff_roles:
+                    full_name = f"Dr. {full_name}"
+                elif UserRole.NURSE in staff_roles:
+                    full_name = f"Nurse {full_name}"
+
                 staff_profile = StaffProfile(
                     id=uuid.uuid4(),
                     hospital_id=self.hospital_id,
                     user_id=staff_member.id,
                     department_id=department.id,
                     employee_id=staff_member.staff_id or staff_member.email,
+                    staff_name=full_name,
                     designation=designation,
                     joining_date=joining_date_str,
                     qualification=None,
@@ -6019,6 +6029,7 @@ class HospitalAdminService:
                     skills=[],
                     certifications=[],
                 )
+  
                 self.db.add(staff_profile)
             else:
                 # Update primary department / designation if profile already exists

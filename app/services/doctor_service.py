@@ -1568,7 +1568,7 @@ class DoctorService:
             select(Appointment)
             .where(
                 and_(
-                    Appointment.patient_id == patient.id,
+                    Appointment.patient_id == patient.patient_id,
                     Appointment.doctor_id == doctor.id,
                     Appointment.appointment_date == date.today().isoformat(),
                     Appointment.status.in_([AppointmentStatus.CONFIRMED])
@@ -1608,7 +1608,7 @@ class DoctorService:
             select(Appointment.appointment_date)
             .where(
                 and_(
-                    Appointment.patient_id == patient.id,
+                    Appointment.patient_id == patient.patient_id,
                     Appointment.doctor_id == doctor.id,
                     Appointment.status == AppointmentStatus.COMPLETED
                 )

@@ -621,7 +621,7 @@ async def get_recent_patients(
             func.max(Appointment.appointment_date).label('last_visit'),
             func.count(Appointment.id).label('total_visits')
         )
-        .join(Appointment, PatientProfile.id == Appointment.patient_id)
+        .join(Appointment, PatientProfile.patient_id == Appointment.patient_id)
         .where(
             and_(
                 Appointment.doctor_id == doctor.id,
