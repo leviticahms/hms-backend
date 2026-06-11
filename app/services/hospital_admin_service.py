@@ -370,11 +370,11 @@ class HospitalAdminService:
         await self._upsert_platform_user_from_tenant_row(tu)
         await self.platform_db.commit()
 
-    async def _mirror_platform_user_if_configured(self, user_id: uuid.UUID) -> None:
-        """After tenant ``users`` mutations, upsert the same row on platform (login resolves there)."""
-        if self.platform_db is None:
-            return
-        await self._safe_platform_mirror(self._sync_user_row_to_platform_after_mutation(user_id))
+    # async def _mirror_platform_user_if_configured(self, user_id: uuid.UUID) -> None:
+    #     """After tenant ``users`` mutations, upsert the same row on platform (login resolves there)."""
+    #     if self.platform_db is None:
+    #         return
+    #     await self._safe_platform_mirror(self._sync_user_row_to_platform_after_mutation(user_id))
 
     async def _get_or_create_role_for_staff(self, role_name: Any) -> Role:
         """
@@ -1866,7 +1866,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
-        await self._mirror_platform_user_if_configured(user.id)
+        #await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.DOCTOR.value,
@@ -1962,7 +1962,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
-        await self._mirror_platform_user_if_configured(user.id)
+        #await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.NURSE.value,
@@ -2068,7 +2068,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
-        await self._mirror_platform_user_if_configured(user.id)
+        #await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.RECEPTIONIST.value,
@@ -2100,7 +2100,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
-        await self._mirror_platform_user_if_configured(user.id)
+        #await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.LAB_TECH.value,
@@ -2132,7 +2132,7 @@ class HospitalAdminService:
         user.user_metadata = md
         user.updated_at = datetime.utcnow()
         await self.db.commit()
-        await self._mirror_platform_user_if_configured(user.id)
+        #await self._mirror_platform_user_if_configured(user.id)
         return {
             "user_id": str(user.id),
             "role": UserRole.PHARMACIST.value,
@@ -2182,7 +2182,7 @@ class HospitalAdminService:
             user.status = UserStatus.ACTIVE.value
         
         await self.db.commit()
-        await self._mirror_platform_user_if_configured(user.id)
+        #await self._mirror_platform_user_if_configured(user.id)
         
         status_text = "activated" if is_active else "deactivated"
         status_str = (
@@ -2241,8 +2241,8 @@ class HospitalAdminService:
         user.updated_at = datetime.utcnow()
         
         await self.db.commit()
-        if self.platform_db is not None:
-            await self._mirror_staff_auth_to_platform(user.id, primary_role)
+        #if self.platform_db is not None:
+        #    await self._mirror_staff_auth_to_platform(user.id, primary_role)
         
         return {
             "user_id": str(user.id),
@@ -3241,7 +3241,7 @@ class HospitalAdminService:
                 await self.db.commit()
         else:
             await self.db.commit()
-            await self._mirror_platform_user_if_configured(patient.user.id)
+            #await self._mirror_platform_user_if_configured(patient.user.id)
         
         status_text = "activated" if is_active else "deactivated"
         
@@ -6184,7 +6184,7 @@ class HospitalAdminService:
                 receptionist_profile_created = True
 
         await self.db.commit()
-        await self._mirror_platform_user_if_configured(staff_member.id)
+        #await self._mirror_platform_user_if_configured(staff_member.id)
         
         return {
             "staff_name": staff_name,

@@ -987,10 +987,10 @@ async def get_patient_summary(
     select(
         func.count(Appointment.id),
         func.max(Appointment.appointment_date),
-        func.count(Appointment.id).filter(Appointment.doctor_id == doctor.user_id)
+        func.count(Appointment.id).filter(Appointment.doctor_id == doctor.id)
     )
     .where(
-        Appointment.patient_id == patient.patient_id
+        Appointment.patient_id == patient.id
     )
 )
     
@@ -1238,7 +1238,7 @@ async def get_patient_timeline(
     select(Appointment)
     .where(
         and_(
-            Appointment.patient_id == patient.patient_id,
+            Appointment.patient_id == patient.id,
             Appointment.appointment_date >= date_from,
             Appointment.appointment_date <= date_to
         )
@@ -1505,7 +1505,7 @@ async def analyze_case_history(
     select(Appointment)
     .where(
         and_(
-            Appointment.patient_id == patient.patient_id,
+            Appointment.patient_id == patient.id,
             Appointment.created_at >= start_date,
             Appointment.created_at <= end_date
         )
@@ -2056,7 +2056,7 @@ async def create_medical_record(
             .where(
                 and_(
                     Appointment.appointment_ref == request.appointment_ref,
-                    Appointment.patient_id == patient.patient_id,
+                    Appointment.patient_id == patient.id,
                     Appointment.doctor_id == doctor.user_id
                 )
             )
@@ -2148,7 +2148,7 @@ async def update_medical_record(
         .where(
             and_(
                 MedicalRecord.id == record_id,
-                MedicalRecord.doctor_id == doctor.user_id,
+                MedicalRecord.doctor_id == doctor.id,
                 MedicalRecord.hospital_id == user_context["hospital_id"]
             )
         )
