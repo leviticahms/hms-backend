@@ -733,10 +733,10 @@ class ReportAnalyticsScope:
             ).scalar() or 0
         return total
 
-    async def count_medical_records(self, **extra_filters: Any) -> int:
+    async def count_medical_records(self, *extra_conditions) -> int:
         total = 0
         filters = list(self.medical_record_filters())
-        filters.extend(extra_filters)
+        filters.extend(extra_conditions)
         for session in self.sessions():
             total += (
                 await session.execute(select(func.count(MedicalRecord.id)).where(and_(*filters)))
