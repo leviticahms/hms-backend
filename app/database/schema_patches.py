@@ -140,6 +140,38 @@ def ensure_patient_profiles_opd_schema(sync_dsn: str) -> None:
     finally:
         eng.dispose()
 
+def ensure_staff_profiles_schema(sync_dsn: str) -> None:
+    """Ensure staff_profiles has staff_name column."""
+    dsn = (sync_dsn or "").strip()
+    if not dsn:
+        logger.warning("ensure_staff_profiles_schema: empty DSN, skipping")
+        return
+
+    eng = create_engine(dsn, connect_args=psycopg2_engine_connect_args())
+    try:
+        insp = inspect(eng)
+        if not insp.has_table("staff_profiles"):
+            logger.debug("staff_profiles missing; skipping staff_name patch")
+            return
+
+        col_names = {c["name"] for c in insp.get_columns("staff_profiles")}
+        alters: list[str] = []
+
+        if "staff_name" not in col_names:
+            alters.append(
+                "ALTER TABLE staff_profiles ADD COLUMN staff_name VARCHAR(255)"
+            )
+
+        if not alters:
+            return
+
+        logger.info("Applying staff_profiles column patch (%d statement(s))", len(alters))
+        with eng.begin() as conn:
+            for stmt in alters:
+                conn.execute(text(stmt))
+    finally:
+        eng.dispose()
+
 
 def ensure_core_schema_drift_fixes_for_database(sync_dsn: str) -> None:
     """
@@ -151,6 +183,7 @@ def ensure_core_schema_drift_fixes_for_database(sync_dsn: str) -> None:
     ensure_patient_profiles_opd_schema(sync_dsn)
     ensure_doctor_profiles_consultation_schema(sync_dsn)
     ensure_required_roles_catalog(sync_dsn)
+    ensure_staff_profiles_schema(sync_dsn)
 
 
 def ensure_required_roles_catalog(sync_dsn: str) -> None:

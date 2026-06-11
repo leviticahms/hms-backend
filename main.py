@@ -475,7 +475,43 @@ async def sync_superadmin_credentials():
     except Exception as exc:
         logger.warning("SuperAdmin credential sync failed: %s", exc)
 
+async def patch_all_tenant_databases() -> None:
+    """
+    On every startup, patch all existing tenant DBs with missing columns.
+    Safe to run multiple times — all patches are idempotent.
+    """
+    from app.database.schema_patches import ensure_core_schema_drift_fixes_for_database
+    from app.services.tenant_database_provisioning import sync_url_for_tenant_database
 
+    try:
+        eng = create_engine(
+            settings.DATABASE_URL_SYNC,
+            connect_args=psycopg2_engine_connect_args()
+        )
+        with eng.connect() as conn:
+            rows = conn.execute(text(
+                "SELECT tenant_database_name FROM hospitals "
+                "WHERE tenant_database_name IS NOT NULL"
+            )).fetchall()
+        eng.dispose()
+
+        tenant_dbs = [r[0] for r in rows if r[0]]
+        logger.info("Patching %d tenant database(s) for schema drift...", len(tenant_dbs))
+
+        for db_name in tenant_dbs:
+            try:
+                url = sync_url_for_tenant_database(db_name)
+                # schema_patches uses sync SQLAlchemy — run in thread
+                await asyncio.to_thread(ensure_core_schema_drift_fixes_for_database, url)
+                logger.info("Tenant DB patched: %s", db_name)
+            except Exception as e:
+                logger.error("Failed to patch tenant DB %s: %s", db_name, e)
+
+        logger.info("All tenant DB patches complete")
+
+    except Exception as e:
+        logger.error("patch_all_tenant_databases failed: %s", e)
+        
 async def lifespan(app: FastAPI):
     """Application lifespan with single setup function"""
     logger.info(" Starting Hospital Management SaaS application...")
@@ -584,6 +620,7 @@ async def setup_database_once() -> bool:
             await asyncio.to_thread(
                 ensure_core_schema_drift_fixes_for_database, settings.DATABASE_URL_SYNC
             )
+            await patch_all_tenant_databases()
 
             # Step 2.5: Optionally prune legacy tables (dev/local only)
             if settings.DB_PRUNE_UNUSED_TABLES:
