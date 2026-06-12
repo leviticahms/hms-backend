@@ -1198,7 +1198,7 @@ async def dispense_prescription(
 
     prescription.medications = updated_medications
     prescription.is_dispensed = True
-    prescription.dispensed_at = datetime.now().isoformat()
+    prescription.dispensed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     prescription.dispensed_by = user_uuid
 
     await db.commit()

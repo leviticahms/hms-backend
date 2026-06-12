@@ -620,7 +620,38 @@ async def get_todays_appointments(
     result = await clinical_service.get_todays_opd_appointments(filters, current_user)
     return success_response(message="Appointments retrieved successfully", data=result)
 
+# ============================================================================
+# APPOINTMENT STATISTICS
+# ============================================================================
 
+@router.get("/appointments/statistics", tags=[TAG_APPOINTMENTS])
+async def get_appointment_statistics(
+    date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (default: today)"),
+    current_user: User = Depends(require_receptionist()),
+    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
+):
+    """
+    Get appointment statistics for the day.
+    
+    Access Control:
+    - Only Receptionists can view statistics
+    
+    Returns:
+    - Total appointments
+    - Checked-in count
+    - Waiting count
+    - In-consultation count
+    - Completed count
+    - Cancelled count
+    - No-show count
+    - Department-wise breakdown
+    - Doctor-wise breakdown
+    """
+    print("=== STATISTICS ENDPOINT HIT ===")
+    stats = await clinical_service.get_opd_appointment_dashboard_stats(current_user, date)
+    return success_response(message="Statistics retrieved successfully", data=stats)
+
+    
 @router.get("/appointments/{appointment_ref}", tags=[TAG_APPOINTMENTS])
 async def get_appointment_by_ref(
     appointment_ref: str,
@@ -628,6 +659,7 @@ async def get_appointment_by_ref(
     clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
 ):
     """Get a single appointment by reference (same hospital as receptionist)."""
+    print("=== APPOINTMENT REF ENDPOINT HIT ===", appointment_ref)
     data = await clinical_service.get_opd_appointment_by_ref(appointment_ref, current_user)
     return success_response(message="Appointment retrieved successfully", data=data)
 
@@ -1049,37 +1081,6 @@ async def receptionist_list_patient_documents(
             }
         )
     return success_response(message="Documents retrieved successfully", data=data)
-
-
-# ============================================================================
-# APPOINTMENT STATISTICS
-# ============================================================================
-
-@router.get("/appointments/statistics", tags=[TAG_APPOINTMENTS])
-async def get_appointment_statistics(
-    date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (default: today)"),
-    current_user: User = Depends(require_receptionist()),
-    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
-):
-    """
-    Get appointment statistics for the day.
-    
-    Access Control:
-    - Only Receptionists can view statistics
-    
-    Returns:
-    - Total appointments
-    - Checked-in count
-    - Waiting count
-    - In-consultation count
-    - Completed count
-    - Cancelled count
-    - No-show count
-    - Department-wise breakdown
-    - Doctor-wise breakdown
-    """
-    stats = await clinical_service.get_opd_appointment_dashboard_stats(current_user, date)
-    return success_response(message="Statistics retrieved successfully", data=stats)
 
 
 # ============================================================================
