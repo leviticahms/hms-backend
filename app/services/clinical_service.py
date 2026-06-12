@@ -535,19 +535,23 @@ class ClinicalService:
     
     async def validate_doctor_access(self, user_context: dict) -> None:
         """Ensure user is a doctor"""
-        if user_context["role"] != UserRole.DOCTOR:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied - Doctor role required"
-            )
-    
-    async def validate_ipd_access(self, user_context: dict) -> None:
-        """Ensure user has IPD access (Nurse or Doctor)"""
-        if user_context["role"] not in [UserRole.NURSE, UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN]:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied - IPD operations require Nurse or Doctor role"
-            )
+        allowed = [
+        UserRole.NURSE,
+        UserRole.DOCTOR,
+        UserRole.HOSPITAL_ADMIN,
+        UserRole.PATIENT,
+        ]
+        role = user_context.get("role")
+        all_roles = user_context.get("all_roles") or []
+        
+        role_values = [r.value if hasattr(r, "value") else r for r in allowed]
+        
+        if role not in allowed and role not in role_values:
+            if not any(r in role_values for r in all_roles):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied - IPD operations require Nurse, Doctor, or Admin role",
+                )
     
     # ============================================================================
     # PROFILE MANAGEMENT
@@ -2182,15 +2186,77 @@ class ClinicalService:
     async def get_available_patients_for_admission(self, current_user: User) -> Dict[str, Any]:
         """Get list of patients that the doctor can see for admission"""
         user_context = self.get_user_context(current_user)
-        
+        allowed_roles = [UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.PATIENT]
         # Only doctors can access this
-        if user_context["role"] not in [UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN]:
+        if user_context["role"] not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only doctors and hospital admins can access available patients"
             )
         
         hospital_id_uuid = uuid.UUID(str(user_context["hospital_id"]))
+        # ── PATIENT: return only their own record ─────────────────────────────
+        if user_context["role"] == UserRole.PATIENT:
+            patient_result = await self.db.execute(
+                select(PatientProfile)
+                .where(
+                    and_(
+                        PatientProfile.user_id == uuid.UUID(str(user_context["user_id"])),
+                        PatientProfile.hospital_id == hospital_id_uuid,
+                    )
+                )
+                .options(selectinload(PatientProfile.user))
+            )
+            patient = patient_result.scalar_one_or_none()
+            if not patient or not patient.user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Patient profile not found for this hospital.",
+                )
+
+            admitted_result = await self.db.execute(
+                select(Admission.admission_number, Admission.ward)
+                .where(
+                    and_(
+                        Admission.patient_id == patient.id,
+                        Admission.hospital_id == hospital_id_uuid,
+                        Admission.is_active == True,
+                    )
+                )
+            )
+            admitted_row = admitted_result.first()
+            admission_status = "currently_admitted" if admitted_row else "available"
+            admission_info = (
+                {"admission_number": admitted_row[0], "ward": admitted_row[1]}
+                if admitted_row
+                else None
+            )
+
+            age = self.calculate_age(patient.date_of_birth) if patient.date_of_birth else 0
+
+            return {
+                "viewed_by": f"{current_user.first_name} {current_user.last_name} (Patient)",
+                "department": "N/A",
+                "available_patients": [
+                    {
+                        "patient_id": patient.patient_id,
+                        "name": f"{patient.user.first_name} {patient.user.last_name}",
+                        "age": age,
+                        "gender": patient.gender,
+                        "phone": patient.user.phone,
+                        "admission_status": admission_status,
+                        "current_admission": admission_info,
+                        "last_appointment": None,
+                        "medical_info": {
+                            "allergies": getattr(patient, "allergies", None) or [],
+                            "chronic_conditions": getattr(patient, "chronic_conditions", None) or [],
+                            "blood_group": patient.blood_group,
+                        },
+                    }
+                ],
+                "total_count": 1,
+                "note": "Your patient record at this hospital.",
+            }
 
         # HOSPITAL_ADMIN has no doctor profile — show hospital-wide view
         if user_context["role"] == UserRole.HOSPITAL_ADMIN:
@@ -2306,6 +2372,11 @@ class ClinicalService:
         """Get list of IPD patients in user's department"""
         user_context = self.get_user_context(current_user)
         await self.validate_ipd_access(user_context)
+        if user_context["role"] == UserRole.PATIENT:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Patients cannot view the IPD patient list.",
+            )
         
         # Get user profile
         user_profile = await self.get_ipd_user_profile(user_context)
@@ -2684,7 +2755,57 @@ class ClinicalService:
         """Get IPD dashboard with key metrics and patient information"""
         user_context = self.get_user_context(current_user)
         await self.validate_ipd_access(user_context)
-        
+        # ── PATIENT: lightweight personal dashboard ───────────────────────────
+        if user_context["role"] == UserRole.PATIENT:
+            hospital_id_uuid = self._hospital_uuid(user_context)
+
+            patient_result = await self.db.execute(
+                select(PatientProfile)
+                .where(
+                    and_(
+                        PatientProfile.user_id == uuid.UUID(str(user_context["user_id"])),
+                        PatientProfile.hospital_id == hospital_id_uuid,
+                    )
+                )
+            )
+            patient = patient_result.scalar_one_or_none()
+
+            active_admission = None
+            if patient:
+                adm_result = await self.db.execute(
+                    select(Admission)
+                    .where(
+                        and_(
+                            Admission.patient_id == patient.id,
+                            Admission.hospital_id == hospital_id_uuid,
+                            Admission.is_active == True,
+                        )
+                    )
+                    .order_by(desc(Admission.admission_date))
+                    .limit(1)
+                )
+                active_admission = adm_result.scalars().first()
+            return {
+                "user_name": f"{current_user.first_name} {current_user.last_name}",
+                "user_role": "PATIENT",
+                "hospital_id": str(hospital_id_uuid),
+                "department": "N/A",
+                "dashboard_date": datetime.now(timezone.utc).date().isoformat(),
+                "statistics": {
+                    "currently_admitted": active_admission is not None,
+                    "admission_number": active_admission.admission_number if active_admission else None,
+                    "ward": active_admission.ward if active_admission else None,
+                    "admitted_since": (
+                        active_admission.admission_date.date().isoformat()
+                        if active_admission else None
+                    ),
+                },
+                "quick_actions": [
+                    "View my admission details",
+                    "View my medical records",
+                ],
+            }
+    
         # Get user profile
         user_profile = await self.get_ipd_user_profile(user_context)
         
@@ -2978,6 +3099,27 @@ class ClinicalService:
                     self.id = user.id  # mirrors MockDoctorProfile.id
  
             profile = MockHospitalAdminProfile(admin_user, department)
+        elif user_context["role"] == UserRole.PATIENT:
+            patient_result = await self.db.execute(
+                select(User).where(User.id == uuid.UUID(str(user_context["user_id"])))
+            )
+            patient_user = patient_result.scalars().first()
+            if not patient_user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Patient user not found.",
+                )
+
+            class MockPatientProfile:
+                def __init__(self, user):
+                    self.user = user
+                    self.user_id = user.id
+                    self.hospital_id = user.hospital_id
+                    self.department_id = None   # patients have no department
+                    self.department = None
+                    self.id = user.id
+
+            return MockPatientProfile(patient_user)
         else:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
