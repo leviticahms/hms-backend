@@ -553,6 +553,25 @@ class ClinicalService:
                     detail="Access denied - IPD operations require Nurse, Doctor, or Admin role",
                 )
     
+
+    async def validate_ipd_access(self, user_context: dict) -> None:
+        """Ensure user has IPD access (Nurse, Doctor, Hospital Admin, or Patient)"""
+        allowed = [
+            UserRole.NURSE,
+            UserRole.DOCTOR,
+            UserRole.HOSPITAL_ADMIN,
+            UserRole.PATIENT,
+        ]
+        role = user_context.get("role")
+        all_roles = user_context.get("all_roles") or []
+        role_values = [r.value if hasattr(r, "value") else r for r in allowed]
+
+        if role not in allowed and role not in role_values:
+            if not any(r in role_values for r in all_roles):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied - IPD operations require Nurse, Doctor, Hospital Admin, or Patient role",
+                )
     # ============================================================================
     # PROFILE MANAGEMENT
     # ============================================================================
