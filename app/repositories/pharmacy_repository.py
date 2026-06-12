@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from uuid import UUID
-from datetime import date, datetime
+from datetime import date, datetime,timezone, time
 
 from app.models.pharmacy import (
     Medicine, Supplier, PurchaseOrder, PurchaseOrderItem,
@@ -663,7 +663,14 @@ class PharmacyRepository:
         self, hospital_id: UUID, from_date: str, to_date: str
     ) -> dict:
         """Profit by medicine: (unit_price - purchase_rate) * qty from completed sale items."""
-        to_end = to_date + " 23:59:59" if len(to_date) <= 10 else to_date
+        # Parse strings to timezone-aware datetimes
+        from_dt = datetime.strptime(from_date[:10], "%Y-%m-%d").replace(
+            hour=0, minute=0, second=0, tzinfo=timezone.utc
+        )
+        to_dt = datetime.strptime(to_date[:10], "%Y-%m-%d").replace(
+            hour=23, minute=59, second=59, tzinfo=timezone.utc
+        )
+
         q = (
             select(
                 SaleItem.medicine_id,
@@ -679,8 +686,8 @@ class PharmacyRepository:
                     Sale.status == "PAID",
                     Sale.is_active == True,
                     SaleItem.is_active == True,
-                    Sale.created_at >= from_date,
-                    Sale.created_at <= to_end,
+                    Sale.created_at >= from_dt,  
+                    Sale.created_at <= to_dt,    
                 )
             )
             .group_by(SaleItem.medicine_id)
