@@ -523,11 +523,12 @@ class AppointmentCancelUpdate(BaseModel):
 class PatientAdmissionCreate(BaseModel):
     """Admit patient to IPD"""
     patient_ref: str
+    doctor_id: Optional[str] = None
     admission_type: str = "IPD"  # IPD, EMERGENCY
     chief_complaint: str
     provisional_diagnosis: Optional[str] = None
     admission_notes: Optional[str] = None
-    ward: Optional[str] = None
+    ward_name: Optional[str] = None
     room_number: Optional[str] = None
     bed_number: Optional[str] = None
     expected_length_of_stay: Optional[int] = None  # days
@@ -536,7 +537,7 @@ class PatientAdmissionCreate(BaseModel):
 class BedAssignmentCreate(BaseModel):
     """Assign bed to patient"""
     admission_number: str
-    ward: str
+    ward_name: str
     room_number: str
     bed_number: str
     admission_notes: Optional[str] = None
