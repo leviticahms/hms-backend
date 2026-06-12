@@ -3,10 +3,28 @@ Nurse module schemas.
 """
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-
+import uuid
+from uuid import UUID
+ 
 from pydantic import BaseModel, Field, field_validator, model_validator
-
-
+ 
+ 
+ 
+class NurseProfileUpdate(BaseModel):
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    address: Optional[str] = None
+ 
+    department_name: Optional[str] = None
+    nurse_designation: Optional[str] = None
+    nurse_specialization: Optional[str] = None
+    nurse_experience_years: Optional[int] = None
+    shift_timing: Optional[str] = None
+    joining_date: Optional[str] = None
 class NurseProfileUpsertRequest(BaseModel):
     department_id: str
     nurse_id: str
@@ -22,8 +40,10 @@ class NurseProfileUpsertRequest(BaseModel):
     languages_spoken: List[str] = Field(default_factory=list)
     bio: Optional[str] = None
     is_active: bool = True
-
-
+    phone: Optional[str] = None
+    address: Optional[str] = None
+ 
+ 
 class NurseProfileUpdateRequest(BaseModel):
     """PATCH /nurse/profile — all fields optional."""
     department_id: Optional[str] = None
@@ -40,14 +60,15 @@ class NurseProfileUpdateRequest(BaseModel):
     languages_spoken: Optional[List[str]] = None
     bio: Optional[str] = None
     is_active: Optional[bool] = None
-
-
+   
+ 
+ 
 class NurseDashboardResponse(BaseModel):
     profile: Dict[str, Any]
     stats: Dict[str, Any]
     pending_tasks: Dict[str, Any]
-
-
+ 
+ 
 class NurseVitalsCreateRequest(BaseModel):
     admission_number: str
     blood_pressure_systolic: Optional[int] = None
@@ -60,7 +81,7 @@ class NurseVitalsCreateRequest(BaseModel):
     height: Optional[float] = None
     pain_scale: Optional[int] = None
     notes: Optional[str] = None
-
+ 
     @field_validator("temperature_f")
     @classmethod
     def validate_temperature(cls, v: Optional[float]) -> Optional[float]:
@@ -69,7 +90,7 @@ class NurseVitalsCreateRequest(BaseModel):
         if v < 95 or v > 105:
             raise ValueError("temperature_f must be between 95 and 105")
         return v
-
+ 
     @field_validator("oxygen_saturation")
     @classmethod
     def validate_oxygen(cls, v: Optional[int]) -> Optional[int]:
@@ -78,7 +99,7 @@ class NurseVitalsCreateRequest(BaseModel):
         if v < 50 or v > 100:
             raise ValueError("oxygen_saturation must be between 50 and 100")
         return v
-
+ 
     @field_validator("pulse_rate")
     @classmethod
     def validate_pulse(cls, v: Optional[int]) -> Optional[int]:
@@ -87,7 +108,7 @@ class NurseVitalsCreateRequest(BaseModel):
         if v < 20 or v > 220:
             raise ValueError("pulse_rate must be between 20 and 220")
         return v
-
+ 
     @field_validator("respiratory_rate")
     @classmethod
     def validate_rr(cls, v: Optional[int]) -> Optional[int]:
@@ -96,7 +117,7 @@ class NurseVitalsCreateRequest(BaseModel):
         if v < 5 or v > 60:
             raise ValueError("respiratory_rate must be between 5 and 60")
         return v
-
+ 
     @field_validator("pain_scale")
     @classmethod
     def validate_pain(cls, v: Optional[int]) -> Optional[int]:
@@ -105,7 +126,7 @@ class NurseVitalsCreateRequest(BaseModel):
         if v < 0 or v > 10:
             raise ValueError("pain_scale must be between 0 and 10")
         return v
-
+ 
     @model_validator(mode="after")
     def require_any_vitals(self):
         values = [
@@ -122,8 +143,8 @@ class NurseVitalsCreateRequest(BaseModel):
         if all(v is None for v in values):
             raise ValueError("At least one vital field is required")
         return self
-
-
+ 
+ 
 class NurseVitalsUpdateRequest(BaseModel):
     blood_pressure_systolic: Optional[int] = None
     blood_pressure_diastolic: Optional[int] = None
@@ -135,8 +156,8 @@ class NurseVitalsUpdateRequest(BaseModel):
     height: Optional[float] = None
     pain_scale: Optional[int] = None
     notes: Optional[str] = None
-
-
+ 
+ 
 class NurseMedicationCreateRequest(BaseModel):
     admission_number: str
     medication_name: str
@@ -146,7 +167,7 @@ class NurseMedicationCreateRequest(BaseModel):
     start_date: Optional[str] = None
     instructions: Optional[str] = None
     status: str = "PENDING"
-
+ 
     @field_validator("status")
     @classmethod
     def validate_status(cls, v: str) -> str:
@@ -155,7 +176,7 @@ class NurseMedicationCreateRequest(BaseModel):
         if s not in allowed:
             raise ValueError(f"status must be one of {sorted(allowed)}")
         return s
-
+ 
     @field_validator("scheduled_time")
     @classmethod
     def validate_scheduled_time(cls, v: str) -> str:
@@ -164,8 +185,8 @@ class NurseMedicationCreateRequest(BaseModel):
         except ValueError as e:
             raise ValueError("scheduled_time must be in HH:MM format") from e
         return v
-
-
+ 
+ 
 class NurseMedicationUpdateRequest(BaseModel):
     medication_name: Optional[str] = None
     dose: Optional[str] = None
@@ -174,7 +195,7 @@ class NurseMedicationUpdateRequest(BaseModel):
     start_date: Optional[str] = None
     instructions: Optional[str] = None
     status: Optional[str] = None
-
+ 
     @field_validator("status")
     @classmethod
     def validate_status(cls, v: Optional[str]) -> Optional[str]:
@@ -185,7 +206,7 @@ class NurseMedicationUpdateRequest(BaseModel):
         if s not in allowed:
             raise ValueError(f"status must be one of {sorted(allowed)}")
         return s
-
+ 
     @field_validator("scheduled_time")
     @classmethod
     def validate_scheduled_time(cls, v: Optional[str]) -> Optional[str]:
@@ -196,8 +217,8 @@ class NurseMedicationUpdateRequest(BaseModel):
         except ValueError as e:
             raise ValueError("scheduled_time must be in HH:MM format") from e
         return v
-
-
+ 
+ 
 class NurseBedCreateRequest(BaseModel):
     ward_id: str
     bed_number: str
@@ -215,8 +236,8 @@ class NurseBedCreateRequest(BaseModel):
     daily_rate: float = 0
     notes: Optional[str] = None
     settings: Dict[str, Any] = Field(default_factory=dict)
-
-
+ 
+ 
 class NurseBedUpdateRequest(BaseModel):
     bed_number: Optional[str] = None
     bed_code: Optional[str] = None
@@ -233,8 +254,8 @@ class NurseBedUpdateRequest(BaseModel):
     daily_rate: Optional[float] = None
     notes: Optional[str] = None
     settings: Optional[Dict[str, Any]] = None
-
-
+ 
+ 
 class NurseLabRequestCreateRequest(BaseModel):
     admission_number: str
     test_type: str
@@ -242,7 +263,7 @@ class NurseLabRequestCreateRequest(BaseModel):
     priority: str = "ROUTINE"
     requesting_doctor: Optional[str] = None
     notes: Optional[str] = None
-
+ 
     @field_validator("priority")
     @classmethod
     def validate_priority(cls, v: str) -> str:
@@ -251,15 +272,15 @@ class NurseLabRequestCreateRequest(BaseModel):
         if s not in allowed:
             raise ValueError(f"priority must be one of {sorted(allowed)}")
         return s
-
-
+ 
+ 
 class NurseLabRequestUpdateRequest(BaseModel):
     test_type: Optional[str] = None
     reason_for_test: Optional[str] = None
     priority: Optional[str] = None
     requesting_doctor: Optional[str] = None
     notes: Optional[str] = None
-
+ 
     @field_validator("priority")
     @classmethod
     def validate_priority(cls, v: Optional[str]) -> Optional[str]:
@@ -270,8 +291,8 @@ class NurseLabRequestUpdateRequest(BaseModel):
         if s not in allowed:
             raise ValueError(f"priority must be one of {sorted(allowed)}")
         return s
-
-
+ 
+ 
 class NurseNoteCreateRequest(BaseModel):
     admission_number: Optional[str] = None
     patient_ref: Optional[str] = None
@@ -281,7 +302,7 @@ class NurseNoteCreateRequest(BaseModel):
     note_content: str
     priority: str = "NORMAL"
     follow_up_required: bool = False
-
+ 
     @field_validator("priority")
     @classmethod
     def validate_note_priority(cls, v: str) -> str:
@@ -290,8 +311,8 @@ class NurseNoteCreateRequest(BaseModel):
         if s not in allowed:
             raise ValueError(f"priority must be one of {sorted(allowed)}")
         return s
-
-
+ 
+ 
 class NurseNoteUpdateRequest(BaseModel):
     note_type: Optional[str] = None
     observation_title: Optional[str] = None
@@ -299,7 +320,7 @@ class NurseNoteUpdateRequest(BaseModel):
     note_content: Optional[str] = None
     priority: Optional[str] = None
     follow_up_required: Optional[bool] = None
-
+ 
     @field_validator("priority")
     @classmethod
     def validate_note_priority(cls, v: Optional[str]) -> Optional[str]:
@@ -310,8 +331,8 @@ class NurseNoteUpdateRequest(BaseModel):
         if s not in allowed:
             raise ValueError(f"priority must be one of {sorted(allowed)}")
         return s
-
-
+ 
+ 
 class NurseDischargeCreateRequest(BaseModel):
     admission_number: Optional[str] = None
     patient_ref: Optional[str] = None
@@ -327,8 +348,8 @@ class NurseDischargeCreateRequest(BaseModel):
     follow_up_doctor: Optional[str] = None
     condition_on_discharge: Optional[str] = None
     discharge_notes: Optional[str] = None
-
-
+ 
+ 
 class NurseDischargeUpdateRequest(BaseModel):
     final_diagnosis: Optional[str] = None
     secondary_diagnoses: Optional[List[str]] = None
@@ -342,3 +363,4 @@ class NurseDischargeUpdateRequest(BaseModel):
     follow_up_doctor: Optional[str] = None
     condition_on_discharge: Optional[str] = None
     discharge_notes: Optional[str] = None
+ 

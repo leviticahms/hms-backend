@@ -3,7 +3,11 @@ Nurse module service (tenant-first reads + mirrored writes).
 """
 from __future__ import annotations
 
+from asyncio import wait
+from importlib import metadata
+from importlib.metadata import metadata
 import logging
+import profile
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -561,27 +565,103 @@ class NurseService:
         if not profile:
             return {}
         out = _serialize_model(profile)
+
         dept = profile.department
         if dept is None and profile.department_id:
             dept = await self._department_row(profile.department_id, profile.hospital_id)
+
         out["department_name"] = dept.name if dept else None
+
+        out["first_name"] = current_user.first_name
+        out["last_name"] = current_user.last_name
+        out["email"] = current_user.email
+        out["phone"] = current_user.phone
+
+        # user_metadata nundi
+        metadata = current_user.user_metadata or {}
+        out["address"] = metadata.get("address")
+        print("OUT:", out)
         return out
+    
+    async def update_profile(
+    self,
+    payload: Dict[str, Any],
+    current_user: User,
+) -> Dict[str, Any]:
+
+        q = await self.tenant_db.execute(
+        select(NurseProfile).where(
+            NurseProfile.user_id == current_user.id
+        )
+    )
+        profile = q.scalar_one_or_none()
+
+        if not profile:
+            raise HTTPException(
+            status_code=404,
+            detail="Nurse profile not found"
+        )
+
+        if "department_id" in payload:
+            dep = await self.tenant_db.get(
+            Department,
+            payload["department_id"]
+        )
+            if not dep:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid department_id"
+                )
+
+        for field, value in payload.items():
+            setattr(profile, field, value)
+
+        await self.tenant_db.commit()
+        await self.tenant_db.refresh(profile)
+
+        return {
+        "success": True,
+        "message": "Nurse profile updated successfully",
+        "data": profile,
+    }
 
     async def upsert_profile(self, payload: Dict[str, Any], current_user: User) -> Dict[str, Any]:
         dep_id = _require_uuid(payload.get("department_id"), "department_id")
+
+        dept_check = await self.tenant_db.execute(
+            select(Department).where(Department.id == dep_id)
+        )
+        dept = dept_check.scalar_one_or_none()
+
+        if not dept:
+            raise HTTPException(status_code=404, detail="Department not found")
+
         q = await self.tenant_db.execute(
             select(NurseProfile).where(
-                and_(NurseProfile.user_id == current_user.id, NurseProfile.hospital_id == current_user.hospital_id)
+                and_(
+                    NurseProfile.user_id == current_user.id,
+                    NurseProfile.hospital_id == current_user.hospital_id
+                )
             )
         )
+
         profile = q.scalar_one_or_none()
+
         if profile:
             for k, v in payload.items():
                 if k == "department_id":
                     setattr(profile, k, dep_id)
                 else:
                     setattr(profile, k, v)
-            await self.tenant_db.commit()
+
+            if payload.get("phone") is not None:
+                current_user.phone = payload["phone"]
+
+            if payload.get("address") is not None:
+                metadata = current_user.user_metadata or {}
+                metadata["address"] = payload["address"]
+                current_user.user_metadata = metadata
+
             assignment_q = await self.tenant_db.execute(
                 select(StaffDepartmentAssignment).where(
                     and_(
@@ -591,7 +671,7 @@ class NurseService:
                 )
             )
 
-            assignment = assignment_q.scalars().first()
+            assignment = assignment_q.scalar_one_or_none()
 
             if assignment:
                 assignment.department_id = dep_id
@@ -606,15 +686,16 @@ class NurseService:
                     is_active=True,
                 )
                 self.tenant_db.add(assignment)
-                self.tenant_db.add(profile)
-                await self.tenant_db.commit()
+
+            # await self.tenant_db.commit()
 
             await self._mirror_staff_assignment(assignment)
-            await self.tenant_db.commit()
             await self._mirror_upsert(NurseProfile, profile.id, _model_values_raw(profile))
+
             return _serialize_model(profile)
 
         profile_id = uuid.uuid4()
+
         profile = NurseProfile(
             id=profile_id,
             hospital_id=current_user.hospital_id,
@@ -634,6 +715,15 @@ class NurseService:
             bio=payload.get("bio"),
             is_active=payload.get("is_active", True),
         )
+
+        if payload.get("phone") is not None:
+            current_user.phone = payload["phone"]
+
+        if payload.get("address") is not None:
+            metadata = current_user.user_metadata or {}
+            metadata["address"] = payload["address"]
+            current_user.user_metadata = metadata
+
         assignment = StaffDepartmentAssignment(
             id=uuid.uuid4(),
             hospital_id=current_user.hospital_id,
@@ -642,11 +732,15 @@ class NurseService:
             is_primary=True,
             is_active=True,
         )
+
         self.tenant_db.add(profile)
         self.tenant_db.add(assignment)
-        await self.tenant_db.commit()
+
+        # await self.tenant_db.commit()
+
         await self._mirror_staff_assignment(assignment)
         await self._mirror_upsert(NurseProfile, profile_id, _model_values_raw(profile))
+
         return _serialize_model(profile)
 
     async def patch_profile(self, payload: Dict[str, Any], current_user: User) -> Dict[str, Any]:
@@ -701,6 +795,13 @@ class NurseService:
         for key in scalar_fields:
             if key in payload and payload[key] is not None:
                 setattr(profile, key, payload[key])
+        if "phone" in payload and payload["phone"] is not None:
+            current_user.phone = payload["phone"]
+        if "address" in payload and payload["address"] is not None:
+            metadata = current_user.user_metadata or {}
+            metadata["address"] = payload["address"]
+            current_user.user_metadata = metadata
+
         for key in list_fields:
             if key in payload and payload[key] is not None:
                 setattr(profile, key, payload[key])

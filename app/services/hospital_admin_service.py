@@ -1874,7 +1874,11 @@ class HospitalAdminService:
             "message": "Doctor staff updated successfully",
         }
 
-    async def update_nurse_staff(self, staff_id: uuid.UUID, update_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_nurse_staff(
+    self,
+    staff_id: uuid.UUID,
+    update_data: Dict[str, Any]
+) -> Dict[str, Any]:
         """Update nurse staff profile (hospital admin portal)."""
         from app.models.nurse import NurseProfile
 

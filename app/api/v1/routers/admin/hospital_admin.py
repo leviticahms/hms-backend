@@ -16,7 +16,7 @@ from app.api.deps import (
     get_current_hospital_context,
 )
 from app.core.database import get_platform_db_session, resolve_tenant_database_name_for_hospital
-from app.dependencies.auth import require_hospital_context
+from app.dependencies.auth import require_hospital_context, require_roles
 from app.schemas.plan_features import (
     HospitalFeatureFlagsOut,
     HospitalRegistryPlatformOut,
@@ -38,6 +38,7 @@ from app.services.subscription_feature_service import (
 from app.services.hospital_admin_service import HospitalAdminService
 from app.models.user import User, AuditLog
 from app.core.enums import UserRole
+from app.schemas.nurse import NurseProfileUpdate
 from app.schemas.admin import (
     DepartmentCreate, DepartmentUpdate, DepartmentStatusUpdate,
     StaffCreate, StaffStatusUpdate, StaffUpdateResponse,
@@ -427,7 +428,7 @@ async def get_staff_details(
 async def update_doctor_staff_profile(
     staff_id: str,
     update_data: DoctorStaffUpdate,
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_roles(UserRole.HOSPITAL_ADMIN,UserRole.DOCTOR)),
     service: HospitalAdminService = Depends(get_hospital_admin_service),
 ):
     """Update doctor staff profile from hospital admin portal."""
@@ -459,6 +460,20 @@ async def update_receptionist_staff_profile(
         )
     result = await service.update_receptionist_staff(staff_uuid, update_data.model_dump(exclude_none=True))
     return StaffUpdateResponse(**result)
+
+
+
+@router.patch("/staff/nurses/{staff_id}",response_model=StaffUpdateResponse,tags=["Hospital Admin - Staff Management"])
+async def update_nurse_profile(
+    staff_id: str,
+    payload: NurseProfileUpdate,
+    current_user: User = Depends(require_hospital_admin()),
+    service: HospitalAdminService = Depends(get_hospital_admin_service),
+):
+    return await service.update_nurse_staff(
+        staff_id,
+        payload.model_dump(exclude_none=True),
+    )
 
 
 @router.patch("/staff/lab-techs/{staff_id}", response_model=StaffUpdateResponse, tags=["Hospital Admin - Staff Management"])
