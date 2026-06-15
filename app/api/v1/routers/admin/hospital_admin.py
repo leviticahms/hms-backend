@@ -14,9 +14,10 @@ from app.api.deps import (
     require_hospital_admin,
     require_hospital_admin_context,
     get_current_hospital_context,
+    require_hospital_operations
 )
 from app.core.database import get_platform_db_session, resolve_tenant_database_name_for_hospital
-from app.dependencies.auth import require_hospital_context, require_roles
+from app.dependencies.auth import require_hospital_context, require_roles, require_hospital_operations
 from app.schemas.plan_features import (
     HospitalFeatureFlagsOut,
     HospitalRegistryPlatformOut,
@@ -82,7 +83,34 @@ async def get_hospital_admin_service(
         platform_db=platform_db if tenant_db_name else None,
     )
 
+async def get_hospital_operations_service(
+    context: Dict[str, Any] = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
+) -> HospitalAdminService:
+ 
+    hid = uuid.UUID(str(context["hospital_id"]))
+    tenant_db_name = await resolve_tenant_database_name_for_hospital(hid)
+ 
+    return HospitalAdminService(
+        db,
+        hid,
+        platform_db=platform_db if tenant_db_name else None,
+    )
 
+async def get_hospital_operations_service(
+    context: Dict[str, Any] = Depends(require_hospital_context),
+    db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
+) -> HospitalAdminService:
+    hid = uuid.UUID(str(context["hospital_id"]))
+    tenant_db_name = await resolve_tenant_database_name_for_hospital(hid)
+
+    return HospitalAdminService(
+        db,
+        hid,
+        platform_db=platform_db if tenant_db_name else None,
+    )
 # ============================================================================
 # PLATFORM SETTINGS — subscription feature flags (Dashboard / module visibility)
 # Reads platform registry (`hospitals`, `hospital_subscriptions`, `subscription_plans`).
@@ -429,7 +457,7 @@ async def update_doctor_staff_profile(
     staff_id: str,
     update_data: DoctorStaffUpdate,
     current_user: User = Depends(require_roles(UserRole.HOSPITAL_ADMIN,UserRole.DOCTOR)),
-    service: HospitalAdminService = Depends(get_hospital_admin_service),
+    service: HospitalAdminService = Depends(get_hospital_operations_service),
 ):
     """Update doctor staff profile from hospital admin portal."""
     try:
@@ -447,8 +475,8 @@ async def update_doctor_staff_profile(
 async def update_receptionist_staff_profile(
     staff_id: str,
     update_data: ReceptionistStaffUpdate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service),
+    current_user: User = Depends(require_roles(UserRole.HOSPITAL_ADMIN,UserRole.RECEPTIONIST)),
+    service: HospitalAdminService = Depends(get_hospital_operations_service),
 ):
     """Update receptionist staff profile from hospital admin portal."""
     try:
@@ -467,8 +495,8 @@ async def update_receptionist_staff_profile(
 async def update_nurse_profile(
     staff_id: str,
     payload: NurseProfileUpdate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service),
+    current_user: User = Depends(require_roles(UserRole.HOSPITAL_ADMIN,UserRole.NURSE)),
+    service: HospitalAdminService = Depends(get_hospital_operations_service),
 ):
     return await service.update_nurse_staff(
         staff_id,
@@ -480,8 +508,8 @@ async def update_nurse_profile(
 async def update_lab_tech_staff_profile(
     staff_id: str,
     update_data: LabTechStaffUpdate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service),
+    current_user: User = Depends(require_roles(UserRole.HOSPITAL_ADMIN,UserRole.LAB_TECH)),
+    service: HospitalAdminService = Depends(get_hospital_operations_service),
 ):
     """Update lab tech staff profile from hospital admin portal."""
     try:
@@ -499,8 +527,8 @@ async def update_lab_tech_staff_profile(
 async def update_pharmacist_staff_profile(
     staff_id: str,
     update_data: PharmacistStaffUpdate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service),
+    current_user: User = Depends(require_roles(UserRole.HOSPITAL_ADMIN,UserRole.PHARMACIST)),
+    service: HospitalAdminService = Depends(get_hospital_operations_service),
 ):
     """Update pharmacist staff profile from hospital admin portal."""
     try:
@@ -804,8 +832,8 @@ async def update_patient_status(
 @router.post("/wards", status_code=status.HTTP_201_CREATED, tags=["Hospital Admin - Ward & Bed Management"])
 async def create_ward(
     ward_data: WardCreate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
     Create a new ward/unit in the hospital.
@@ -826,8 +854,8 @@ async def list_wards(
     limit: int = Query(50, ge=1, le=100, description="Items per page"),
     ward_type: Optional[str] = Query(None, description="Filter by ward type"),
     active_only: bool = Query(False, description="Show only active wards"),
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
     Get paginated list of hospital wards.
@@ -851,8 +879,8 @@ async def list_wards(
 async def update_ward(
     ward_id: str,
     update_data: WardUpdate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
     Update ward information.
@@ -887,8 +915,8 @@ async def update_ward(
 async def update_ward_status(
     ward_id: str,
     status_data: WardStatusUpdate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
     Enable or disable a ward.
@@ -913,8 +941,8 @@ async def update_ward_status(
 @router.post("/beds", status_code=status.HTTP_201_CREATED, tags=["Hospital Admin - Ward & Bed Management"])
 async def create_bed(
     bed_data: BedCreate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
     Create a new bed in a ward.
@@ -937,8 +965,8 @@ async def list_beds(
     ward_id: Optional[str] = Query(None, description="Filter by ward UUID"),
     status: Optional[str] = Query(None, description="Filter by bed status"),
     bed_type: Optional[str] = Query(None, description="Filter by bed type"),
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
     Get paginated list of beds.
@@ -962,8 +990,8 @@ async def list_beds(
 @router.get("/beds/{bed_id}", response_model=BedDetailsOut, tags=["Hospital Admin - Ward & Bed Management"])
 async def get_bed_details(
     bed_id: str,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
     Get detailed bed information.
@@ -990,8 +1018,8 @@ async def get_bed_details(
 async def update_bed_status(
     bed_id: str,
     status_data: BedStatusUpdate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
     Update bed status.
@@ -1026,8 +1054,8 @@ async def update_bed_status(
 @router.post("/admissions", status_code=status.HTTP_201_CREATED, tags=["Hospital Admin - Admission Management"])
 async def create_admission(
     admission_data: AdmissionCreate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
     Create a new patient admission.
@@ -1049,8 +1077,8 @@ async def list_admissions(
     status: Optional[str] = Query(None, description="Filter by admission status"),
     date_from: Optional[str] = Query(None, description="Filter from date (YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="Filter to date (YYYY-MM-DD)"),
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
     Get paginated list of patient admissions.
@@ -1076,8 +1104,8 @@ async def list_admissions(
 async def assign_bed_to_admission(
     admission_id: str,
     bed_assignment: BedAssignmentCreate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
     Assign bed to patient admission.
@@ -1111,8 +1139,8 @@ async def assign_bed_to_admission(
 async def discharge_patient(
     admission_id: str,
     discharge_data: DischargeCreate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
     Discharge patient and release bed.
@@ -1148,7 +1176,7 @@ async def get_bed_occupancy_report(
     date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     ward_id: Optional[str] = Query(None, description="Filter by ward UUID"),
-    current_user: User = Depends(require_hospital_admin()),
+    current_user: User = Depends(require_hospital_operations()),
     service: HospitalAdminService = Depends(get_hospital_admin_service)
 ):
     """
