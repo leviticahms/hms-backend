@@ -369,7 +369,7 @@ class HospitalAdminService:
             return
         await self._upsert_platform_user_from_tenant_row(tu)
         await self.platform_db.commit()
-
+        
     # async def _mirror_platform_user_if_configured(self, user_id: uuid.UUID) -> None:
     #     """After tenant ``users`` mutations, upsert the same row on platform (login resolves there)."""
     #     if self.platform_db is None:
