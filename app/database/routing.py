@@ -30,7 +30,7 @@ PLATFORM_ONLY_PREFIXES: tuple[str, ...] = (
     "/api/v1/receptionist/dashboard",
     "/api/v1/receptionist/quick-actions",
     # Patient profiles + documents live on the hospital tenant DB (see receptionist_management).
-    "/api/v1/receptionist/appointments",
+    # "/api/v1/receptionist/appointments",
     # Subscription + plan flags live on the platform DB (`hospital_subscriptions`, `subscription_plans`).
     "/api/v1/hospital-admin/platform-settings",
     # Appointment slot math and patient booking always use platform DB.
