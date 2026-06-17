@@ -67,7 +67,7 @@ class CreateMedicalRecordRequest(BaseModel):
 async def get_weekly_schedule(
     week_start: Optional[str] = Query(None, pattern="^\\d{4}-\\d{2}-\\d{2}$"),
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
@@ -83,7 +83,7 @@ async def get_weekly_schedule(
 @router.get("/schedule/slots")
 async def get_schedule_slots(
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
@@ -100,7 +100,7 @@ async def get_schedule_slots(
 async def get_schedule_slot_details(
     schedule_id: str,
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """Get a single schedule slot by id (for edit forms)."""
@@ -112,7 +112,7 @@ async def get_schedule_slot_details(
 async def create_schedule_slot(
     request: ScheduleCreate,
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
@@ -130,7 +130,7 @@ async def update_schedule_slot(
     schedule_id: str,
     request: ScheduleUpdate,
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
@@ -149,7 +149,7 @@ async def update_schedule_slot(
 async def delete_schedule_slot(
     schedule_id: str,
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_db_session),
+    db: AsyncSession = Depends(get_platform_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """

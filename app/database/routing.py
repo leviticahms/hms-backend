@@ -41,10 +41,7 @@ PLATFORM_ONLY_PREFIXES: tuple[str, ...] = (
     # On Render the hospital has a tenant_database_name so get_db_session would route to tenant DB
     # and return empty results because no appointments exist there.
     "/api/v1/doctor-appointment-tracking",
-    # BUG FIX: Doctor schedule management must use platform DB so that AppointmentService (which always
-    # uses the platform-DB session) can find the DoctorSchedule rows when checking available slots.
-    # On Render, without this, schedules were written to tenant DB but read from platform DB → slots empty.
-    "/api/v1/doctor-management/schedule",
+    # doctor-management schedule endpoints use get_platform_db_session explicitly in the router.
     # doctor portal (dashboard, sidebar, IPD) reads tenant DB when provisioned — not platform-only.
     "/api/v1/patient-discharge-summary",
 )
