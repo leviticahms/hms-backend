@@ -276,7 +276,11 @@ def require_lab_staff() -> Callable:
         UserRole.HOSPITAL_ADMIN
     )
 
-
+def require_hospital_operations() -> Callable:
+    return require_roles(
+        UserRole.HOSPITAL_ADMIN,
+        UserRole.RECEPTIONIST
+    )
 # ============================================================================
 # COMBINED DEPENDENCIES (RBAC + TENANT SCOPING)
 # ============================================================================

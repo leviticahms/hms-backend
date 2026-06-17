@@ -374,6 +374,12 @@ def require_pharmacy_staff() -> Callable:
         UserRole.RECEPTIONIST
     )
 
+def require_hospital_operations() -> Callable:
+    """Require Hospital Admin or Receptionist role"""
+    return require_roles(
+        UserRole.HOSPITAL_ADMIN,
+        UserRole.RECEPTIONIST
+    )
 
 def require_clinical_staff() -> Callable:
     """Require any clinical staff role"""

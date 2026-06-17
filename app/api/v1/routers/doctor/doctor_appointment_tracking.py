@@ -545,6 +545,7 @@ async def get_todays_appointment_tracking(
             updated_appointment_time=None
         ))
     
+    
     return {
         "doctor_name": f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
         "date": today,

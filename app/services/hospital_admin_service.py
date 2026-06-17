@@ -369,7 +369,7 @@ class HospitalAdminService:
             return
         await self._upsert_platform_user_from_tenant_row(tu)
         await self.platform_db.commit()
-
+        
     # async def _mirror_platform_user_if_configured(self, user_id: uuid.UUID) -> None:
     #     """After tenant ``users`` mutations, upsert the same row on platform (login resolves there)."""
     #     if self.platform_db is None:
@@ -1737,8 +1737,20 @@ class HospitalAdminService:
         user.user_metadata = md
         return updated_fields
 
-    async def update_doctor_staff(self, staff_id: uuid.UUID, update_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_doctor_staff(self, staff_id: uuid.UUID, update_data: Dict[str, Any], current_user: User) -> Dict[str, Any]:
         """Update doctor staff profile (hospital admin portal)."""
+        user_roles = [role.name for role in (current_user.roles or [])]
+        is_admin = UserRole.HOSPITAL_ADMIN.value in user_roles
+        if not is_admin:
+            # Doctor login aithe own profile matrame update cheyyali
+            if str(current_user.id) != str(staff_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "code": "PROFILE_ACCESS_DENIED",
+                        "message": "You can only update your own profile",
+                    },
+                )
         user = await self._get_staff_user_for_role(staff_id, UserRole.DOCTOR)
         updated_fields = await self._apply_common_staff_updates(user, update_data)
 
@@ -1877,10 +1889,22 @@ class HospitalAdminService:
     async def update_nurse_staff(
     self,
     staff_id: uuid.UUID,
-    update_data: Dict[str, Any]
+    update_data: Dict[str, Any], current_user: User
 ) -> Dict[str, Any]:
         """Update nurse staff profile (hospital admin portal)."""
         from app.models.nurse import NurseProfile
+        user_roles = [role.name for role in (current_user.roles or [])]
+        is_admin = UserRole.HOSPITAL_ADMIN.value in user_roles
+        if not is_admin:
+            # Doctor login aithe own profile matrame update cheyyali
+            if str(current_user.id) != str(staff_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "code": "PROFILE_ACCESS_DENIED",
+                        "message": "You can only update your own profile",
+                    },
+                )
 
         user = await self._get_staff_user_for_role(staff_id, UserRole.NURSE)
         updated_fields = await self._apply_common_staff_updates(user, update_data)
@@ -1974,9 +1998,21 @@ class HospitalAdminService:
             "message": "Nurse staff updated successfully",
         }
 
-    async def update_receptionist_staff(self, staff_id: uuid.UUID, update_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_receptionist_staff(self, staff_id: uuid.UUID, update_data: Dict[str, Any], current_user: User) -> Dict[str, Any]:
         """Update receptionist staff profile (hospital admin portal)."""
         from app.models.receptionist import ReceptionistProfile
+        user_roles = [role.name for role in (current_user.roles or [])]
+        is_admin = UserRole.HOSPITAL_ADMIN.value in user_roles
+        if not is_admin:
+            # Doctor login aithe own profile matrame update cheyyali
+            if str(current_user.id) != str(staff_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "code": "PROFILE_ACCESS_DENIED",
+                        "message": "You can only update your own profile",
+                    },
+                )
 
         user = await self._get_staff_user_for_role(staff_id, UserRole.RECEPTIONIST)
         updated_fields = await self._apply_common_staff_updates(user, update_data)
@@ -2080,8 +2116,20 @@ class HospitalAdminService:
             "message": "Receptionist staff updated successfully",
         }
 
-    async def update_lab_tech_staff(self, staff_id: uuid.UUID, update_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_lab_tech_staff(self, staff_id: uuid.UUID, update_data: Dict[str, Any], current_user: User) -> Dict[str, Any]:
         """Update lab tech staff profile (hospital admin portal)."""
+        user_roles = [role.name for role in (current_user.roles or [])]
+        is_admin = UserRole.HOSPITAL_ADMIN.value in user_roles
+        if not is_admin:
+            # Doctor login aithe own profile matrame update cheyyali
+            if str(current_user.id) != str(staff_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "code": "PROFILE_ACCESS_DENIED",
+                        "message": "You can only update your own profile",
+                    },
+                )
         user = await self._get_staff_user_for_role(staff_id, UserRole.LAB_TECH)
         updated_fields = await self._apply_common_staff_updates(user, update_data)
 
@@ -2112,8 +2160,20 @@ class HospitalAdminService:
             "message": "Lab tech staff updated successfully",
         }
 
-    async def update_pharmacist_staff(self, staff_id: uuid.UUID, update_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_pharmacist_staff(self, staff_id: uuid.UUID, update_data: Dict[str, Any], current_user: User) -> Dict[str, Any]:
         """Update pharmacist staff profile (hospital admin portal)."""
+        user_roles = [role.name for role in (current_user.roles or [])]
+        is_admin = UserRole.HOSPITAL_ADMIN.value in user_roles
+        if not is_admin:
+            # Doctor login aithe own profile matrame update cheyyali
+            if str(current_user.id) != str(staff_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "code": "PROFILE_ACCESS_DENIED",
+                        "message": "You can only update your own profile",
+                    },
+                )
         user = await self._get_staff_user_for_role(staff_id, UserRole.PHARMACIST)
         updated_fields = await self._apply_common_staff_updates(user, update_data)
 
