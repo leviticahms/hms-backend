@@ -12,14 +12,17 @@ from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 import re
 import random
-import string
-
+import io
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from openpyxl import Workbook
+from typing import Any, Dict, List, Optional, Literal, Union
 from app.models.user import User, Role, AuditLog
 from app.models.tenant import Hospital, SubscriptionPlanModel, HospitalSubscription
 from app.core.enums import UserRole, UserStatus, SubscriptionStatus, SubscriptionPlan, AuditAction, HospitalStatus
 from app.core.security import SecurityManager
 from app.core.utils import parse_date_string
-
+from fastapi.responses import StreamingResponse
 logger = logging.getLogger(__name__)
 
 
@@ -1143,10 +1146,48 @@ class SuperAdminService:
 
     async def get_subscription_analytics(
         self,
+        hospital_name: Optional[str] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
         plan_name: Optional[str] = None,
         status: Optional[str] = None,
+        format: Literal["json", "pdf", "excel"] = "json",
+    ) -> Union[Dict[str, Any], StreamingResponse]:
+
+        data = await self.build_subscription_analytics(
+            date_from, date_to, plan_name, status, format,hospital_name,
+        )
+
+        if format == "pdf":
+            pdf_bytes = self._generate_subscription_pdf(data)
+            return StreamingResponse(
+                io.BytesIO(pdf_bytes),
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": "attachment; filename=subscription_analytics.pdf"
+                },
+            )
+
+        if format == "excel":
+            excel_bytes = self._generate_subscription_excel(data)
+            return StreamingResponse(
+                io.BytesIO(excel_bytes),
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": "attachment; filename=subscription_analytics.xlsx"
+                },
+            )
+
+        return data
+
+    async def build_subscription_analytics(
+        self,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        plan_name: Optional[str] = None,
+        status: Optional[str] = None,
+        format: Literal["json", "pdf", "excel"] = "json",
+        hospital_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Subscription lifecycle analytics for dashboard.
@@ -1197,13 +1238,32 @@ class SuperAdminService:
             date_to = date_to.replace(tzinfo=_tz.utc)
 
         # Core rows for table + summary
+
         q = (
             select(Hospital, HospitalSubscription, SubscriptionPlanModel)
             .join(HospitalSubscription, HospitalSubscription.hospital_id == Hospital.id)
-            .join(SubscriptionPlanModel, SubscriptionPlanModel.id == HospitalSubscription.plan_id)
-        )
+            .join(SubscriptionPlanModel, SubscriptionPlanModel.id == HospitalSubscription.plan_id))
+
+#  DATE RANGE FILTER (CRITICAL FIX)
+        if date_from and date_to:
+            q = q.where(
+            HospitalSubscription.start_date <= date_to,
+            HospitalSubscription.end_date >= date_from,
+    )
+        elif date_from:
+            q = q.where(HospitalSubscription.start_date >= date_from)
+        elif date_to:
+            q = q.where(HospitalSubscription.end_date <= date_to)
+
+        # Existing filters
         if plan_name:
-            q = q.where(SubscriptionPlanModel.name == plan_name)
+            q = q.where(SubscriptionPlanModel.name == plan_name)   
+            
+        # Hospital name filter (case-insensitive, partial match)
+        if hospital_name:
+            q = q.where(
+        func.lower(Hospital.name).like(f"%{hospital_name.lower()}%")
+    )
         q = q.order_by(Hospital.name.asc())
         r = await self.db.execute(q)
         rows = r.all()
@@ -1219,8 +1279,10 @@ class SuperAdminService:
             else:
                 effective_status = getattr(sub, "status", None)
             effective_status_value = _status_value(effective_status)
-            if status and effective_status_value != str(status).strip().upper():
-                continue
+            if status:
+                requested_status = str(status).strip().upper()
+                if effective_status_value.upper() != requested_status:
+                    continue
 
             if effective_status_value == SubscriptionStatus.ACTIVE.value:
                 active += 1
@@ -1251,7 +1313,7 @@ class SuperAdminService:
                 }
             )
 
-        total_hospitals = len({row[0].id for row in rows})
+        total_hospitals = len({s["hospitalName"] for s in subscriptions})
 
         # Monthly growth chart (based on subscription created_at)
         # date_trunc is Postgres; works on Render. For SQLite dev, it may differ.
@@ -1292,26 +1354,53 @@ class SuperAdminService:
             await self.db.rollback()
             growth_rows = []
 
-        # Plan distribution
+        # ---------------------------
+# PLAN DISTRIBUTION (FIXED)
+# ---------------------------
         plans_rows = []
+
         pq = (
-            select(
-                SubscriptionPlanModel.display_name,
-                func.count(HospitalSubscription.id).label("hospitals"),
-            )
-            .join(HospitalSubscription, HospitalSubscription.plan_id == SubscriptionPlanModel.id)
-            .group_by(SubscriptionPlanModel.display_name)
-            .order_by(func.count(HospitalSubscription.id).desc())
-        )
+        select(
+        SubscriptionPlanModel.display_name,
+        func.count(HospitalSubscription.id).label("hospitals"),
+    )
+    .join(
+        HospitalSubscription,
+        HospitalSubscription.plan_id == SubscriptionPlanModel.id,
+    )
+)
+
+# Apply SAME filters as main query
+        if plan_name:
+            pq = pq.where(SubscriptionPlanModel.name == plan_name)
+
+        if status:
+            pq = pq.where(
+        func.upper(HospitalSubscription.status)
+        == str(status).strip().upper()
+    )
+
+        if date_from:
+            pq = pq.where(HospitalSubscription.created_at >= date_from)
+
+        if date_to:
+            pq = pq.where(HospitalSubscription.created_at <= date_to)
+
+        pq = (
+        pq.group_by(SubscriptionPlanModel.display_name)
+        .order_by(func.count(HospitalSubscription.id).desc())
+)
+
         pr = await self.db.execute(pq)
+
         for display_name, hospitals_count in pr.all():
             plans_rows.append(
                 {
-                    "plan": display_name,
-                    "hospitals": int(hospitals_count or 0),
-                    "revenue": 0,
-                }
-            )
+            "plan": display_name,
+            "hospitals": int(hospitals_count or 0),
+            "revenue": 0,
+        }
+    )
 
         # Churn analysis chart (counts expired/cancelled by month based on end_date)
         churn_rows = []
@@ -1370,7 +1459,7 @@ class SuperAdminService:
         churn_rate = round((cancelled / total_hospitals * 100), 2) if total_hospitals else 0.0
         retention_rate = round(100 - churn_rate, 2) if total_hospitals else 0.0
 
-        return {
+        analytics_data = {
             "summary": {
                 "subscription": {
                     "totalHospitals": total_hospitals,
@@ -1393,7 +1482,236 @@ class SuperAdminService:
             "revenueContribution": revenue_contribution_rows,
         }
 
+        return analytics_data
+    def _generate_subscription_pdf(self, data: Dict[str, Any]) -> bytes:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+
+        buffer = io.BytesIO()
+        pdf = canvas.Canvas(buffer, pagesize=A4)
+        width, height = A4
+
+        y = height - 40
+        pdf.setFont("Helvetica-Bold", 14)
+        pdf.drawString(40, y, "Subscription Analytics Report")
+
+        y -= 30
+        pdf.setFont("Helvetica", 10)
+
+        for k, v in data["summary"]["subscription"].items():
+            pdf.drawString(40, y, f"{k}: {v}")
+            y -= 14
+
+        y -= 20
+        pdf.setFont("Helvetica-Bold", 11)
+        pdf.drawString(40, y, "Subscriptions")
+
+        y -= 16
+        pdf.setFont("Helvetica", 9)
+
+        for row in data["subscriptions"]:
+            pdf.drawString(
+                40,
+                y,
+                f"{row['hospitalName']} | {row['planType']} | {row['status']}",
+            )
+            y -= 12
+            if y < 50:
+                pdf.showPage()
+                y = height - 40
+
+        pdf.save()
+        buffer.seek(0)
+        return buffer.read()
+
+    # =========================
+    # EXCEL EXPORT
+    # =========================
+    def _generate_subscription_excel(self, data: Dict[str, Any]) -> bytes:
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Subscriptions"
+
+        ws.append(
+            [
+                "Hospital",
+                "Plan",
+                "Status",
+                "Start Date",
+                "End Date",
+                "Billing Cycle",
+                "Auto Renewal",
+            ]
+        )
+
+        for row in data["subscriptions"]:
+            ws.append(
+                [
+                    row["hospitalName"],
+                    row["planType"],
+                    row["status"],
+                    row["subscriptionStartDate"],
+                    row["subscriptionEndDate"],
+                    row["billingCycle"],
+                    row["autoRenewal"],
+                ]
+            )
+
+        stream = io.BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream.read()
     async def get_financial_analytics(
+        self,
+        hospital_id: Optional[uuid.UUID] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        format: Literal["json", "pdf", "excel"] = "json",
+    ) -> Union[Dict[str, Any], StreamingResponse]:
+
+        data = await self.build_financial_analytics(
+            date_from, date_to, hospital_id
+        )
+
+        if format == "pdf":
+            pdf_bytes = self._generate_financial_pdf(data)
+            return StreamingResponse(
+                io.BytesIO(pdf_bytes),
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": "attachment; filename=financial_analytics.pdf"
+                },
+            )
+
+        if format == "excel":
+            excel_bytes = self._generate_financial_excel(data)
+            return StreamingResponse(
+                io.BytesIO(excel_bytes),
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": "attachment; filename=financial_analytics.xlsx"
+                },
+            )
+
+        return data
+    def _generate_financial_pdf(self, data: Dict[str, Any]) -> bytes:
+        buffer = io.BytesIO()
+        pdf = canvas.Canvas(buffer, pagesize=A4)
+        width, height = A4
+
+        y = height - 40
+        pdf.setFont("Helvetica-Bold", 16)
+        pdf.drawString(40, y, "Financial Analytics Report")
+
+        # SUMMARY
+        y -= 30
+        pdf.setFont("Helvetica-Bold", 12)
+        pdf.drawString(40, y, "Summary")
+
+        y -= 20
+        pdf.setFont("Helvetica", 10)
+
+        for k, v in data["summary"]["financial"].items():
+            pdf.drawString(40, y, f"{k}: {v}")
+            y -= 14
+
+        # TRANSACTIONS
+        y -= 20
+        pdf.setFont("Helvetica-Bold", 12)
+        pdf.drawString(40, y, "Transactions")
+
+        y -= 16
+        pdf.setFont("Helvetica", 9)
+
+        for row in data["transactions"]:
+            line = (
+                f"{row.get('invoiceId')} | "
+                f"{row.get('paymentDate')} | "
+                f"{row.get('amount')} | "
+                f"{row.get('status')}"
+            )
+            pdf.drawString(40, y, line)
+            y -= 12
+
+            if y < 60:
+                pdf.showPage()
+                y = height - 40
+
+        pdf.save()
+        buffer.seek(0)
+        return buffer.read()
+
+    def _generate_financial_excel(self, data: Dict[str, Any]) -> bytes:
+        wb = Workbook()
+
+        # ==========================
+        # SUMMARY SHEET
+        # ==========================
+        ws_summary = wb.active
+        ws_summary.title = "Summary"
+
+        ws_summary.append(["Metric", "Value"])
+        for k, v in data["summary"]["financial"].items():
+            ws_summary.append([k, v])
+
+        # ==========================
+        # TRANSACTIONS SHEET
+        # ==========================
+        ws_tx = wb.create_sheet("Transactions")
+
+        ws_tx.append(
+            [
+                "Invoice ID",
+                "Invoice Date",
+                "Payment Date",
+                "Amount",
+                "Tax",
+                "Total Amount",
+                "Status",
+                "Payment Method",
+                "Transaction ID",
+            ]
+        )
+
+        for row in data["transactions"]:
+            ws_tx.append(
+                [
+                    row.get("invoiceId"),
+                    row.get("invoiceDate"),
+                    row.get("paymentDate"),
+                    row.get("amount"),
+                    row.get("tax"),
+                    row.get("totalAmount"),
+                    row.get("status"),
+                    row.get("paymentMethod"),
+                    row.get("transactionId"),
+                ]
+            )
+
+        # ==========================
+        # REVENUE TRENDS SHEET
+        # ==========================
+        ws_rt = wb.create_sheet("Revenue Trends")
+
+        ws_rt.append(["Month", "MRR", "ARR", "Net Revenue"])
+
+        for r in data["revenueTrends"]:
+            ws_rt.append(
+                [
+                    r["month"],
+                    r["mrr"],
+                    r["arr"],
+                    r["netRevenue"],
+                ]
+            )
+
+        stream = io.BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream.read()
+    async def build_financial_analytics(
         self,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,

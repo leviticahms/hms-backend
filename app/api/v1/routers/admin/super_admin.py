@@ -1042,24 +1042,69 @@ async def get_dashboard_overview_cards(
 # SUBSCRIPTION / FINANCIAL / PERFORMANCE ANALYTICS
 # ============================================================================
 
-@router.get("/subscription-analytics", tags=["Super Admin - Analytics & Monitoring"])
+@router.get(
+    "/subscription-analytics",
+    tags=["Super Admin - Analytics & Monitoring"],
+)
 async def get_subscription_analytics(
+    hospital_name: Optional[str] = Query(
+        None, description="Hospital name (partial or full match)"
+    ),
+    date_from: Optional[str] = Query(
+        None, description="Start date (YYYY-MM-DD or ISO)"
+    ),
+    date_to: Optional[str] = Query(
+        None, description="End date (YYYY-MM-DD or ISO)"
+    ),
+    plan_name: Optional[str] = Query(
+        None, description="Plan name (FREE / STANDARD / PREMIUM)"
+    ),
+    status: Optional[str] = Query(
+        None, description="ACTIVE / EXPIRED / CANCELLED / SUSPENDED"
+    ),
+    format: str = Query(
+        "json", enum=["json", "pdf", "excel"]
+    ),
     current_user: User = Depends(require_super_admin()),
     service: SuperAdminService = Depends(get_super_admin_service),
 ):
-    """Subscription analytics for dashboard (summary + table + charts)."""
-    data = await service.get_subscription_analytics()
-    return SuccessResponse(success=True, message="Subscription analytics", data=data).dict()
+    """
+    Subscription analytics filtered by date range.
+    """
+
+    # Parse dates safely
+    df = parse_date_string(date_from) if date_from else None
+    dt = parse_date_string(date_to) if date_to else None
+
+    data = await service.get_subscription_analytics(
+        date_from=df,
+        date_to=dt,
+        plan_name=plan_name,
+        status=status,
+        format=format,
+        hospital_name=hospital_name,
+    )
+
+    # File responses for exports
+    if format in ("pdf", "excel"):
+        return data
+
+    return SuccessResponse(
+        success=True,
+        message="Subscription analytics",
+        data=data,
+    )
 
 class AnalyticsFilter(BaseModel):
     date_from: Optional[str] = None  # YYYY-MM-DD or ISO
     date_to: Optional[str] = None
     plan_name: Optional[str] = None  # FREE/STANDARD/PREMIUM
     status: Optional[str] = None  # ACTIVE/EXPIRED/CANCELLED/SUSPENDED
-
+    hospital_name: Optional[str] = None  # Partial match
 @router.post("/subscription-analytics", tags=["Super Admin - Analytics & Monitoring"])
 async def get_subscription_analytics_filtered(
     body: AnalyticsFilter,
+    format: str = Query("json", enum=["json", "pdf", "excel"]),
     current_user: User = Depends(require_super_admin()),
     service: SuperAdminService = Depends(get_super_admin_service),
 ):
@@ -1070,17 +1115,39 @@ async def get_subscription_analytics_filtered(
         date_to=dt,
         plan_name=body.plan_name,
         status=body.status,
+        format=format,
+        hospital_name=body.hospital_name,
     )
-    return SuccessResponse(success=True, message="Subscription analytics", data=data).dict()
+    if format in ("pdf", "excel"):
+        return data  # FileResponse with appropriate headers set in service
+    return SuccessResponse(success=True, message="Subscription analytics", data=data)
 
 @router.get("/financial-analytics", tags=["Super Admin - Analytics & Monitoring"])
 async def get_financial_analytics(
+    date_from: Optional[str] = Query(
+        None, description="Start date (YYYY-MM-DD or ISO)"
+    ),
+    date_to: Optional[str] = Query(
+        None, description="End date (YYYY-MM-DD or ISO)"
+    ),
+    hospital_id: Optional[str] = Query(
+        None, description="Hospital ID (UUID)"
+    ),
+    format: str = Query(
+        "json", enum=["json", "pdf", "excel"]
+    ),
     current_user: User = Depends(require_super_admin()),
     service: SuperAdminService = Depends(get_super_admin_service),
 ):
     """Financial analytics for dashboard (summary + transactions + charts)."""
-    data = await service.get_financial_analytics()
-    return SuccessResponse(success=True, message="Financial analytics", data=data).dict()
+    df = parse_date_string(date_from) if date_from else None
+    dt = parse_date_string(date_to) if date_to else None
+    hid = uuid.UUID(hospital_id) if hospital_id else None
+
+    data = await service.get_financial_analytics(date_from=df, date_to=dt, hospital_id=hid, format=format)
+    if format in ("pdf", "excel"):
+        return data 
+    return SuccessResponse(success=True, message="Financial analytics", data=data)
 
 class FinancialAnalyticsFilter(BaseModel):
     date_from: Optional[str] = None
@@ -1090,6 +1157,7 @@ class FinancialAnalyticsFilter(BaseModel):
 @router.post("/financial-analytics", tags=["Super Admin - Analytics & Monitoring"])
 async def get_financial_analytics_filtered(
     body: FinancialAnalyticsFilter,
+    format: str = Query("json", enum=["json", "pdf", "excel"]),
     current_user: User = Depends(require_super_admin()),
     service: SuperAdminService = Depends(get_super_admin_service),
 ):
@@ -1097,8 +1165,10 @@ async def get_financial_analytics_filtered(
     df = parse_date_string(body.date_from) if body.date_from else None
     dt = parse_date_string(body.date_to) if body.date_to else None
     hid = _uuid.UUID(body.hospital_id) if body.hospital_id else None
-    data = await service.get_financial_analytics(date_from=df, date_to=dt, hospital_id=hid)
-    return SuccessResponse(success=True, message="Financial analytics", data=data).dict()
+    data = await service.get_financial_analytics(date_from=df, date_to=dt, hospital_id=hid, format=format)
+    if format in ("pdf", "excel"):
+        return data 
+    return SuccessResponse(success=True, message="Financial analytics", data=data)
 
 
 @router.get("/performance-analytics", tags=["Super Admin - Analytics & Monitoring"])
