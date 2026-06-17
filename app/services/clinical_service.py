@@ -535,43 +535,20 @@ class ClinicalService:
     
     async def validate_doctor_access(self, user_context: dict) -> None:
         """Ensure user is a doctor"""
-        allowed = [
-        UserRole.NURSE,
-        UserRole.DOCTOR,
-        UserRole.HOSPITAL_ADMIN,
-        UserRole.PATIENT,
-        ]
-        role = user_context.get("role")
-        all_roles = user_context.get("all_roles") or []
-        
-        role_values = [r.value if hasattr(r, "value") else r for r in allowed]
-        
-        if role not in allowed and role not in role_values:
-            if not any(r in role_values for r in all_roles):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied - IPD operations require Nurse, Doctor, or Admin role",
-                )
+        if user_context["role"] != UserRole.DOCTOR:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - Doctor role required"
+            )
     
-
     async def validate_ipd_access(self, user_context: dict) -> None:
-        """Ensure user has IPD access (Nurse, Doctor, Hospital Admin, or Patient)"""
-        allowed = [
-            UserRole.NURSE,
-            UserRole.DOCTOR,
-            UserRole.HOSPITAL_ADMIN,
-            UserRole.PATIENT,
-        ]
-        role = user_context.get("role")
-        all_roles = user_context.get("all_roles") or []
-        role_values = [r.value if hasattr(r, "value") else r for r in allowed]
-
-        if role not in allowed and role not in role_values:
-            if not any(r in role_values for r in all_roles):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied - IPD operations require Nurse, Doctor, Hospital Admin, or Patient role",
-                )
+        """Ensure user has IPD access (Nurse or Doctor)"""
+        if user_context["role"] not in [UserRole.NURSE, UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - IPD operations require Nurse or Doctor role"
+            )
+    
     # ============================================================================
     # PROFILE MANAGEMENT
     # ============================================================================
@@ -1406,9 +1383,9 @@ class ClinicalService:
         # Ensure the patient profile exists there so appointments.patient_id FK succeeds, and
         # re-resolve the department on the platform DB *by name* so a tenant-only department id
         # never breaks appointments.department_id. The doctor user is already mirrored for auth.
-        # if not self._sessions_share_connection():
-        #     await mirror_opd_patient_to_platform(self.platform_db, patient, patient_user)
-        #     department = await self._ensure_platform_department(department, hospital_id_uuid)
+        if not self._sessions_share_connection():
+            await mirror_opd_patient_to_platform(self.platform_db, patient, patient_user)
+            department = await self._ensure_platform_department(department, hospital_id_uuid)
 
         appt_type = _normalize_opd_appointment_type(appointment_data.get("appointment_type"))
 
@@ -2205,77 +2182,15 @@ class ClinicalService:
     async def get_available_patients_for_admission(self, current_user: User) -> Dict[str, Any]:
         """Get list of patients that the doctor can see for admission"""
         user_context = self.get_user_context(current_user)
-        allowed_roles = [UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN, UserRole.PATIENT]
+        
         # Only doctors can access this
-        if user_context["role"] not in allowed_roles:
+        if user_context["role"] not in [UserRole.DOCTOR, UserRole.HOSPITAL_ADMIN]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only doctors and hospital admins can access available patients"
             )
         
         hospital_id_uuid = uuid.UUID(str(user_context["hospital_id"]))
-        # ── PATIENT: return only their own record ─────────────────────────────
-        if user_context["role"] == UserRole.PATIENT:
-            patient_result = await self.db.execute(
-                select(PatientProfile)
-                .where(
-                    and_(
-                        PatientProfile.user_id == uuid.UUID(str(user_context["user_id"])),
-                        PatientProfile.hospital_id == hospital_id_uuid,
-                    )
-                )
-                .options(selectinload(PatientProfile.user))
-            )
-            patient = patient_result.scalar_one_or_none()
-            if not patient or not patient.user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Patient profile not found for this hospital.",
-                )
-
-            admitted_result = await self.db.execute(
-                select(Admission.admission_number, Admission.ward)
-                .where(
-                    and_(
-                        Admission.patient_id == patient.id,
-                        Admission.hospital_id == hospital_id_uuid,
-                        Admission.is_active == True,
-                    )
-                )
-            )
-            admitted_row = admitted_result.first()
-            admission_status = "currently_admitted" if admitted_row else "available"
-            admission_info = (
-                {"admission_number": admitted_row[0], "ward": admitted_row[1]}
-                if admitted_row
-                else None
-            )
-
-            age = self.calculate_age(patient.date_of_birth) if patient.date_of_birth else 0
-
-            return {
-                "viewed_by": f"{current_user.first_name} {current_user.last_name} (Patient)",
-                "department": "N/A",
-                "available_patients": [
-                    {
-                        "patient_id": patient.patient_id,
-                        "name": f"{patient.user.first_name} {patient.user.last_name}",
-                        "age": age,
-                        "gender": patient.gender,
-                        "phone": patient.user.phone,
-                        "admission_status": admission_status,
-                        "current_admission": admission_info,
-                        "last_appointment": None,
-                        "medical_info": {
-                            "allergies": getattr(patient, "allergies", None) or [],
-                            "chronic_conditions": getattr(patient, "chronic_conditions", None) or [],
-                            "blood_group": patient.blood_group,
-                        },
-                    }
-                ],
-                "total_count": 1,
-                "note": "Your patient record at this hospital.",
-            }
 
         # HOSPITAL_ADMIN has no doctor profile — show hospital-wide view
         if user_context["role"] == UserRole.HOSPITAL_ADMIN:
@@ -2391,11 +2306,6 @@ class ClinicalService:
         """Get list of IPD patients in user's department"""
         user_context = self.get_user_context(current_user)
         await self.validate_ipd_access(user_context)
-        if user_context["role"] == UserRole.PATIENT:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Patients cannot view the IPD patient list.",
-            )
         
         # Get user profile
         user_profile = await self.get_ipd_user_profile(user_context)
@@ -2405,19 +2315,12 @@ class ClinicalService:
         limit = filters.get("limit", 20)
         offset = (page - 1) * limit
 
-        # HOSPITAL_ADMIN always sees all departments — override any filter value
-        if user_context["role"] == UserRole.HOSPITAL_ADMIN:
-            use_all_hospital = True
-        else:
-            # DOCTOR and NURSE see only their department unless they explicitly request all
-            use_all_hospital = bool(filters.get("all_hospital"))
-
-        if use_all_hospital:
+        if filters.get("all_hospital"):
             query = (
                 select(Admission)
-                  .where(
-                  Admission.hospital_id == hid,
-                  Admission.is_active == True,
+                .where(
+                    Admission.hospital_id == hid,
+                    Admission.is_active == True,
                 )
                 .options(
                     selectinload(Admission.patient).selectinload(PatientProfile.user),
@@ -2430,9 +2333,8 @@ class ClinicalService:
                 Admission.hospital_id == hid,
                 Admission.is_active == True,
             )
-            display_department = "All departments"
         else:
-            # Department-scoped for DOCTOR / NURSE
+            # Match admissions by department id OR same department name (handles duplicate/re-seeded dept rows).
             dept_match = [Admission.department_id == user_profile.department_id]
             dnorm = (user_profile.department.name or "").strip().lower()
             if dnorm:
@@ -2441,7 +2343,7 @@ class ClinicalService:
             query = (
                 select(Admission)
                 .join(Department, Admission.department_id == Department.id)
-                  .where(
+                .where(
                     Admission.hospital_id == hid,
                     Department.hospital_id == hid,
                     Admission.is_active == True,
@@ -2454,17 +2356,17 @@ class ClinicalService:
                 )
                 .order_by(desc(Admission.admission_date))
             )
+
             count_query = (
                 select(func.count(Admission.id))
-                 .join(Department, Admission.department_id == Department.id)
-                 .where(
+                .join(Department, Admission.department_id == Department.id)
+                .where(
                     Admission.hospital_id == hid,
                     Department.hospital_id == hid,
                     Admission.is_active == True,
                     or_(*dept_match),
                 )
             )
-            display_department = user_profile.department.name
 
         if filters.get("ward"):
             query = query.where(Admission.ward == filters["ward"])
@@ -2472,18 +2374,19 @@ class ClinicalService:
 
         total_result = await self.db.execute(count_query)
         total_patients = total_result.scalar() or 0
-
+        
         admissions_result = await self.db.execute(query.offset(offset).limit(limit))
         admissions = admissions_result.scalars().all()
-
+        
+        # Format response
         from app.schemas.clinical import IPDPatientOut
         patient_list = []
         for admission in admissions:
             length_of_stay = (datetime.now(timezone.utc) - admission.admission_date).days
-
+            
             latest_assessment = await self.db.execute(
-               select(MedicalRecord.vital_signs)
-                   .where(
+                select(MedicalRecord.vital_signs)
+                .where(
                     and_(
                         MedicalRecord.patient_id == admission.patient_id,
                         MedicalRecord.chief_complaint.like("Nursing Assessment%")
@@ -2492,31 +2395,32 @@ class ClinicalService:
                 .order_by(desc(MedicalRecord.created_at))
                 .limit(1)
             )
+            
             assessment_data = latest_assessment.scalar_one_or_none()
             current_condition = None
             if assessment_data:
                 current_condition = assessment_data.get("general_condition", "Unknown")
-
+            
             pref, pname = await self._resolve_ipd_patient_display(admission)
             doc = admission.doctor
             attending = (
-               f"Dr. {doc.first_name} {doc.last_name}".strip()
-               if doc is not None
-               else "Dr. Unknown"
+                f"Dr. {doc.first_name} {doc.last_name}".strip()
+                if doc is not None
+                else "Dr. Unknown"
             )
             dept_nm = (
-               admission.department.name
-               if getattr(admission, "department", None) is not None
-               else display_department
+                admission.department.name
+                if getattr(admission, "department", None) is not None
+                else user_profile.department.name
             )
-
+            
             patient_list.append(IPDPatientOut(
-               patient_ref=pref,
-               patient_name=pname,
-               admission_number=admission.admission_number,
-               admission_date=admission.admission_date.date().isoformat(),
-               admission_type=admission.admission_type,
-               department_name=dept_nm,
+                patient_ref=pref,
+                patient_name=pname,
+                admission_number=admission.admission_number,
+                admission_date=admission.admission_date.date().isoformat(),
+                admission_type=admission.admission_type,
+                department_name=dept_nm,
                 attending_doctor=attending,
                 assigned_nurse=None,
                 ward=admission.ward,
@@ -2528,10 +2432,14 @@ class ClinicalService:
                 provisional_diagnosis=admission.provisional_diagnosis,
                 is_active=admission.is_active
             ))
-
+        
         return {
-            "department": display_department,
-            "all_hospital": use_all_hospital,
+            "department": (
+                "All departments"
+                if filters.get("all_hospital")
+                else user_profile.department.name
+            ),
+            "all_hospital": bool(filters.get("all_hospital")),
             "ward_filter": filters.get("ward"),
             "patients": patient_list,
             "pagination": {
@@ -2774,176 +2682,105 @@ class ClinicalService:
         """Get IPD dashboard with key metrics and patient information"""
         user_context = self.get_user_context(current_user)
         await self.validate_ipd_access(user_context)
-        # ── PATIENT: lightweight personal dashboard ───────────────────────────
-        if user_context["role"] == UserRole.PATIENT:
-            hospital_id_uuid = self._hospital_uuid(user_context)
-
-            patient_result = await self.db.execute(
-                select(PatientProfile)
-                .where(
-                    and_(
-                        PatientProfile.user_id == uuid.UUID(str(user_context["user_id"])),
-                        PatientProfile.hospital_id == hospital_id_uuid,
-                    )
-                )
-            )
-            patient = patient_result.scalar_one_or_none()
-
-            active_admission = None
-            if patient:
-                adm_result = await self.db.execute(
-                    select(Admission)
-                    .where(
-                        and_(
-                            Admission.patient_id == patient.id,
-                            Admission.hospital_id == hospital_id_uuid,
-                            Admission.is_active == True,
-                        )
-                    )
-                    .order_by(desc(Admission.admission_date))
-                    .limit(1)
-                )
-                active_admission = adm_result.scalars().first()
-            return {
-                "user_name": f"{current_user.first_name} {current_user.last_name}",
-                "user_role": "PATIENT",
-                "hospital_id": str(hospital_id_uuid),
-                "department": "N/A",
-                "dashboard_date": datetime.now(timezone.utc).date().isoformat(),
-                "statistics": {
-                    "currently_admitted": active_admission is not None,
-                    "admission_number": active_admission.admission_number if active_admission else None,
-                    "ward": active_admission.ward if active_admission else None,
-                    "admitted_since": (
-                        active_admission.admission_date.date().isoformat()
-                        if active_admission else None
-                    ),
-                },
-                "quick_actions": [
-                    "View my admission details",
-                    "View my medical records",
-                ],
-            }
-    
+        
         # Get user profile
         user_profile = await self.get_ipd_user_profile(user_context)
         
-        hid = user_context["hospital_id"]
-        # HOSPITAL_ADMIN → hospital-wide, DOCTOR/NURSE → department-scoped
-        if user_context["role"] == UserRole.HOSPITAL_ADMIN:
-            dept_filter = and_(
-               Admission.hospital_id == hid,
-               Admission.is_active == True,
-            )
-            dept_name = "All Departments"
-        else:
-            dept_filter = and_(
-                Admission.hospital_id == hid,
-                Admission.department_id == user_profile.department_id,
-                Admission.is_active == True,
-            )
-            dept_name = user_profile.department.name
-
-        # Total admitted
+        # Get total admitted patients in department
         total_admitted_result = await self.db.execute(
-            select(func.count(Admission.id)).where(dept_filter)
+            select(func.count(Admission.id))
+            .where(
+                and_(
+                    Admission.hospital_id == user_context["hospital_id"],
+                    Admission.department_id == user_profile.department_id,
+                    Admission.is_active == True
+                )
+            )
         )
         total_admitted = total_admitted_result.scalar() or 0
-
-        # Critical patients
+        
+        # Get critical patients (from recent assessments)
         from sqlalchemy.dialects.postgresql import JSONB
         from sqlalchemy import cast
-
         critical_patients_result = await self.db.execute(
             select(func.count(Admission.id.distinct()))
             .join(MedicalRecord, Admission.patient_id == MedicalRecord.patient_id)
             .where(
                 and_(
-                    dept_filter,
+                    Admission.hospital_id == user_context["hospital_id"],
+                    Admission.department_id == user_profile.department_id,
+                    Admission.is_active == True,
                     MedicalRecord.vital_signs.op('@>')(cast('{"general_condition": "CRITICAL"}', JSONB)),
-                    MedicalRecord.created_at >= datetime.now(timezone.utc) - timedelta(hours=24),
+                    MedicalRecord.created_at >= datetime.now(timezone.utc) - timedelta(hours=24)
                 )
             )
         )
         critical_patients = critical_patients_result.scalar() or 0
-
-        # Today's activity
+        
+        # Get today's assessments/rounds by this user
         today = datetime.now(timezone.utc).date()
         if user_context["role"] == UserRole.NURSE:
             assessments_today_result = await self.db.execute(
                 select(func.count(MedicalRecord.id))
                 .where(
                     and_(
-                        MedicalRecord.hospital_id == hid,
+                        MedicalRecord.hospital_id == user_context["hospital_id"],
                         MedicalRecord.chief_complaint.like("Nursing Assessment%"),
                         func.date(MedicalRecord.created_at) == today,
-                        MedicalRecord.vital_signs.op('@>')(cast(
-                            f'{{"assessed_by": "{current_user.first_name} {current_user.last_name} (Nurse)"}}',
-                            JSONB
-                        ))
+                        MedicalRecord.vital_signs.op('@>')(cast(f'{{"assessed_by": "{current_user.first_name} {current_user.last_name} (Nurse)"}}', JSONB))
                     )
                 )
             )
             assessments_today = assessments_today_result.scalar() or 0
             activity_label = "Nursing Assessments Today"
-        elif user_context["role"] == UserRole.DOCTOR:
+        else:  # Doctor
             assessments_today_result = await self.db.execute(
                 select(func.count(MedicalRecord.id))
                 .where(
                     and_(
-                        MedicalRecord.hospital_id == hid,
+                        MedicalRecord.hospital_id == user_context["hospital_id"],
                         MedicalRecord.doctor_id == user_profile.id,
                         MedicalRecord.chief_complaint.like("Doctor Rounds%"),
-                        func.date(MedicalRecord.created_at) == today,
+                        func.date(MedicalRecord.created_at) == today
                     )
                 )
             )
             assessments_today = assessments_today_result.scalar() or 0
             activity_label = "Doctor Rounds Today"
-        else:  # HOSPITAL_ADMIN
-            assessments_today_result = await self.db.execute(
-                select(func.count(MedicalRecord.id))
-                .where(
-                    and_(
-                        MedicalRecord.hospital_id == hid,
-                        func.date(MedicalRecord.created_at) == today,
-                        or_(
-                            MedicalRecord.chief_complaint.like("Nursing Assessment%"),
-                            MedicalRecord.chief_complaint.like("Doctor Rounds%"),
-                        )
-                    )
-                )
-            )
-            assessments_today = assessments_today_result.scalar() or 0
-            activity_label = "Total Assessments Today"
-
-        # Recent admissions last 7 days
+        
+        # Get recent admissions (last 7 days)
         week_ago = datetime.now(timezone.utc) - timedelta(days=7)
         recent_admissions_result = await self.db.execute(
             select(func.count(Admission.id))
-            .where(and_(dept_filter, Admission.admission_date >= week_ago))
+            .where(
+                and_(
+                    Admission.hospital_id == user_context["hospital_id"],
+                    Admission.department_id == user_profile.department_id,
+                    Admission.admission_date >= week_ago
+                )
+            )
         )
         recent_admissions = recent_admissions_result.scalar() or 0
-
+        
         return {
             "user_name": f"{current_user.first_name} {current_user.last_name}",
             "user_role": user_context["role"],
-            "hospital_id": hid,
-            "department": dept_name,
+            "hospital_id": user_context["hospital_id"],
+            "department": user_profile.department.name,
             "dashboard_date": datetime.now(timezone.utc).date().isoformat(),
             "statistics": {
                 "total_admitted_patients": total_admitted,
                 "critical_patients": critical_patients,
                 "recent_admissions_7_days": recent_admissions,
-                activity_label.lower().replace(" ", "_"): assessments_today,
+                activity_label.lower().replace(" ", "_"): assessments_today
             },
             "quick_actions": [
                 "View IPD patients",
                 "Create nursing assessment" if user_context["role"] == UserRole.NURSE else "Document rounds",
                 "Record vital signs",
                 "View admission details",
-                "Discharge planning",
-            ],
+                "Discharge planning"
+            ]
         }
     
     # ============================================================================
@@ -2962,40 +2799,34 @@ class ClinicalService:
         """Load one admission scoped to the caller's department (id or name)."""
         hid = user_profile.hospital_id
         dept_id = user_profile.department_id
-        # Admin with no department — search hospital-wide
-        if dept_id is None:
-            where_clause = and_(
-               Admission.admission_number == admission_number,
-               Admission.hospital_id == hid,
-            )
-        else:
-            dept_name = (
-                (getattr(getattr(user_profile, "department", None), "name", None) or "")
-                .strip().lower()
-            )
-            dept_match = [Admission.department_id == dept_id]
-            if dept_name:
-                dept_match.append(
-                    Admission.department_id.in_(
-                        select(Department.id).where(
-                           Department.hospital_id == hid,
-                           func.lower(func.trim(Department.name)) == dept_name,
-                        )
+        dept_name = (
+            (getattr(getattr(user_profile, "department", None), "name", None) or "")
+            .strip()
+            .lower()
+        )
+        dept_match = [Admission.department_id == dept_id]
+        if dept_name:
+            dept_match.append(
+                Admission.department_id.in_(
+                    select(Department.id).where(
+                        Department.hospital_id == hid,
+                        func.lower(func.trim(Department.name)) == dept_name,
                     )
                 )
-            where_clause = and_(
-               Admission.admission_number == admission_number,
-               Admission.hospital_id == hid,
-               or_(*dept_match),
             )
-
         result = await self.db.execute(
-           select(Admission)
-           .where(where_clause)
-           .options(
-               selectinload(Admission.patient).selectinload(PatientProfile.user),
-               selectinload(Admission.doctor),
-               selectinload(Admission.department),
+            select(Admission)
+            .where(
+                and_(
+                    Admission.admission_number == admission_number,
+                    Admission.hospital_id == hid,
+                    or_(*dept_match),
+                )
+            )
+            .options(
+                selectinload(Admission.patient).selectinload(PatientProfile.user),
+                selectinload(Admission.doctor),
+                selectinload(Admission.department),
             )
             .order_by(desc(Admission.admission_date))
             .limit(1)
@@ -3003,8 +2834,8 @@ class ClinicalService:
         admission = result.scalars().first()
         if not admission:
             raise HTTPException(
-               status_code=status.HTTP_404_NOT_FOUND,
-               detail=f"Admission {admission_number} not found",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Admission {admission_number} not found in your department",
             )
         return admission
 
@@ -3118,27 +2949,6 @@ class ClinicalService:
                     self.id = user.id  # mirrors MockDoctorProfile.id
  
             profile = MockHospitalAdminProfile(admin_user, department)
-        elif user_context["role"] == UserRole.PATIENT:
-            patient_result = await self.db.execute(
-                select(User).where(User.id == uuid.UUID(str(user_context["user_id"])))
-            )
-            patient_user = patient_result.scalars().first()
-            if not patient_user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Patient user not found.",
-                )
-
-            class MockPatientProfile:
-                def __init__(self, user):
-                    self.user = user
-                    self.user_id = user.id
-                    self.hospital_id = user.hospital_id
-                    self.department_id = None   # patients have no department
-                    self.department = None
-                    self.id = user.id
-
-            return MockPatientProfile(patient_user)
         else:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -3158,7 +2968,7 @@ class ClinicalService:
         try:
             birth_date = datetime.strptime(date_of_birth, "%Y-%m-%d").date()
             today = date.today()
-            return today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+            return today.year - birth_date.year - ((today.month, today.day) < (birt_date.month, birth_date.day))
         except:
             return 0
 
@@ -3390,6 +3200,110 @@ class ClinicalService:
             "message": "Doctor rounds documented successfully"
         }
     
+    async def get_ipd_dashboard(self, current_user: User) -> Dict[str, Any]:
+        """Get IPD dashboard with key metrics and patient information"""
+        user_context = self.get_user_context(current_user)
+        await self.validate_ipd_access(user_context)
+        
+        # Get user profile
+        user_profile = await self.get_ipd_user_profile(user_context)
+        
+        # Get total admitted patients in department
+        total_admitted_result = await self.db.execute(
+            select(func.count(Admission.id))
+            .where(
+                and_(
+                    Admission.hospital_id == user_context["hospital_id"],
+                    Admission.department_id == user_profile.department_id,
+                    Admission.is_active == True
+                )
+            )
+        )
+        total_admitted = total_admitted_result.scalar() or 0
+        
+        # Get critical patients (from recent assessments)
+        from sqlalchemy.dialects.postgresql import JSONB
+        from sqlalchemy import cast
+        critical_patients_result = await self.db.execute(
+            select(func.count(Admission.id.distinct()))
+            .join(MedicalRecord, Admission.patient_id == MedicalRecord.patient_id)
+            .where(
+                and_(
+                    Admission.hospital_id == user_context["hospital_id"],
+                    Admission.department_id == user_profile.department_id,
+                    Admission.is_active == True,
+                    MedicalRecord.vital_signs.op('@>')(cast('{"general_condition": "CRITICAL"}', JSONB)),
+                    MedicalRecord.created_at >= datetime.now(timezone.utc) - timedelta(hours=24)
+                )
+            )
+        )
+        critical_patients = critical_patients_result.scalar() or 0
+        
+        # Get today's assessments/rounds by this user
+        today = datetime.now(timezone.utc).date()
+        if user_context["role"] == UserRole.NURSE:
+            assessments_today_result = await self.db.execute(
+                select(func.count(MedicalRecord.id))
+                .where(
+                    and_(
+                        MedicalRecord.hospital_id == user_context["hospital_id"],
+                        MedicalRecord.chief_complaint.like("Nursing Assessment%"),
+                        func.date(MedicalRecord.created_at) == today,
+                        MedicalRecord.vital_signs.op('@>')(cast(f'{{"assessed_by": "{current_user.first_name} {current_user.last_name} (Nurse)"}}', JSONB))
+                    )
+                )
+            )
+            assessments_today = assessments_today_result.scalar() or 0
+            activity_label = "Nursing Assessments Today"
+        else:  # Doctor
+            assessments_today_result = await self.db.execute(
+                select(func.count(MedicalRecord.id))
+                .where(
+                    and_(
+                        MedicalRecord.hospital_id == user_context["hospital_id"],
+                        MedicalRecord.doctor_id == user_profile.id,
+                        MedicalRecord.chief_complaint.like("Doctor Rounds%"),
+                        func.date(MedicalRecord.created_at) == today
+                    )
+                )
+            )
+            assessments_today = assessments_today_result.scalar() or 0
+            activity_label = "Doctor Rounds Today"
+        
+        # Get recent admissions (last 7 days)
+        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        recent_admissions_result = await self.db.execute(
+            select(func.count(Admission.id))
+            .where(
+                and_(
+                    Admission.hospital_id == user_context["hospital_id"],
+                    Admission.department_id == user_profile.department_id,
+                    Admission.admission_date >= week_ago
+                )
+            )
+        )
+        recent_admissions = recent_admissions_result.scalar() or 0
+        
+        return {
+            "user_name": f"{current_user.first_name} {current_user.last_name}",
+            "user_role": user_context["role"],
+            "hospital_id": user_context["hospital_id"],
+            "department": user_profile.department.name,
+            "dashboard_date": datetime.now(timezone.utc).date().isoformat(),
+            "statistics": {
+                "total_admitted_patients": total_admitted,
+                "critical_patients": critical_patients,
+                "recent_admissions_7_days": recent_admissions,
+                activity_label.lower().replace(" ", "_"): assessments_today
+            },
+            "quick_actions": [
+                "View IPD patients",
+                "Create nursing assessment" if user_context["role"] == UserRole.NURSE else "Document rounds",
+                "Record vital signs",
+                "View admission details",
+                "Discharge planning"
+            ]
+        }
     
     # ============================================================================
     # HELPER METHODS FOR IPD

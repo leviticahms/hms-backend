@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db_session, require_receptionist_or_nurse
-from app.core.database import get_platform_db_session
 from app.models.user import User
 from app.services.doctor_service import DoctorService
 from app.services.appointment_service import AppointmentService
@@ -26,7 +25,7 @@ async def staff_update_doctor_schedule_slot(
     schedule_id: uuid.UUID,
     body: ScheduleUpdate,
     current_user: User = Depends(require_receptionist_or_nurse()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """Update a schedule row for a doctor in your department."""
     svc = DoctorService(db)
@@ -40,7 +39,7 @@ async def staff_update_doctor_schedule_slot(
 async def staff_delete_doctor_schedule_slot(
     schedule_id: uuid.UUID,
     current_user: User = Depends(require_receptionist_or_nurse()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """Delete a schedule row for a doctor in your department."""
     svc = DoctorService(db)
@@ -53,7 +52,7 @@ async def staff_check_doctor_available_slots(
     doctor_name: str,
     date: str = Query(..., description="YYYY-MM-DD", pattern=r"^\d{4}-\d{2}-\d{2}$"),
     current_user: User = Depends(require_receptionist_or_nurse()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """Bookable time slots for a date (same rules as patient booking)."""
     ds = DoctorService(db)
@@ -77,7 +76,7 @@ async def staff_check_doctor_available_slots(
 async def staff_get_doctor_schedule_template(
     doctor_name: str,
     current_user: User = Depends(require_receptionist_or_nurse()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """Date-specific schedule slots for a doctor in your department."""
     svc = DoctorService(db)
@@ -90,7 +89,7 @@ async def staff_create_doctor_schedule_slot(
     doctor_name: str,
     body: ScheduleCreate,
     current_user: User = Depends(require_receptionist_or_nurse()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """Add one date-specific availability slot for a doctor in your department."""
     svc = DoctorService(db)
