@@ -1406,9 +1406,9 @@ class ClinicalService:
         # Ensure the patient profile exists there so appointments.patient_id FK succeeds, and
         # re-resolve the department on the platform DB *by name* so a tenant-only department id
         # never breaks appointments.department_id. The doctor user is already mirrored for auth.
-        if not self._sessions_share_connection():
-            await mirror_opd_patient_to_platform(self.platform_db, patient, patient_user)
-            department = await self._ensure_platform_department(department, hospital_id_uuid)
+        # if not self._sessions_share_connection():
+        #     await mirror_opd_patient_to_platform(self.platform_db, patient, patient_user)
+        #     department = await self._ensure_platform_department(department, hospital_id_uuid)
 
         appt_type = _normalize_opd_appointment_type(appointment_data.get("appointment_type"))
 
