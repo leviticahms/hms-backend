@@ -98,19 +98,6 @@ async def get_hospital_operations_service(
         platform_db=platform_db if tenant_db_name else None,
     )
 
-async def get_hospital_operations_service(
-    context: Dict[str, Any] = Depends(require_hospital_context),
-    db: AsyncSession = Depends(get_db_session),
-    platform_db: AsyncSession = Depends(get_platform_db_session),
-) -> HospitalAdminService:
-    hid = uuid.UUID(str(context["hospital_id"]))
-    tenant_db_name = await resolve_tenant_database_name_for_hospital(hid)
-
-    return HospitalAdminService(
-        db,
-        hid,
-        platform_db=platform_db if tenant_db_name else None,
-    )
 # ============================================================================
 # PLATFORM SETTINGS — subscription feature flags (Dashboard / module visibility)
 # Reads platform registry (`hospitals`, `hospital_subscriptions`, `subscription_plans`).
@@ -729,8 +716,8 @@ async def get_appointment_details(
 async def update_appointment_status(
     appointment_id: str,
     status_update: AppointmentStatusUpdate,
-    current_user: User = Depends(require_hospital_admin()),
-    service: HospitalAdminService = Depends(get_hospital_admin_service)
+    current_user: User = Depends(require_roles(UserRole.HOSPITAL_ADMIN,UserRole.DOCTOR)),
+    service: HospitalAdminService = Depends(get_hospital_operations_service),
 ):
     """
     Update appointment status with admin oversight.
@@ -758,6 +745,7 @@ async def update_appointment_status(
         reschedule_time=status_update.reschedule_time,
         new_doctor_ref=status_update.new_doctor_ref,
         new_doctor_uuid=status_update.new_doctor_uuid,
+        current_user=current_user
     )
     return result
 
