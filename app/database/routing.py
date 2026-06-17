@@ -33,11 +33,18 @@ PLATFORM_ONLY_PREFIXES: tuple[str, ...] = (
     "/api/v1/receptionist/appointments",
     # Subscription + plan flags live on the platform DB (`hospital_subscriptions`, `subscription_plans`).
     "/api/v1/hospital-admin/platform-settings",
-    # Doctors / departments directory reads from tenant DB when `tenant_database_name` is set
-    # (staff + DoctorProfile live there). Keep appointment slot math on platform below.
+    # Appointment slot math and patient booking always use platform DB.
     "/api/v1/appointments/available-slots",
     "/api/v1/patient-appointment-booking",
-    # doctor-management schedules live on tenant DB (DoctorSchedule, DoctorProfile)
+    # BUG FIX: Doctor appointment tracking must use the SAME platform DB as patient-appointment-booking
+    # (appointments are saved to platform DB via get_platform_db_session; tracking must read from there).
+    # On Render the hospital has a tenant_database_name so get_db_session would route to tenant DB
+    # and return empty results because no appointments exist there.
+    "/api/v1/doctor-appointment-tracking",
+    # BUG FIX: Doctor schedule management must use platform DB so that AppointmentService (which always
+    # uses the platform-DB session) can find the DoctorSchedule rows when checking available slots.
+    # On Render, without this, schedules were written to tenant DB but read from platform DB → slots empty.
+    "/api/v1/doctor-management/schedule",
     # doctor portal (dashboard, sidebar, IPD) reads tenant DB when provisioned — not platform-only.
     "/api/v1/patient-discharge-summary",
 )
