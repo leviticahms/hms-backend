@@ -138,10 +138,14 @@ class PrescriptionResponse(BaseModel):
     patient_name: str
     doctor_name: str
     prescription_date: str
-    diagnosis: Optional[str] = None
+    diagnosis: Optional[str] = None 
     total_medicines: int
     is_dispensed: bool
     created_at: str
+
+    @validator("diagnosis", pre=True, always=True)
+    def coerce_diagnosis(cls, v):
+        return v or None  # normalize empty string / None → None
 
 
 class PrescriptionMedicineOut(BaseModel):
@@ -814,7 +818,7 @@ async def get_doctor_prescriptions(
             patient_name=f"{prescription.patient.user.first_name} {prescription.patient.user.last_name}",
             doctor_name=f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
             prescription_date=prescription.prescription_date,
-            diagnosis=str(prescription.diagnosis or ""),
+            diagnosis=prescription.diagnosis,
             total_medicines=len(prescription.medications),
             is_dispensed=prescription.is_dispensed,
             created_at=prescription.created_at.isoformat()
