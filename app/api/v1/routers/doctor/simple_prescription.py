@@ -814,7 +814,7 @@ async def get_doctor_prescriptions(
             patient_name=f"{prescription.patient.user.first_name} {prescription.patient.user.last_name}",
             doctor_name=f"Dr. {doctor.user.first_name} {doctor.user.last_name}",
             prescription_date=prescription.prescription_date,
-            diagnosis=prescription.diagnosis,
+            diagnosis=str(prescription.diagnosis or ""),
             total_medicines=len(prescription.medications),
             is_dispensed=prescription.is_dispensed,
             created_at=prescription.created_at.isoformat()
