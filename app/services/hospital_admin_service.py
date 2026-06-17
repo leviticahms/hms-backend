@@ -370,7 +370,7 @@ class HospitalAdminService:
         await self._upsert_platform_user_from_tenant_row(tu)
         await self.platform_db.commit()
         
-    # async def _mirror_platform_user_if_configured(self, user_id: uuid.UUID) -> None:
+# async def _mirror_platform_user_if_configured(self, user_id: uuid.UUID) -> None:
     #     """After tenant ``users`` mutations, upsert the same row on platform (login resolves there)."""
     #     if self.platform_db is None:
     #         return
@@ -3010,6 +3010,7 @@ class HospitalAdminService:
         reschedule_time: Optional[str] = None,
         new_doctor_ref: Optional[str] = None,
         new_doctor_uuid: Optional[uuid.UUID] = None,
+        current_user: User = None,
     ) -> Dict[str, Any]:
         """Update appointment status with admin oversight. Doctor reassignment: new_doctor_uuid (preferred) or new_doctor_ref (DOC-xxx, name, or UUID string)."""
         from app.models.patient import Appointment
@@ -3030,7 +3031,6 @@ class HospitalAdminService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail={"code": "DOCTOR_NOT_FOUND", "message": f"Doctor not found: {doctor_lookup}"}
                 )
-        
         # Get appointment
         result = await self.db.execute(
             select(Appointment).where(
@@ -3047,7 +3047,28 @@ class HospitalAdminService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "APPOINTMENT_NOT_FOUND", "message": "Appointment not found"}
             )
+        user_roles = [role.name for role in (current_user.roles or [])]
+        is_admin = UserRole.HOSPITAL_ADMIN.value in user_roles
+        is_doctor = UserRole.DOCTOR.value in user_roles
         
+        if not (is_admin or is_doctor):
+            raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+            "code": "ACCESS_DENIED",
+            "message": "You don't have permission to update appointments"
+            }
+        )
+            
+        if is_doctor and not is_admin:
+            if str(appointment.doctor_id) != str(current_user.id):
+                    raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "code": "APPOINTMENT_ACCESS_DENIED",
+                        "message": "You can only update your own appointments"
+                    }
+                )
         old_status = appointment.status
         
         # Validate status transition
