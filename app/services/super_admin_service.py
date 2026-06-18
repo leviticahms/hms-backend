@@ -1886,28 +1886,172 @@ class SuperAdminService:
             "paymentStatus": payment_status,
         }
 
-    async def get_performance_analytics(self) -> Dict[str, Any]:
+    async def get_performance_analytics(
+        self,
+        hospital_name: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        format: str = "json",
+) -> Dict[str, Any]:
+
+        analytics_data = await self.build_performance_analytics(
+            date_from=date_from,
+            date_to=date_to,
+            hospital_name=hospital_name
+        )
+
+        if format == "pdf":
+            pdf_bytes = self._generate_performance_pdf(
+            analytics_data, date_from, date_to
+        )
+            return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": "attachment; filename=performance_analytics.pdf"
+            },
+        )
+
+        if format == "excel":
+            excel_bytes = self._generate_performance_excel(
+            analytics_data, date_from, date_to
+        )
+            return StreamingResponse(
+            io.BytesIO(excel_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": "attachment; filename=performance_analytics.xlsx"
+            },
+        )
+
+        return analytics_data
+
+    def _generate_performance_excel(self, data, date_from, date_to) -> bytes:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Summary"
+
+        ws.append(["From Date", date_from.date().isoformat() if date_from else ""])
+        ws.append(["To Date", date_to.date().isoformat() if date_to else ""])
+        ws.append([])
+
+        ws.append(["Metric", "Value"])
+        for k, v in data["summary"]["performance"].items():
+            ws.append([k, v])
+        ws2 = wb.create_sheet("Hospital Requests")
+        ws2.append(["Hospital Name", "Total Requests"])
+
+        for h in data.get("logs", []):
+            ws2.append([
+            h.get("hospitalName"),
+            h.get("totalRequests"),
+        ])
+        stream = io.BytesIO()
+        wb.save(stream)
+        stream.seek(0)
+        return stream.read()
+    def _generate_performance_pdf(self, data, date_from, date_to) -> bytes:
+        buffer = io.BytesIO()
+        c = canvas.Canvas(buffer, pagesize=A4)
+        text = c.beginText(40, 800)
+
+        text.textLine("Platform Performance Analytics")
+        text.textLine(f"From: {date_from.date().isoformat() if date_from else '-'}")
+        text.textLine(f"To: {date_to.date().isoformat() if date_to else '-'}")
+        text.textLine("")
+
+        for k, v in data["summary"]["performance"].items():
+            text.textLine(f"{k}: {v}")
+        text.textLine("")
+        text.textLine("Hospital-wise Requests:")
+
+        for h in data.get("logs", []):
+            text.textLine(f"{h['hospitalName']}: {h['totalRequests']} requests")
+        c.drawText(text)
+        c.showPage()
+        c.save()
+
+        buffer.seek(0)
+        return buffer.read()
+    async def build_performance_analytics(
+            self,
+            hospital_name: Optional[str] = None,
+            date_from: Optional[datetime] = None,
+            date_to: Optional[datetime] = None
+    ) -> Dict[str, Any]:
         """
         Platform performance analytics.
         NOTE: True API-level telemetry isn't stored yet; this returns DB-backed high-level counts.
         """
         from app.models.user import AuditLog
-
-        total_requests = 0
-        failed_requests = 0
+        if date_from and date_from.tzinfo is None:
+            date_from = date_from.replace(tzinfo=timezone.utc)
+        if date_to and date_to.tzinfo is None:
+            date_to = date_to.replace(tzinfo=timezone.utc)
+        total_q = select(func.count(AuditLog.id))
+        if date_from:
+            total_q = total_q.where(AuditLog.created_at >= date_from)
+        if date_to:
+            total_q = total_q.where(AuditLog.created_at <= date_to)
+        if hospital_name:
+            total_q = total_q.where(Hospital.name.ilike(f"%{hospital_name}%"))
         try:
-            # Best-effort proxy: audit logs count (not real HTTP request logs)
-            total_requests = int((await self.db.execute(select(func.count(AuditLog.id)))).scalar() or 0)
+            total_requests = int((await self.db.execute(total_q)).scalar() or 0)
         except Exception:
+            await self.db.rollback()
             total_requests = 0
 
-        summary = {
+        failed_requests = 0
+        success_rate = (
+        round(((total_requests - failed_requests) / total_requests) * 100, 2)
+            if total_requests else 0)
+        error_rate = round(100 - success_rate, 2) if total_requests else 0
+
+    # -----------------------------
+    # HOSPITAL-WISE REQUESTS
+    # -----------------------------
+        hospital_logs = []
+
+        hq = (
+        select(
+            Hospital.name.label("hospital_name"),
+            func.count(AuditLog.id).label("requests"),
+        )
+            .join(Hospital, Hospital.id == AuditLog.hospital_id)
+    )
+
+        if date_from:
+            hq = hq.where(AuditLog.created_at >= date_from)
+        if date_to:
+            hq = hq.where(AuditLog.created_at <= date_to)
+        if hospital_name:
+            hq = hq.where(Hospital.name.ilike(f"%{hospital_name}%"))
+        hq = hq.group_by(Hospital.name).order_by(func.count(AuditLog.id).desc())
+
+        try:
+            result = await self.db.execute(hq)
+            for hospital_name, requests in result.all():
+                hospital_logs.append(
+                {
+                    "hospitalName": hospital_name,
+                    "totalRequests": int(requests or 0),
+                }
+            )
+        except Exception:
+            await self.db.rollback()
+            hospital_logs = []
+
+    # -----------------------------
+    # FINAL RESPONSE
+    # -----------------------------
+        return {
+            "summary": {
             "performance": {
                 "platformUptime": None,
                 "apiResponseTime": None,
                 "peakResponseTime": None,
-                "errorRate": None,
-                "successRate": None,
+                "errorRate": error_rate,
+                "successRate": success_rate,
                 "totalRequests": total_requests,
                 "failedRequests": failed_requests,
                 "activeSessions": None,
@@ -1915,14 +2059,12 @@ class SuperAdminService:
                 "cpuUsage": None,
                 "memoryUsage": None,
             }
-        }
-        return {
-            "summary": summary,
-            "logs": [],
+        },
+            "logs": hospital_logs,   # 👈 hospital names added here
             "responseTrends": [],
             "errors": [],
             "resources": [],
-        }
+    }
 
     async def delete_hospital(self, hospital_id: uuid.UUID) -> Dict[str, Any]:
         """Soft-delete hospital: INACTIVE + block tenant users. Super Admin auth is the only gate."""

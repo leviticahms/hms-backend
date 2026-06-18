@@ -1173,12 +1173,25 @@ async def get_financial_analytics_filtered(
 
 @router.get("/performance-analytics", tags=["Super Admin - Analytics & Monitoring"])
 async def get_performance_analytics(
+    hospital_name: Optional[str] = Query(None, description="Hospital name (partial or full match)"),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD or ISO"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD or ISO"),
+    format: str = Query("json", enum=["json", "pdf", "excel"]),
     current_user: User = Depends(require_super_admin()),
     service: SuperAdminService = Depends(get_super_admin_service),
 ):
     """Platform performance analytics (best-effort; no full telemetry stored yet)."""
-    data = await service.get_performance_analytics()
-    return SuccessResponse(success=True, message="Performance analytics", data=data).dict()
+    df = parse_date_string(date_from) if date_from else None
+    dt = parse_date_string(date_to) if date_to else None
+    data = await service.get_performance_analytics(
+        hospital_name=hospital_name,
+        date_from=df,
+        date_to=dt,
+        format=format
+    )
+    if format in ("pdf", "excel"):
+        return data  # FileResponse with appropriate headers set in service
+    return SuccessResponse(success=True, message="Performance analytics", data=data)
 
 
 @router.get("/audit-logs", tags=["Super Admin - Analytics & Monitoring"])
