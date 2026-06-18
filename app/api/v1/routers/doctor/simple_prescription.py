@@ -138,10 +138,14 @@ class PrescriptionResponse(BaseModel):
     patient_name: str
     doctor_name: str
     prescription_date: str
-    diagnosis: str
+    diagnosis: Optional[str] = None 
     total_medicines: int
     is_dispensed: bool
     created_at: str
+
+    @validator("diagnosis", pre=True, always=True)
+    def coerce_diagnosis(cls, v):
+        return v or None  # normalize empty string / None → None
 
 
 class PrescriptionMedicineOut(BaseModel):

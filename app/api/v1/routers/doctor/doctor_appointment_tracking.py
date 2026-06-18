@@ -31,6 +31,7 @@ from app.models.hospital import Department
 from app.core.enums import UserRole, AppointmentStatus
 from app.core.utils import generate_patient_ref
 
+
 router = APIRouter(prefix="/doctor-appointment-tracking", tags=["Doctor Portal - Appointment Tracking"])
 
 
