@@ -35,8 +35,8 @@ PLATFORM_ONLY_PREFIXES: tuple[str, ...] = (
     "/api/v1/hospital-admin/platform-settings",
     # Doctors / departments directory reads from tenant DB when `tenant_database_name` is set
     # (staff + DoctorProfile live there). Keep appointment slot math on platform below.
-    #"/api/v1/appointments/available-slots",
-    #"/api/v1/patient-appointment-booking",
+    "/api/v1/appointments/available-slots",
+    "/api/v1/patient-appointment-booking",
     # doctor-management schedules live on tenant DB (DoctorSchedule, DoctorProfile)
     # doctor portal (dashboard, sidebar, IPD) reads tenant DB when provisioned — not platform-only.
     "/api/v1/patient-discharge-summary",
