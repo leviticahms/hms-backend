@@ -367,11 +367,11 @@ def determine_tracking_status(appointment: Appointment) -> AppointmentTrackingSt
     elif appointment.completed_at:
         return AppointmentTrackingStatus.COMPLETED
     elif appointment.checked_in_at:
-        if appointment.status == AppointmentStatus.IN_PROGRESS:
+        if appointment.status == "IN_PROGRESS":
             return AppointmentTrackingStatus.IN_PROGRESS
         else:
             return AppointmentTrackingStatus.CHECKED_IN
-    elif appointment.status == AppointmentStatus.CONFIRMED:
+    elif appointment.status == "CONFIRMED":
         return AppointmentTrackingStatus.CONFIRMED
     elif appointment.status == AppointmentStatus.REQUESTED:
         return AppointmentTrackingStatus.SCHEDULED
