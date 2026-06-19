@@ -10,9 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc, func, asc
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload
 from fastapi import HTTPException, status
 from app.models.doctor import DoctorProfile
 from datetime import datetime
+
+
+from sqlalchemy import select
+
 
 from app.models.user import User, Role, user_roles
 from app.models.patient import PatientProfile, Appointment, MedicalRecord, Admission
@@ -33,6 +38,7 @@ from app.services.patient_tenant_bridge import (
     mirror_department_to_platform,
     resolve_patient_profile_id_for_tenant,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -1968,6 +1974,67 @@ class ClinicalService:
             "status": appointment.status,
             "message": "Patient checked in successfully",
         }
+        
+        
+    async def get_doctor_checkedin_patients(self):
+        result = await self.tenant_db.execute(
+            select(Appointment).where(
+                Appointment.status == AppointmentStatus.CHECKED_IN
+            )
+        )
+        appointments = result.scalars().all()
+        patients = []
+        for appt in appointments:
+            patient = appt.patient
+            patients.append({
+                "appointment_ref": appt.appointment_ref,
+                "patient_id": patient.patient_id if patient else None,
+                "patient_name": f"{patient.first_name} {patient.last_name}" if patient else None,
+                "phone": patient.phone if patient else None,
+                "doctor_name": appt.doctor.full_name if appt.doctor else None,
+                "department": appt.department.name if appt.department else None,
+                "appointment_date": str(appt.appointment_date),
+                "appointment_time": str(appt.appointment_time),
+                "checked_in_at": appt.checked_in_at
+            })
+
+        return {"patients": patients}
+    
+#     async def get_doctor_checkedin_patients(
+#     self,
+#     current_user
+# ):
+
+#         query = (
+#         select(Appointment)
+#         .options(
+#             joinedload(Appointment.patient)
+#             .joinedload(PatientProfile.user),
+#             joinedload(Appointment.department)
+#         )
+#         .where(
+#             Appointment.doctor_id == current_user.id,
+#             Appointment.status == AppointmentStatus.CHECKED_IN
+#         )
+#     )
+
+#         result = await self.tenant_db.execute(query)
+#         appointments = result.scalars().all()
+#         patients = []
+#         for appt in appointments:
+#             patient_user = appt.patient.user
+#             patients.append({
+#                 "appointment_ref": appt.appointment_ref,
+#                 "patient_id": appt.patient.patient_id,
+#                 "patient_name": f"{patient_user.first_name} {patient_user.last_name}",
+#                 "phone": patient_user.phone,
+#                 "doctor_name": f"{current_user.first_name} {current_user.last_name}",
+#                 "department": appt.department.name,
+#                 "appointment_date": appt.appointment_date,
+#                 "appointment_time": appt.appointment_time,
+#                 "checked_in_at": appt.checked_in_at
+#             })
+#         return {"patients": patients}
     
     async def get_opd_dashboard(self, current_user: User) -> Dict[str, Any]:
         """Get OPD dashboard with key metrics and information"""
@@ -3878,3 +3945,28 @@ class ClinicalService:
                         return primary
 
         return self._pick_department_from_candidates(rows, dname)
+    
+    async def get_checked_in_patients(self, doctor: User) -> dict:
+        today = date.today()
+
+        appointments = await self.appointment_repo.get_checked_in_appointments(
+            doctor_id=doctor.id,
+            appointment_date=today,
+        )
+
+        patients = [
+            {
+                "appointment_ref": appt.reference,
+                "patient_id": appt.patient.patient_id,
+                "patient_name": appt.patient.full_name,
+                "phone": appt.patient.phone,
+                "doctor_name": appt.doctor.full_name,
+                "department": appt.doctor.department,
+                "appointment_date": appt.appointment_date.isoformat(),
+                "appointment_time": appt.appointment_time.isoformat(),
+                "checked_in_at": appt.checked_in_at.isoformat() if appt.checked_in_at else None,
+            }
+            for appt in appointments
+        ]
+
+        return {"patients": patients}

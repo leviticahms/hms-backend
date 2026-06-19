@@ -160,3 +160,19 @@ class AppointmentStatsResponse(BaseModel):
     cancelled: int
     today_appointments: int
     upcoming_appointments: int
+    
+
+# class CheckedInPatientResponse(BaseModel):
+#     appointment_ref: str
+#     patient_id: str
+#     patient_name: str
+#     phone: str
+#     doctor_name: str
+#     department: str
+#     appointment_date: str
+#     appointment_time: str
+#     checked_in_at: Optional[datetime]
+
+
+# class CheckedInPatientsListResponse(BaseModel):
+#     patients: List[CheckedInPatientResponse]

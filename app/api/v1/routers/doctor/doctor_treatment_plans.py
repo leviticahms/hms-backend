@@ -39,6 +39,9 @@ from app.schemas.doctor import (
     PlanPriority, TreatmentType, MilestoneStatus, OutcomeStatus, ReviewFrequency,
     TreatmentPlanStatus
 )
+# from app.services.clinical_service import get_checked_in_patients, ClinicalService
+# from app.dependencies.auth import require_doctor
+# from app.schemas.appointment import CheckedInPatientsListResponse
 
 router = APIRouter(prefix="/doctor-treatment-plans", tags=["Doctor Portal - Treatment Plans"])
 
@@ -536,6 +539,39 @@ async def get_treatment_plans(
         "total_plans": len(plan_summaries),
         "plans": plan_summaries,
     }
+    
+# @router.get("/appointments/checked-in")
+# async def get_checked_in_patients(
+#     current_user: User = Depends(require_doctor()),
+#     clinical_service: ClinicalService = Depends(get_checked_in_patients),
+# ):
+#     """
+#     Get today's checked-in patients for the doctor's treatment plan module.
+
+#     Access Control:
+#     - Only Doctors can access this endpoint
+
+#     Workflow:
+#     1. Fetch today's CHECKED_IN appointments for the logged-in doctor
+#     2. Return patient + appointment details
+
+#     Returns:
+#     - List of checked-in patients (same shape used by receptionist check-in flow)
+#     """
+#     result = await clinical_service.get_checked_in_patients(current_user)
+#     return success_response(
+#         message="Checked-in patients fetched successfully",
+#         data=result,
+#     )
+    
+# # @router.get("/treatment-plan/checkin-patients")
+# # async def get_checkedin_patients(
+# #     current_user: User = Depends(get_current_user),
+# #     clinical_service = Depends(get_clinical_service)
+# # ):
+# #     return await clinical_service.get_doctor_checkedin_patients(
+# #         current_user
+# #     )
 
 
 @router.get("/plans/{plan_id}")
@@ -1782,4 +1818,10 @@ async def get_treatment_plan_analytics(
             "invalid_dates_skipped": invalid_dates_count,
             "data_quality_score": round(((total_plans - invalid_dates_count) / total_plans * 100), 1) if total_plans > 0 else 100
         }
+    }
+    
+@router.get("/treatment-plan/checkin-patients")
+async def get_checkedin_patients():
+    return {
+        "patients": []
     }
