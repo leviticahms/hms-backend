@@ -25,7 +25,7 @@ from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import require_receptionist
+from app.api.deps import require_receptionist,require_receptionist_or_doctor
 from app.core.database import get_platform_db_session
 from app.core.enums import DocumentType
 from app.core.security import get_current_user
@@ -131,6 +131,29 @@ async def get_receptionist_clinical_service(
             return
     yield ClinicalService(platform_db, platform_db=platform_db)
 
+
+async def get_receptionist_doctor_clinical_service(
+    current_user: User = Depends(require_receptionist_or_doctor()),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
+) -> AsyncGenerator[ClinicalService, None]:
+    """
+    Appointments: writes on platform; reads merge platform + tenant when provisioned.
+    """
+    from app.database.tenant_context import resolve_tenant_database_name_for_hospital
+    from app.database.session import get_tenant_session_factory
+
+    if current_user.hospital_id:
+        tenant_name = await resolve_tenant_database_name_for_hospital(current_user.hospital_id)
+        if tenant_name:
+            factory = get_tenant_session_factory(tenant_name)
+            async with factory() as tenant_db:
+                yield ClinicalService(
+                    platform_db,
+                    platform_db=platform_db,
+                    tenant_db=tenant_db,
+                )
+            return
+    yield ClinicalService(platform_db, platform_db=platform_db)
 TAG_DASHBOARD = "Receptionist - Dashboard"
 TAG_PATIENT_REGISTRATION = "Receptionist - Patient Registration"
 TAG_PATIENT_RECORDS = "Receptionist - Patient Records"
@@ -668,14 +691,14 @@ async def get_appointment_by_ref(
 async def modify_appointment(
     appointment_ref: str,
     modification_data: AppointmentUpdate,
-    current_user: User = Depends(require_receptionist()),
-    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
+    current_user: User = Depends(require_receptionist_or_doctor()),
+    clinical_service: ClinicalService = Depends(get_receptionist_doctor_clinical_service),
 ):
     """
     Modify existing appointment.
     
     Access Control:
-    - Only Receptionists can modify appointments
+    - Only Receptionists or Doctors can modify appointments
     
     Features:
     - Change date/time
@@ -700,8 +723,8 @@ async def modify_appointment(
 async def update_appointment_status(
     appointment_ref: str,
     body: AppointmentStatusUpdate,
-    current_user: User = Depends(require_receptionist()),
-    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
+    current_user: User = Depends(require_receptionist_or_doctor()),
+    clinical_service: ClinicalService = Depends(get_receptionist_doctor_clinical_service),
 ):
     result = await clinical_service.update_opd_appointment_status(
         appointment_ref, body.status, current_user
@@ -713,8 +736,8 @@ async def update_appointment_status(
 async def cancel_appointment(
     appointment_ref: str,
     body: AppointmentCancelUpdate,
-    current_user: User = Depends(require_receptionist()),
-    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
+    current_user: User = Depends(require_receptionist_or_doctor()),
+    clinical_service: ClinicalService = Depends(get_receptionist_doctor_clinical_service),
 ):
     result = await clinical_service.cancel_opd_appointment(
         appointment_ref, body.model_dump(), current_user
@@ -725,8 +748,8 @@ async def cancel_appointment(
 @router.delete("/appointments/{appointment_ref}", tags=[TAG_APPOINTMENTS])
 async def delete_appointment(
     appointment_ref: str,
-    current_user: User = Depends(require_receptionist()),
-    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
+    current_user: User = Depends(require_receptionist_or_doctor()),
+    clinical_service: ClinicalService = Depends(get_receptionist_doctor_clinical_service),
 ):
     result = await clinical_service.delete_opd_appointment(appointment_ref, current_user)
     return success_response(message="Appointment deleted successfully", data=result)
@@ -740,14 +763,14 @@ async def delete_appointment(
 async def check_in_patient(
     appointment_ref: str,
     checkin_data: PatientCheckInCreate,
-    current_user: User = Depends(require_receptionist()),
-    clinical_service: ClinicalService = Depends(get_receptionist_clinical_service),
+    current_user: User = Depends(require_receptionist_or_doctor()),
+    clinical_service: ClinicalService = Depends(get_receptionist_doctor_clinical_service),
 ):
     """
     Check-in patient for their appointment.
     
     Access Control:
-    - Only Receptionists can check-in patients
+    - Only Receptionists or Doctors can check-in patients
     
     Workflow:
     1. Verify appointment exists

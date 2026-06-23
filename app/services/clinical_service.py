@@ -517,7 +517,16 @@ class ClinicalService:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied - Receptionist role required",
                 )
-    
+    async def validate_receptionist_or_doctor_access(self, user_context: dict) -> None:
+        """Ensure user is a receptionist or doctor"""
+        roles = user_context.get("all_roles") or []
+        if UserRole.RECEPTIONIST.value not in roles and UserRole.DOCTOR.value not in roles:
+            primary = user_context.get("role")
+            if primary not in [UserRole.RECEPTIONIST.value, UserRole.RECEPTIONIST, UserRole.DOCTOR.value, UserRole.DOCTOR]:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied - Receptionist or Doctor role required",
+                )
     async def validate_nurse_access(self, user_context: dict) -> None:
         """Ensure user is a nurse"""
         roles = user_context.get("all_roles") or []
@@ -1581,7 +1590,7 @@ class ClinicalService:
     ) -> Dict[str, Any]:
         """Return one appointment by ref for the receptionist's hospital."""
         user_context = self.get_user_context(current_user)
-        await self.validate_receptionist_access(user_context)
+        await self.validate_receptionist_or_doctor_access(user_context)
         hospital_id_uuid = self._hospital_uuid(user_context)
         appointment = await self._load_opd_appointment_by_ref(appointment_ref, hospital_id_uuid)
         if not appointment:
@@ -1594,7 +1603,7 @@ class ClinicalService:
     async def modify_opd_appointment(self, appointment_ref: str, modification_data: Dict[str, Any], current_user: User) -> Dict[str, Any]:
         """Modify existing OPD appointment"""
         user_context = self.get_user_context(current_user)
-        await self.validate_receptionist_access(user_context)
+        await self.validate_receptionist_or_doctor_access(user_context)
         hospital_id_uuid = self._hospital_uuid(user_context)
         
         appointment, write_db = await self._resolve_opd_appointment_by_ref(
@@ -1783,7 +1792,7 @@ class ClinicalService:
         current_user: User,
     ) -> Tuple[Appointment, AsyncSession]:
         user_context = self.get_user_context(current_user)
-        await self.validate_receptionist_access(user_context)
+        await self.validate_receptionist_or_doctor_access(user_context)
         hospital_id_uuid = self._hospital_uuid(user_context)
         appointment, write_db = await self._resolve_opd_appointment_by_ref(
             appointment_ref, hospital_id_uuid

@@ -212,6 +212,9 @@ def require_receptionist_or_nurse() -> Callable:
     """Front-desk or ward staff who may manage doctor availability templates"""
     return require_roles(UserRole.RECEPTIONIST, UserRole.NURSE)
 
+def require_receptionist_or_doctor() -> Callable:
+    """Front-desk or ward staff who may manage doctor availability templates"""
+    return require_roles(UserRole.RECEPTIONIST, UserRole.DOCTOR)
 
 def require_patient() -> Callable:
     """Require Patient role"""
