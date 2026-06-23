@@ -141,7 +141,7 @@ class SecurityManager:
             expire = (
                 datetime.utcnow() +
                 timedelta(
-                    minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+                    minutes=settings.ACCESS_TOKEN_EXPIRE_DAYS
                 )
             )
 
