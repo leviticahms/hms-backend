@@ -24,7 +24,7 @@ def _async_engine_common_kwargs() -> dict:
     return {
         "echo": settings.DEBUG,
         "pool_pre_ping": True,
-        "pool_recycle": 3600,
+        "pool_recycle": 1800,
         "future": True,
     }
 

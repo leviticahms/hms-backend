@@ -1301,10 +1301,10 @@ class HospitalAdminService:
         resp_first = user.first_name
         resp_last = user.last_name
         await self.db.commit()
-        if self.platform_db is not None:
-            await self._safe_platform_mirror(
-                self._mirror_staff_auth_to_platform(user.id, role_name)
-            )
+        # if self.platform_db is not None:
+        #     await self._safe_platform_mirror(
+        #         self._mirror_staff_auth_to_platform(user.id, role_name)
+        #     )
 
         staff_name = f"{resp_first} {resp_last}"
         if role_name == UserRole.DOCTOR:
