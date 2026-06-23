@@ -61,3 +61,4 @@ gunicorn
 uvicorn
 fastapi
 openpyxl
+pydantic[email]
