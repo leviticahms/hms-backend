@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc, func, asc, text
 from sqlalchemy.orm import selectinload, joinedload
+from app.services.clinical_service import ClinicalService
 from app.core.database import get_db_session, get_platform_db_session
 from app.services.patient_resolve import (
     clinical_db_sessions as _clinical_db_sessions,
@@ -540,38 +541,18 @@ async def get_treatment_plans(
         "plans": plan_summaries,
     }
     
-# @router.get("/appointments/checked-in")
-# async def get_checked_in_patients(
-#     current_user: User = Depends(require_doctor()),
-#     clinical_service: ClinicalService = Depends(get_checked_in_patients),
-# ):
-#     """
-#     Get today's checked-in patients for the doctor's treatment plan module.
-
-#     Access Control:
-#     - Only Doctors can access this endpoint
-
-#     Workflow:
-#     1. Fetch today's CHECKED_IN appointments for the logged-in doctor
-#     2. Return patient + appointment details
-
-#     Returns:
-#     - List of checked-in patients (same shape used by receptionist check-in flow)
-#     """
-#     result = await clinical_service.get_checked_in_patients(current_user)
-#     return success_response(
-#         message="Checked-in patients fetched successfully",
-#         data=result,
-#     )
-    
-# # @router.get("/treatment-plan/checkin-patients")
-# # async def get_checkedin_patients(
-# #     current_user: User = Depends(get_current_user),
-# #     clinical_service = Depends(get_clinical_service)
-# # ):
-# #     return await clinical_service.get_doctor_checkedin_patients(
-# #         current_user
-# #     )
+@router.get("/checkin-patients")
+async def get_checkedin_patients(
+    current_user: User = Depends(get_current_user),
+    tenant_db: AsyncSession = Depends(get_db_session),
+    platform_db: AsyncSession = Depends(get_platform_db_session),
+):
+    user_context = get_user_context(current_user)
+    ensure_doctor_access(user_context)
+ 
+    service = ClinicalService(db=tenant_db, platform_db=platform_db, tenant_db=tenant_db)
+    result = await service.get_doctor_checkedin_patients(current_user)
+    return result
 
 
 @router.get("/plans/{plan_id}")

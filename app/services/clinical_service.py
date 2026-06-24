@@ -1936,114 +1936,35 @@ class ClinicalService:
             "cancelled": cancelled,
         }
     
-    async def check_in_patient(self, appointment_ref: str, checkin_data: Dict[str, Any], current_user: User) -> Dict[str, Any]:
-        """Check-in patient for their appointment"""
-        appointment, write_db = await self._load_opd_appointment_for_receptionist(
-            appointment_ref, current_user
-        )
-        
-        # Check if appointment is for today
-        today = date.today().isoformat()
-        if appointment.appointment_date != today:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Can only check-in patients for today's appointments"
+    async def get_doctor_checkedin_patients(self, current_user: User) -> dict:
+        query = (
+            select(Appointment)
+            .options(
+                joinedload(Appointment.patient).joinedload(PatientProfile.user),
+                joinedload(Appointment.department)
             )
-        
-        # Check if already checked in
-        if appointment.checked_in_at:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Patient is already checked in"
-            )
-        
-        appointment.checked_in_at = datetime.now(timezone.utc)
-        appointment.status = "CHECKED_IN"
-
-        await write_db.commit()
-
-        checked_by = (checkin_data.get("checked_in_by") or "").strip()
-        if not checked_by:
-            checked_by = f"{current_user.first_name} {current_user.last_name} (Receptionist)"
-
-        patient = appointment.patient
-        patient_name = ""
-        patient_ref = ""
-        if patient and patient.user:
-            patient_name = f"{patient.user.first_name} {patient.user.last_name}".strip()
-            patient_ref = patient.patient_id or ""
-
-        return {
-            "appointment_ref": appointment_ref,
-            "patient_ref": patient_ref,
-            "patient_name": patient_name,
-            "doctor_name": f"Dr. {appointment.doctor.first_name} {appointment.doctor.last_name}",
-            "checked_in_at": appointment.checked_in_at.isoformat(),
-            "checked_in_by": checked_by,
-            "status": appointment.status,
-            "message": "Patient checked in successfully",
-        }
-        
-        
-    async def get_doctor_checkedin_patients(self):
-        result = await self.tenant_db.execute(
-            select(Appointment).where(
+            .where(
+                Appointment.doctor_id == current_user.id,
                 Appointment.status == AppointmentStatus.CHECKED_IN
             )
         )
-        appointments = result.scalars().all()
+        result = await self.tenant_db.execute(query)
+        appointments = result.scalars().unique().all()
         patients = []
         for appt in appointments:
-            patient = appt.patient
+            patient_user = appt.patient.user
             patients.append({
                 "appointment_ref": appt.appointment_ref,
-                "patient_id": patient.patient_id if patient else None,
-                "patient_name": f"{patient.first_name} {patient.last_name}" if patient else None,
-                "phone": patient.phone if patient else None,
-                "doctor_name": appt.doctor.full_name if appt.doctor else None,
+                "patient_id": appt.patient.patient_id,
+                "patient_name": f"{patient_user.first_name} {patient_user.last_name}",
+                "phone": patient_user.phone,
+                "doctor_name": f"{current_user.first_name} {current_user.last_name}",
                 "department": appt.department.name if appt.department else None,
                 "appointment_date": str(appt.appointment_date),
                 "appointment_time": str(appt.appointment_time),
-                "checked_in_at": appt.checked_in_at
+                "checked_in_at": appt.checked_in_at.isoformat() if appt.checked_in_at else None,
             })
-
         return {"patients": patients}
-    
-#     async def get_doctor_checkedin_patients(
-#     self,
-#     current_user
-# ):
-
-#         query = (
-#         select(Appointment)
-#         .options(
-#             joinedload(Appointment.patient)
-#             .joinedload(PatientProfile.user),
-#             joinedload(Appointment.department)
-#         )
-#         .where(
-#             Appointment.doctor_id == current_user.id,
-#             Appointment.status == AppointmentStatus.CHECKED_IN
-#         )
-#     )
-
-#         result = await self.tenant_db.execute(query)
-#         appointments = result.scalars().all()
-#         patients = []
-#         for appt in appointments:
-#             patient_user = appt.patient.user
-#             patients.append({
-#                 "appointment_ref": appt.appointment_ref,
-#                 "patient_id": appt.patient.patient_id,
-#                 "patient_name": f"{patient_user.first_name} {patient_user.last_name}",
-#                 "phone": patient_user.phone,
-#                 "doctor_name": f"{current_user.first_name} {current_user.last_name}",
-#                 "department": appt.department.name,
-#                 "appointment_date": appt.appointment_date,
-#                 "appointment_time": appt.appointment_time,
-#                 "checked_in_at": appt.checked_in_at
-#             })
-#         return {"patients": patients}
     
     async def get_opd_dashboard(self, current_user: User) -> Dict[str, Any]:
         """Get OPD dashboard with key metrics and information"""
