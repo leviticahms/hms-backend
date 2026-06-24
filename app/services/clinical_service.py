@@ -1935,6 +1935,18 @@ class ClinicalService:
             "completed": completed,
             "cancelled": cancelled,
         }
+        
+    async def check_in_patient(
+        self,
+        appointment_ref: str,
+        checkin_data: dict,
+        current_user: User,
+    ) -> dict:
+        return await self.update_opd_appointment_status(
+            appointment_ref,
+            "CHECKED_IN",
+            current_user,
+        )
     
     async def get_doctor_checkedin_patients(self, current_user: User) -> dict:
         query = (
