@@ -275,12 +275,14 @@ async def update_hospital_logo(
 @router.get("/platform-settings/{hospital_id}/logo",tags=["Hospital Admin - Platform Settings"],)
 async def get_hospital_logo(
     hospital_id: UUID,
+    current_user: User = Depends(require_hospital_admin()),
     db: AsyncSession = Depends(get_platform_db_session),
 ):
     from app.services.logo import get_hospital_logo_url
 
     logo_url = await get_hospital_logo_url(
         hospital_id=hospital_id,
+        current_user=current_user,
         db=db,
     )
 

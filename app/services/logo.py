@@ -26,7 +26,7 @@ async def upload_or_update_hospital_logo(
     in BOTH platform DB and tenant DB.
     """
 
-    # 🔐 SECURITY — ownership
+    # SECURITY — ownership
     if hospital_id != current_user.hospital_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -102,8 +102,15 @@ async def upload_or_update_hospital_logo(
 async def get_hospital_logo_url(
     *,
     hospital_id: UUID,
+    current_user: User,
     db: AsyncSession,
 ) -> str:
+    if hospital_id != current_user.hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot modify another hospital's logo",
+        )
+
     hospital = await db.get(Hospital, hospital_id)
     if not hospital or not hospital.logo_url:
         raise HTTPException(status_code=404, detail="Logo not found")
