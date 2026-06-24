@@ -4,7 +4,7 @@ Organized by functional areas: Admin, Doctor, Patient, Pharmacy, Lab, Management
 """
 from fastapi import APIRouter, Depends
 import logging
-
+import app.core.cloudinary
 from app.core.plan_features import (
     FEATURE_LAB_TESTS,
     FEATURE_VIDEO_CONSULTATION,

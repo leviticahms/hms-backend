@@ -62,3 +62,4 @@ uvicorn
 fastapi
 openpyxl
 pydantic[email]
+cloudinary>=1.36.0

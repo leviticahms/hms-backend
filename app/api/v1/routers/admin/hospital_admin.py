@@ -4,11 +4,13 @@ Handles department management, staff management, and hospital operations.
 CRITICAL: All operations are scoped to hospital_id from JWT token.
 """
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query,UploadFile,File
 from sqlalchemy import select, func, desc, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List, Dict, Any
-
+from uuid import UUID
+from app.core.cloudinary import cloudinary
+from app.models.tenant import Hospital
 from app.api.deps import (
     get_db_session,
     require_hospital_admin,
@@ -226,7 +228,66 @@ async def get_hospital_platform_settings(
     data = await get_hospital_platform_settings_bundle(db, hid)
     return HospitalPlatformSettingsOut(**data)
 
+@router.post("/platform-settings/{hospital_id}/logo", tags=["Hospital Admin - Platform Settings"],status_code=status.HTTP_201_CREATED)
+async def create_hospital_logo(
+    hospital_id: UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_hospital_admin()),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    from app.services.logo import upload_or_update_hospital_logo
 
+    logo_url = await upload_or_update_hospital_logo(
+        hospital_id=hospital_id,
+        file=file,
+        current_user=current_user,
+        platform_db=db,
+        allow_update=False,
+    )
+
+    return {
+        "success": True,
+        "message": "Hospital logo uploaded successfully",
+        "logo_url": logo_url,
+    }
+@router.put("/platform-settings/{hospital_id}/logo",tags=["Hospital Admin - Platform Settings"],)
+async def update_hospital_logo(
+    hospital_id: UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_hospital_admin()),
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    from app.services.logo import upload_or_update_hospital_logo
+
+    logo_url = await upload_or_update_hospital_logo(
+        hospital_id=hospital_id,
+        file=file,
+        current_user=current_user,
+        platform_db=db,
+        allow_update=True,
+    )
+
+    return {
+        "success": True,
+        "message": "Hospital logo updated successfully",
+        "logo_url": logo_url,
+    }
+@router.get("/platform-settings/{hospital_id}/logo",tags=["Hospital Admin - Platform Settings"],)
+async def get_hospital_logo(
+    hospital_id: UUID,
+    db: AsyncSession = Depends(get_platform_db_session),
+):
+    from app.services.logo import get_hospital_logo_url
+
+    logo_url = await get_hospital_logo_url(
+        hospital_id=hospital_id,
+        db=db,
+    )
+
+    return {
+        "success": True,
+        "logo_url": logo_url,
+    }
 # ============================================================================
 # TASK 2.1 - DEPARTMENT MANAGEMENT ENDPOINTS
 # ============================================================================

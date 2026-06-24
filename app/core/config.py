@@ -317,6 +317,10 @@ class Settings(BaseSettings):
     PAYTM_ENV: str = Field(default="sandbox", env="PAYTM_ENV")
     PAYTM_WEBSITE: str = Field(default="WEBSTAGING", env="PAYTM_WEBSITE")
     PAYTM_CALLBACK_URL: str = Field(default="", env="PAYTM_CALLBACK_URL")
+ 
+    CLOUDINARY_CLOUD_NAME: str =Field(default="",env="CLOUDINARY_CLOUD_NAME")
+    CLOUDINARY_API_KEY: str =Field(default="",env="CLOUDINARY_API_KEY")
+    CLOUDINARY_API_SECRET: str =Field(default="",env="CLOUDINARY_API_SECRET")
 
     # Public demo request
     DEMO_REQUEST_NOTIFY_EMAIL: str = Field(default="", env="DEMO_REQUEST_NOTIFY_EMAIL")
