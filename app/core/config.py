@@ -134,7 +134,11 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: str = Field(default="", env="SECRET_KEY")
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_DAYS: int = 5
+<<<<<<< HEAD
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 5*24*60  # 5 days
+=======
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 5 * 24 * 60  # 5 days in minutes
+>>>>>>> 63ffdfc40fbf26fb6688c5ef4ae66f9f4993adba
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
     # CORS — set ALLOWED_ORIGINS in env (comma-separated or JSON array); empty = no browser origins

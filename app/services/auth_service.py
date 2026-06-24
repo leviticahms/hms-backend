@@ -1000,7 +1000,7 @@ class AuthService:
             "access_token": access_token,
             "refresh_token": refresh_token,
             "token_type": "bearer",
-            "expires_in": 1800,  # 30 minutes
+            "expires_in": 5 * 24 * 60 * 60,  # 5 days
             "user": {
                 "id": str(user.id),
                 "email": user.email,

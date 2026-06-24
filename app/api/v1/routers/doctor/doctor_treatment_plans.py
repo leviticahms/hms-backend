@@ -1800,9 +1800,3 @@ async def get_treatment_plan_analytics(
             "data_quality_score": round(((total_plans - invalid_dates_count) / total_plans * 100), 1) if total_plans > 0 else 100
         }
     }
-    
-@router.get("/treatment-plan/checkin-patients")
-async def get_checkedin_patients():
-    return {
-        "patients": []
-    }
