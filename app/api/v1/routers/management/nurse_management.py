@@ -3,11 +3,13 @@ Nurse management module.
 Real-data endpoints only (no dummy payloads).
 """
 import uuid
+from uuid import UUID
+
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query,File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.services.logo import upload_or_update_nurse_avatar, get_nurse_avatar_url
 from app.api.deps import require_nurse
 from app.core.database import get_platform_db_session
 from app.core.response_utils import success_response
@@ -339,3 +341,62 @@ async def update_discharge_summary(
         current_user,
     )
     return success_response(message="Discharge summary updated successfully", data=data)
+@router.post(
+    "/nurse/{nurse_user_id}/avatar",
+    tags=["Nurse Module"],
+)
+async def upload_nurse_avatar(
+    nurse_user_id: UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_nurse()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    avatar_url = await upload_or_update_nurse_avatar(
+        nurse_user_id=nurse_user_id,
+        file=file,
+        current_user=current_user,
+        db=db,
+    )
+    return {
+        "success": True,
+        "message": "Profile photo uploaded successfully",
+        "avatar_url": avatar_url,
+    }
+@router.put("/nurse/{nurse_user_id}/avatar",
+    tags=["Nurse Module"],)
+async def update_nurse_avatar(
+    nurse_user_id: UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_nurse()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    avatar_url = await upload_or_update_nurse_avatar(
+        nurse_user_id=nurse_user_id,
+        file=file,
+        current_user=current_user,
+        db=db,
+    )
+    return {
+        "success": True,
+        "message": "Profile photo updated successfully",
+        "avatar_url": avatar_url,
+    }
+
+@router.get(
+    "/nurse/{nurse_user_id}/avatar",
+    tags=["Nurse Module"],
+)
+async def get_nurse_avatar(
+    nurse_user_id: UUID,
+    current_user: User = Depends(require_nurse()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    avatar_url = await get_nurse_avatar_url(
+        nurse_user_id=nurse_user_id,
+        current_user=current_user,
+        db=db,
+    )
+    return {
+        "success": True,
+        "avatar_url": avatar_url,
+    }
