@@ -11,9 +11,10 @@ BUSINESS RULES:
 - Quick access to common doctor tasks
 """
 import uuid
+from uuid import UUID
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, date, timezone
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query,File,UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc, func, asc
 from sqlalchemy.orm import selectinload
@@ -26,7 +27,10 @@ from app.models.patient import PatientProfile, Appointment, MedicalRecord, Admis
 from app.models.hospital import Department, StaffDepartmentAssignment
 from app.core.enums import UserRole, AppointmentStatus, AdmissionStatus
 from app.core.utils import generate_patient_ref
-
+from app.api.deps import (
+    get_db_session,
+    require_doctor)
+from app.services.logo import upload_or_update_doctor_avatar,get_doctor_avatar_url
 router = APIRouter(prefix="/doctor-dashboard", tags=["Doctor Portal - Dashboard"])
 
 
@@ -1024,4 +1028,62 @@ async def get_quick_stats(
             "medical_records_created": medical_records,
             "completion_rate": round((completed_appointments / total_appointments * 100) if total_appointments > 0 else 0, 1)
         }
+    }
+@router.post(
+    "/doctors/{doctor_user_id}/avatar",
+    tags=["Doctor Portal - Dashboard"],
+)
+async def upload_doctor_avatar(
+    doctor_user_id: UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_doctor()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    avatar_url = await upload_or_update_doctor_avatar(
+        doctor_user_id=doctor_user_id,
+        file=file,
+        current_user=current_user,
+        db=db,
+    )
+    return {
+        "success": True,
+        "avatar_url": avatar_url,
+    }
+@router.put("/doctors/{doctor_user_id}/avatar",
+    tags=["Doctor Portal - Dashboard"],)
+async def update_doctor_avatar(
+    doctor_user_id: UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_doctor()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    avatar_url = await upload_or_update_doctor_avatar(
+        doctor_user_id=doctor_user_id,
+        file=file,
+        current_user=current_user,
+        db=db,
+    )
+    return {
+        "success": True,
+        "message": "Profile photo updated successfully",
+        "avatar_url": avatar_url,
+    }
+
+@router.get(
+    "/doctors/{doctor_user_id}/avatar",
+    tags=["Doctor Portal - Dashboard"],
+)
+async def get_doctor_avatar(
+    doctor_user_id: UUID,
+    current_user: User = Depends(require_doctor()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    avatar_url = await get_doctor_avatar_url(
+        doctor_user_id=doctor_user_id,
+        current_user=current_user,
+        db=db,
+    )
+    return {
+        "success": True,
+        "avatar_url": avatar_url,
     }

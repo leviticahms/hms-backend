@@ -115,3 +115,74 @@ async def get_hospital_logo_url(
     if not hospital or not hospital.logo_url:
         raise HTTPException(status_code=404, detail="Logo not found")
     return hospital.logo_url
+
+#doctor profile
+async def upload_or_update_doctor_avatar(
+    *,
+    doctor_user_id: UUID,
+    file: UploadFile,
+    current_user: User,
+    db: AsyncSession,
+) -> str:
+    # Fetch doctor user
+    doctor = await db.get(User, doctor_user_id)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    #  Security checks
+    if (
+        doctor.id != current_user.id
+        and doctor.hospital_id != current_user.hospital_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to update this doctor's profile photo",
+        )
+
+    # Validate file type
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Only PNG, JPEG, or WEBP images are allowed",
+        )
+
+    content = await file.read()
+
+    # Validate size
+    if len(content) > MAX_LOGO_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail="Profile photo must be under 2MB",
+        )
+
+    # Upload to Cloudinary
+    upload_result = cloudinary.uploader.upload(
+        content,
+        folder=f"doctor_avatars/{doctor_user_id}",
+        public_id="avatar",
+        overwrite=True,
+        resource_type="image",
+        transformation=[
+            {"width": 300, "height": 300, "crop": "fill", "gravity": "face"}
+        ],
+    )
+
+    avatar_url = upload_result["secure_url"]
+
+    # Save URL in users table
+    doctor.avatar_url = avatar_url
+    await db.commit()
+    await db.refresh(doctor)
+
+    return avatar_url
+
+async def get_doctor_avatar_url(
+    *,
+    doctor_user_id: UUID,
+    current_user: User,
+    db: AsyncSession,
+) -> str:
+    doctor = await db.get(User, doctor_user_id)
+    if not doctor or not doctor.avatar_url:
+        raise HTTPException(status_code=404, detail="Profile photo not found")
+    return doctor.avatar_url
