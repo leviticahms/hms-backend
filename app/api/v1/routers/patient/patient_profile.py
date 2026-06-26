@@ -8,7 +8,10 @@ from app.core.utils import absolute_public_asset_url
 from app.dependencies.auth import get_current_patient
 from app.models.patient import PatientProfile
 from app.models.user import User
-
+from app.services.logo import get_staff_avatar_url, upload_or_update_staff_avatar
+from app.api.deps import (
+    get_db_session,
+    require_patient,)
 router = APIRouter(prefix="/patient-profile", tags=["Patient Portal - Profile"])
 
 
@@ -119,4 +122,70 @@ async def get_my_health_card(
         "gender": patient.gender,
         "blood_group": patient.blood_group,
         "id_number": patient.id_number,
+    }
+
+@router.post(
+    "/patient/me/avatar",
+    tags=["Patient Portal - Profile"],
+)
+async def upload_patient_avatar(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_patient()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    avatar_url = await upload_or_update_staff_avatar(
+        staff_user_id=current_user.id,
+        role="patient",
+        file=file,
+        current_user=current_user,
+        db=db,
+        allow_update=False,  # POST = create only
+    )
+
+    return {
+        "success": True,
+        "message": "Profile photo uploaded successfully",
+        "avatar_url": avatar_url,
+    }
+@router.put(
+    "/patient/me/avatar",
+    tags=["Patient Portal - Profile"],
+)
+async def update_patient_avatar(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_patient()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    avatar_url = await upload_or_update_staff_avatar(
+        staff_user_id=current_user.id,
+        role="patient",
+        file=file,
+        current_user=current_user,
+        db=db,
+        allow_update=True,   # PUT = overwrite
+    )
+
+    return {
+        "success": True,
+        "message": "Profile photo updated successfully",
+        "avatar_url": avatar_url,
+    }
+@router.get(
+    "/patient/me/avatar",
+    tags=["Patient Portal - Profile"],
+)
+async def get_patient_avatar(
+    current_user: User = Depends(require_patient()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    avatar_url = await get_staff_avatar_url(
+        staff_user_id=current_user.id,
+        role="patient",
+        current_user=current_user,
+        db=db,
+    )
+
+    return {
+        "success": True,
+        "avatar_url": avatar_url,
     }

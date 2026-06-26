@@ -116,51 +116,62 @@ async def get_hospital_logo_url(
         raise HTTPException(status_code=404, detail="Logo not found")
     return hospital.logo_url
 
-#doctor profile
-async def upload_or_update_doctor_avatar(
+#--------------------------
+#staff avatar upload
+#--------------------------
+
+
+async def upload_or_update_staff_avatar(
     *,
-    doctor_user_id: UUID,
+    staff_user_id,
+    role: str,  # doctor | nurse | receptionist | patient
     file: UploadFile,
     current_user: User,
     db: AsyncSession,
+    allow_update: bool,   # 🔑 POST=False, PUT=True
 ) -> str:
-    # Fetch doctor user
-    doctor = await db.get(User, doctor_user_id)
-    if not doctor:
-        raise HTTPException(status_code=404, detail="Doctor not found")
-
-    #  Security checks
-    if (
-        doctor.id != current_user.id
-        and doctor.hospital_id != current_user.hospital_id
-    ):
+    #  OWNERSHIP
+    if staff_user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not allowed to update this doctor's profile photo",
+            detail="You can update only your own profile photo",
         )
 
-    # Validate file type
+    user = await db.get(User, staff_user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    #  Prevent POST overwrite
+    if user.avatar_url and not allow_update:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Profile photo already exists. Go to update.",
+        )
+
+    # ========================
+    # FILE VALIDATION
+    # ========================
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(
             status_code=400,
-            detail="Only PNG, JPEG, or WEBP images are allowed",
+            detail="Only PNG, JPEG, WEBP images allowed",
         )
 
     content = await file.read()
-
-    # Validate size
     if len(content) > MAX_LOGO_SIZE:
         raise HTTPException(
             status_code=400,
-            detail="Profile photo must be under 2MB",
+            detail="Avatar must be under 2MB",
         )
 
-    # Upload to Cloudinary
+    # ========================
+    # CLOUDINARY UPLOAD
+    # ========================
     upload_result = cloudinary.uploader.upload(
         content,
-        folder=f"doctor_avatars/{doctor_user_id}",
-        public_id="avatar",
-        overwrite=True,
+        folder="staff_profiles",               # ONE folder
+        public_id=f"{role}_{staff_user_id}",   # visible file name
+        overwrite=True,                        # PUT replaces
         resource_type="image",
         transformation=[
             {"width": 300, "height": 300, "crop": "fill", "gravity": "face"}
@@ -169,91 +180,32 @@ async def upload_or_update_doctor_avatar(
 
     avatar_url = upload_result["secure_url"]
 
-    # Save URL in users table
-    doctor.avatar_url = avatar_url
+    # ========================
+    # SAVE
+    # ========================
+    user.avatar_url = avatar_url
     await db.commit()
-    await db.refresh(doctor)
+    await db.refresh(user)
 
     return avatar_url
-
-async def get_doctor_avatar_url(
+async def get_staff_avatar_url(
     *,
-    doctor_user_id: UUID,
+    staff_user_id,
     current_user: User,
     db: AsyncSession,
 ) -> str:
-    doctor = await db.get(User, doctor_user_id)
-    if not doctor or not doctor.avatar_url:
-        raise HTTPException(status_code=404, detail="Profile photo not found")
-    return doctor.avatar_url
-
-#nurse profile
-async def upload_or_update_nurse_avatar(
-    *,
-    nurse_user_id: UUID,
-    file: UploadFile,
-    current_user: User,
-    db: AsyncSession,
-) -> str:
-    # Fetch doctor user
-    nurse = await db.get(User, nurse_user_id)
-    if not nurse:
-        raise HTTPException(status_code=404, detail="nurse not found")
-
-    #  Security checks
-    if (
-        nurse.id != current_user.id
-        and nurse.hospital_id != current_user.hospital_id
-    ):
+    #  OWNERSHIP
+    if staff_user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not allowed to update this nurse's profile photo",
+            detail="You can view only your own profile photo",
         )
 
-    # Validate file type
-    if file.content_type not in ALLOWED_IMAGE_TYPES:
+    user = await db.get(User, staff_user_id)
+    if not user or not user.avatar_url:
         raise HTTPException(
-            status_code=400,
-            detail="Only PNG, JPEG, or WEBP images are allowed",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Profile photo not found",
         )
 
-    content = await file.read()
-
-    # Validate size
-    if len(content) > MAX_LOGO_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail="Profile photo must be under 2MB",
-        )
-
-    # Upload to Cloudinary
-    upload_result = cloudinary.uploader.upload(
-        content,
-        folder=f"doctor_avatars/{nurse_user_id}",
-        public_id="avatar",
-        overwrite=True,
-        resource_type="image",
-        transformation=[
-            {"width": 300, "height": 300, "crop": "fill", "gravity": "face"}
-        ],
-    )
-
-    avatar_url = upload_result["secure_url"]
-
-    # Save URL in users table
-    nurse.avatar_url = avatar_url
-    await db.commit()
-    await db.refresh(nurse)
-
-    return avatar_url
-
-async def get_nurse_avatar_url(
-    *,
-    nurse_user_id: UUID,
-    current_user: User,
-    db: AsyncSession,
-) -> str:
-    nurse = await db.get(User, nurse_user_id)
-    if not nurse or not nurse.avatar_url:
-        raise HTTPException(status_code=404, detail="Profile photo not found")
-    return nurse.avatar_url
+    return user.avatar_url

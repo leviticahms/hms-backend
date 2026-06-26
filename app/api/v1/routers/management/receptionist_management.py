@@ -24,8 +24,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-
-from app.api.deps import require_receptionist,require_receptionist_or_doctor
+from app.services.logo import get_staff_avatar_url, upload_or_update_staff_avatar
+from app.api.deps import require_receptionist,require_receptionist_or_doctor,get_db_session
 from app.core.database import get_platform_db_session
 from app.core.enums import DocumentType
 from app.core.security import get_current_user
@@ -447,7 +447,71 @@ async def get_receptionist_dashboard(
     result = await clinical_service.get_opd_dashboard(current_user)
     return success_response(message="Dashboard loaded successfully", data=result)
 
+@router.post(
+    "/receptionist/me/avatar",
+    tags=[TAG_DASHBOARD]
+)
+async def upload_receptionist_avatar(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    avatar_url = await upload_or_update_staff_avatar(
+        staff_user_id=current_user.id,
+        role="receptionist",
+        file=file,
+        current_user=current_user,
+        db=db,
+        allow_update=False,
+    )
 
+    return {
+        "success": True,
+        "message": "Profile photo uploaded successfully",
+        "avatar_url": avatar_url,
+    }
+@router.put(
+    "/receptionist/me/avatar",
+    tags=[TAG_DASHBOARD]
+)
+async def update_receptionist_avatar(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    avatar_url = await upload_or_update_staff_avatar(
+        staff_user_id=current_user.id,
+        role="receptionist",
+        file=file,
+        current_user=current_user,
+        db=db,
+        allow_update=True,   # PUT = overwrite
+    )
+
+    return {
+        "success": True,
+        "message": "Profile photo updated successfully",
+        "avatar_url": avatar_url,
+    }
+@router.get(
+    "/receptionist/me/avatar",
+    tags=[TAG_DASHBOARD],
+)
+async def get_receptionist_avatar(
+    current_user: User = Depends(require_receptionist()),
+    db: AsyncSession = Depends(get_db_session),
+):
+    avatar_url = await get_staff_avatar_url(
+        staff_user_id=current_user.id,
+        role="receptionist",
+        current_user=current_user,
+        db=db,
+    )
+
+    return {
+        "success": True,
+        "avatar_url": avatar_url,
+    }
 # ============================================================================
 # PATIENT REGISTRATION
 # ============================================================================

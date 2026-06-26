@@ -30,7 +30,7 @@ from app.core.utils import generate_patient_ref
 from app.api.deps import (
     get_db_session,
     require_doctor)
-from app.services.logo import upload_or_update_doctor_avatar,get_doctor_avatar_url
+from app.services.logo import get_staff_avatar_url, upload_or_update_staff_avatar
 router = APIRouter(prefix="/doctor-dashboard", tags=["Doctor Portal - Dashboard"])
 
 
@@ -1030,59 +1030,65 @@ async def get_quick_stats(
         }
     }
 @router.post(
-    "/doctors/{doctor_user_id}/avatar",
+    "/doctors/my/avatar",
     tags=["Doctor Portal - Dashboard"],
 )
 async def upload_doctor_avatar(
-    doctor_user_id: UUID,
     file: UploadFile = File(...),
     current_user: User = Depends(require_doctor()),
     db: AsyncSession = Depends(get_db_session),
 ):
-    avatar_url = await upload_or_update_doctor_avatar(
-        doctor_user_id=doctor_user_id,
+    avatar_url = await upload_or_update_staff_avatar(
+        staff_user_id=current_user.id,
+        role="doctor",
         file=file,
         current_user=current_user,
         db=db,
+        allow_update=False,
+      # POST = create only
     )
+
     return {
         "success": True,
+        "message": "Profile photo uploaded successfully",
         "avatar_url": avatar_url,
     }
-@router.put("/doctors/{doctor_user_id}/avatar",
+@router.put("/doctors/my/avatar",
     tags=["Doctor Portal - Dashboard"],)
 async def update_doctor_avatar(
-    doctor_user_id: UUID,
     file: UploadFile = File(...),
     current_user: User = Depends(require_doctor()),
     db: AsyncSession = Depends(get_db_session),
 ):
-    avatar_url = await upload_or_update_doctor_avatar(
-        doctor_user_id=doctor_user_id,
+    avatar_url = await upload_or_update_staff_avatar(
+        staff_user_id=current_user.id,
+        role="doctor",
         file=file,
         current_user=current_user,
         db=db,
+        allow_update=True,   # PUT = overwrite
     )
+
     return {
         "success": True,
         "message": "Profile photo updated successfully",
         "avatar_url": avatar_url,
     }
-
 @router.get(
-    "/doctors/{doctor_user_id}/avatar",
+    "/doctors/my/avatar",
     tags=["Doctor Portal - Dashboard"],
 )
 async def get_doctor_avatar(
-    doctor_user_id: UUID,
     current_user: User = Depends(require_doctor()),
     db: AsyncSession = Depends(get_db_session),
 ):
-    avatar_url = await get_doctor_avatar_url(
-        doctor_user_id=doctor_user_id,
+    avatar_url = await get_staff_avatar_url(
+        staff_user_id=current_user.id,
         current_user=current_user,
-        db=db,
+        role="doctor",
+        db=db,  
     )
+
     return {
         "success": True,
         "avatar_url": avatar_url,
