@@ -155,6 +155,82 @@ try:
 
 except Exception as e:
     logger.exception("Failed to load patient billing router: %s", e)
+    
+# ---------------- PATIENT APPOINTMENT BOOKING ----------------
+try:
+    from app.api.v1.routers.patient.patient_appointment_booking import (
+        router as patient_appointment_booking_router
+    )
+    api_router.include_router(patient_appointment_booking_router)
+    logger.info("✓ Patient appointment booking router loaded")
+except Exception as e:
+    logger.exception("✗ Failed to load patient appointment booking router: %s", e)
+ 
+ 
+# ---------------- PATIENT MEDICAL HISTORY ----------------
+try:
+    from app.api.v1.routers.patient.patient_medical_history import (
+        router as patient_medical_history_router
+    )
+    api_router.include_router(patient_medical_history_router)
+    logger.info("✓ Patient medical history router loaded")
+except Exception as e:
+    logger.exception("✗ Failed to load patient medical history router: %s", e)
+ 
+ 
+# ---------------- PATIENT PRESCRIPTIONS ----------------
+try:
+    from app.api.v1.routers.patient.patient_prescriptions import (
+        router as patient_prescriptions_router
+    )
+    api_router.include_router(patient_prescriptions_router)
+    logger.info("✓ Patient prescriptions router loaded")
+except Exception as e:
+    logger.exception("✗ Failed to load patient prescriptions router: %s", e)
+ 
+ 
+# ---------------- PATIENT LAB TESTS ----------------
+try:
+    from app.api.v1.routers.patient.patient_lab_tests import (
+        router as patient_lab_tests_router
+    )
+    api_router.include_router(patient_lab_tests_router)
+    logger.info("✓ Patient lab tests router loaded")
+except Exception as e:
+    logger.exception("✗ Failed to load patient lab tests router: %s", e)
+ 
+ 
+# ---------------- PATIENT DOCUMENT STORAGE ----------------
+try:
+    from app.api.v1.routers.patient.patient_document_storage import (
+        router as patient_document_storage_router
+    )
+    api_router.include_router(patient_document_storage_router)
+    logger.info("✓ Patient document storage router loaded")
+except Exception as e:
+    logger.exception("✗ Failed to load patient document storage router: %s", e)
+ 
+ 
+# ---------------- PATIENT MESSAGING ----------------
+try:
+    from app.api.v1.routers.patient.patient_messaging import (
+        router as patient_messaging_router
+    )
+    api_router.include_router(patient_messaging_router)
+    logger.info("✓ Patient messaging router loaded")
+except Exception as e:
+    logger.exception("✗ Failed to load patient messaging router: %s", e)
+ 
+ 
+# ---------------- PATIENT DISCHARGE SUMMARY ----------------
+try:
+    from app.api.v1.routers.patient.patient_discharge_summary import (
+        router as patient_discharge_summary_router
+    )
+    api_router.include_router(patient_discharge_summary_router)
+    logger.info("✓ Patient discharge summary router loaded")
+except Exception as e:
+    logger.exception("✗ Failed to load patient discharge summary router: %s", e)
 
 # ============================================================================
 # 6. STAFF MANAGEMENT (Receptionist + OPD)
