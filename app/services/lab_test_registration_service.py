@@ -1,4 +1,8 @@
-"""Service layer for lab test registration UI."""
+"""
+Lab Test Registration Service
+Doctor -> Lab Registration -> Lab Workflow
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -6,73 +10,404 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.lab_portal import LabTestRegistration
 from app.models.patient import PatientProfile
-from app.models.user import User
+from app.models.user import Role, User, user_roles
+from app.core.enums import UserRole
+
 from app.schemas.lab_test_registration import (
-    LabPatientOption,
+    AssignLabTestRequest,
+    AssignLabTestResponse,
+    DoctorAssignedTest,
+    DoctorAssignedTestResponse,
+    LabPatientSearchItem,
     LabPatientSearchResponse,
-    RegisterTestRequest,
-    RegisterTestResponse,
+    ReassignTestRequest,
+    ReassignTestResponse,
     TestRegistrationListResponse,
     TestRegistrationMeta,
     TestRegistrationRow,
     TestRegistrationSummary,
+    UpdateTestRegistrationStatusRequest,
     UpdateTestRegistrationStatusResponse,
 )
 
+
+def _user_role_names(user: User) -> set[str]:
+    """User.roles is a many-to-many relationship (list of Role objects, each
+    with a .name). There is no single user.role attribute."""
+    return {r.name for r in (user.roles or [])}
+
+
+def _user_full_name(user: User) -> str:
+    """User has first_name/middle_name/last_name, not a full_name column."""
+    parts = [user.first_name, user.middle_name, user.last_name]
+    return " ".join(p for p in parts if p).strip()
+
 _ALLOWED_REGISTRATION_STATUSES = frozenset(
-    {"SAMPLE_PENDING", "SAMPLE_COLLECTED", "IN_PROGRESS", "COMPLETED"}
+    {
+        "SAMPLE_PENDING",
+        "ACCEPTED",
+        "REJECTED",
+        "SAMPLE_COLLECTED",
+        "IN_PROGRESS",
+        "COMPLETED",
+    }
 )
 
 
 class LabTestRegistrationService:
+
     def __init__(self, db: AsyncSession, hospital_id):
         self.db = db
         self.hospital_id = hospital_id
 
+    # =====================================================
+    # Doctor Assign Tests
+    # =====================================================
+
+    async def assign_test(
+        self,
+        payload: AssignLabTestRequest,
+    ) -> AssignLabTestResponse:
+
+        if not payload.tests:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Please select at least one lab test.",
+            )
+
+        try:
+            total = 0
+
+            for item in payload.tests:
+                registration = LabTestRegistration(
+                    hospital_id=self.hospital_id,
+                    test_id=f"REG-{uuid.uuid4().hex[:12].upper()}",
+                    patient_ref=payload.patient_ref,
+                    patient_name=payload.patient_name,
+                    doctor_name=payload.doctor_name,
+                    test_type=item.test_name,
+                    sample_type=item.sample_type,
+                    priority=item.priority,
+                    status="SAMPLE_PENDING",
+                    special_instructions=item.instructions,
+                    registered_date=date.today(),
+                )
+                self.db.add(registration)
+                total += 1
+
+            await self.db.commit()
+
+            return AssignLabTestResponse(
+                success=True,
+                message="Lab Test Assigned Successfully.",
+                total_tests=total,
+            )
+
+        except Exception as e:
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e),
+            )
+
+    # =====================================================
+    # Doctor Assigned Tests
+    # =====================================================
+
+    async def doctor_tests(
+        self,
+        patient_ref: Optional[str] = None,
+    ) -> DoctorAssignedTestResponse:
+
+        stmt = select(LabTestRegistration).where(
+            LabTestRegistration.hospital_id == self.hospital_id
+        )
+
+        if patient_ref:
+            stmt = stmt.where(
+                LabTestRegistration.patient_ref == patient_ref
+            )
+
+        stmt = stmt.order_by(LabTestRegistration.created_at.desc())
+
+        records = (await self.db.execute(stmt)).scalars().all()
+
+        response = [
+            DoctorAssignedTest(
+                test_id=row.test_id,
+                patient_ref=row.patient_ref,
+                patient_name=row.patient_name,
+                doctor_name=row.doctor_name,
+                test_type=row.test_type,
+                sample_type=row.sample_type,
+                priority=row.priority,
+                status=row.status,
+                reject_reason=(
+                    row.special_instructions
+                    if row.status == "REJECTED"
+                    else None
+                ),
+            )
+            for row in records
+        ]
+
+        return DoctorAssignedTestResponse(
+            total=len(response),
+            tests=response,
+        )
+
+    # =====================================================
+    # Doctor Reassign Test
+    # =====================================================
+
+    async def reassign_test(
+        self,
+        test_id: str,
+        payload: ReassignTestRequest,
+    ) -> ReassignTestResponse:
+
+        stmt = select(LabTestRegistration).where(
+            LabTestRegistration.test_id == test_id,
+            LabTestRegistration.hospital_id == self.hospital_id,
+        )
+
+        existing = (await self.db.execute(stmt)).scalar_one_or_none()
+
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lab Test Not Found.",
+            )
+
+        try:
+            new_test_id = f"REG-{uuid.uuid4().hex[:12].upper()}"
+
+            registration = LabTestRegistration(
+                hospital_id=self.hospital_id,
+                test_id=new_test_id,
+                patient_ref=existing.patient_ref,
+                patient_name=existing.patient_name,
+                doctor_name=existing.doctor_name,
+                test_type=payload.test_name,
+                sample_type=payload.sample_type,
+                priority=payload.priority,
+                status="SAMPLE_PENDING",
+                special_instructions=payload.instructions,
+                registered_date=date.today(),
+            )
+
+            self.db.add(registration)
+            await self.db.commit()
+
+            return ReassignTestResponse(
+                success=True,
+                message="Lab Test Reassigned Successfully.",
+                new_test_id=new_test_id,
+            )
+
+        except Exception as e:
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e),
+            )
+
+    # =====================================================
+    # Lab Accept / Reject / Status Update
+    # =====================================================
+
+    async def update_status(
+        self,
+        test_id: str,
+        payload: UpdateTestRegistrationStatusRequest,
+    ) -> UpdateTestRegistrationStatusResponse:
+
+        if payload.status not in _ALLOWED_REGISTRATION_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid Status.",
+            )
+
+        stmt = select(LabTestRegistration).where(
+            LabTestRegistration.test_id == test_id,
+            LabTestRegistration.hospital_id == self.hospital_id,
+        )
+
+        registration = (await self.db.execute(stmt)).scalar_one_or_none()
+
+        if registration is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lab Registration Not Found.",
+            )
+
+        try:
+            registration.status = payload.status
+
+            if payload.status == "REJECTED" and payload.reason:
+                registration.special_instructions = payload.reason
+
+            await self.db.commit()
+
+            return UpdateTestRegistrationStatusResponse(
+                message="Status Updated Successfully.",
+                test_id=registration.test_id,
+                status=registration.status,
+            )
+
+        except Exception as e:
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e),
+            )
+
+    # =====================================================
+    # Lab Registration List (ROLE BASED)
+    # =====================================================
+
     async def list_tests(
         self,
         *,
+        current_user: User,
         for_date: Optional[date] = None,
         search: Optional[str] = None,
         status: Optional[str] = None,
         priority: Optional[str] = None,
     ) -> TestRegistrationListResponse:
-        d = for_date or datetime.now(timezone.utc).date()
-        rows = await self._db_rows()
+
+        stmt = select(LabTestRegistration).where(
+            LabTestRegistration.hospital_id == self.hospital_id
+        )
+
+        # ---------------- ROLE FILTERING ----------------
+
+        user_role_names = _user_role_names(current_user)
+
+        if UserRole.PATIENT.value in user_role_names:
+            own_profile_stmt = select(PatientProfile.patient_id).where(
+                PatientProfile.user_id == current_user.id
+            )
+            own_patient_id = (
+                await self.db.execute(own_profile_stmt)
+            ).scalar_one_or_none()
+
+            stmt = stmt.where(
+                LabTestRegistration.patient_ref == own_patient_id
+            )
+
+        elif UserRole.DOCTOR.value in user_role_names:
+            stmt = stmt.where(
+                LabTestRegistration.doctor_name == _user_full_name(current_user)
+            )
+
+        elif user_role_names & {
+            UserRole.LAB_TECH.value,
+            UserRole.HOSPITAL_ADMIN.value,
+        }:
+            pass  # full access
+
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied.",
+            )
+
+        stmt = stmt.order_by(LabTestRegistration.created_at.desc())
+
+        registrations = (await self.db.execute(stmt)).scalars().all()
+
+        # ---------------- PATIENT DETAILS (DOB, gender, phone, email) ----------------
+        # patient_ref stores PatientProfile.patient_id (e.g. "PAT-ALEX-997"),
+        # NOT User.id. Join via PatientProfile.patient_id, then get the
+        # linked User through PatientProfile.user_id for phone/email.
+
+        patient_refs = {r.patient_ref for r in registrations if r.patient_ref}
+
+        profiles_by_ref: dict[str, PatientProfile] = {}
+        users_by_ref: dict[str, User] = {}
+
+        if patient_refs:
+            profile_stmt = select(PatientProfile).where(
+                PatientProfile.patient_id.in_(patient_refs),
+                PatientProfile.hospital_id == self.hospital_id,
+            )
+            profiles = (await self.db.execute(profile_stmt)).scalars().all()
+            profiles_by_ref = {p.patient_id: p for p in profiles}
+
+            user_ids = {p.user_id for p in profiles if p.user_id}
+            if user_ids:
+                user_stmt = select(User).where(User.id.in_(user_ids))
+                users_by_id = {
+                    u.id: u
+                    for u in (await self.db.execute(user_stmt)).scalars().all()
+                }
+                users_by_ref = {
+                    p.patient_id: users_by_id[p.user_id]
+                    for p in profiles
+                    if p.user_id in users_by_id
+                }
+
+        rows: list[TestRegistrationRow] = []
+        for r in registrations:
+            user = users_by_ref.get(r.patient_ref) if r.patient_ref else None
+            profile = profiles_by_ref.get(r.patient_ref) if r.patient_ref else None
+
+            rows.append(
+                TestRegistrationRow(
+                    test_id=r.test_id,
+                    patient_ref=r.patient_ref,
+                    patient_name=r.patient_name,
+                    doctor_name=r.doctor_name,
+                    test_type=r.test_type,
+                    sample_type=r.sample_type,
+                    priority=r.priority,
+                    registered_date=r.registered_date,
+                    status=r.status,
+                    date_of_birth=profile.date_of_birth if profile else None,
+                    gender=profile.gender if profile else None,
+                    phone=user.phone if user else None,
+                    email=user.email if user else None,
+                )
+            )
+
+        # ---------------- SEARCH FILTER ----------------
 
         if search:
-            q = search.strip().lower()
+            keyword = search.lower()
             rows = [
-                r
-                for r in rows
-                if q in r.patient_name.lower()
-                or q in r.test_id.lower()
-                or q in r.test_type.lower()
-                or (r.patient_ref and q in r.patient_ref.lower())
+                r for r in rows
+                if keyword in r.test_id.lower()
+                or keyword in r.patient_name.lower()
+                or keyword in r.test_type.lower()
+                or (r.patient_ref and keyword in r.patient_ref.lower())
             ]
+
         if status:
-            s = status.strip().upper()
-            rows = [r for r in rows if r.status == s]
+            rows = [r for r in rows if r.status == status.upper()]
+
         if priority:
-            p = priority.strip().upper()
-            rows = [r for r in rows if r.priority == p]
+            rows = [r for r in rows if r.priority == priority.upper()]
+
+        # ---------------- SUMMARY ----------------
 
         summary = TestRegistrationSummary(
             total_tests_today=len(rows),
             completed_tests=sum(1 for r in rows if r.status == "COMPLETED"),
             in_progress_tests=sum(1 for r in rows if r.status == "IN_PROGRESS"),
+            rejected_tests=sum(1 for r in rows if r.status == "REJECTED"),
             urgent_tests=sum(1 for r in rows if r.priority == "URGENT"),
         )
 
         return TestRegistrationListResponse(
             meta=TestRegistrationMeta(
                 generated_at=datetime.now(timezone.utc),
-                for_date=d,
+                for_date=for_date or date.today(),
                 live_data=True,
                 demo_data=False,
             ),
@@ -80,117 +415,63 @@ class LabTestRegistrationService:
             rows=rows,
         )
 
-    async def register_test(self, payload: RegisterTestRequest) -> RegisterTestResponse:
-        test_id = f"REG-{uuid.uuid4().hex[:16].upper()}"
-        row = LabTestRegistration(
-            hospital_id=self.hospital_id,
-            test_id=test_id,
-            patient_ref=payload.patient_ref,
-            patient_name=payload.patient_name,
-            doctor_name=payload.referring_doctor,
-            test_type=payload.test_type,
-            sample_type=payload.sample_type,
-            priority=payload.priority,
-            status="SAMPLE_PENDING",
-            special_instructions=payload.special_instructions,
-            registered_date=datetime.now(timezone.utc).date(),
-        )
-        self.db.add(row)
-        await self.db.commit()
-        return RegisterTestResponse(
-            message="Test registered successfully.",
-            test_id=test_id,
-            status="SAMPLE_PENDING",
-            patient_ref=payload.patient_ref,
-            patient_name=payload.patient_name,
-            test_type=payload.test_type,
-            sample_type=payload.sample_type,
-            priority=payload.priority,
-            referring_doctor=payload.referring_doctor,
-            special_instructions=payload.special_instructions,
+    # =====================================================
+    # Patient Autocomplete (Lab "Register New Test" form)
+    # =====================================================
+
+    async def search_patients(
+        self,
+        term: Optional[str],
+        *,
+        limit: int = 25,
+    ) -> LabPatientSearchResponse:
+        """
+        Returns patient suggestions for the lab test registration form.
+
+        ``patient_ref`` is ``PatientProfile.patient_id`` (e.g. "PAT-ALEX-997"),
+        the same value stored on LabTestRegistration.patient_ref — NOT the
+        user's UUID. Only users who have a PatientProfile can be suggested.
+        """
+
+        stmt = (
+            select(User, PatientProfile)
+            .join(user_roles, User.id == user_roles.c.user_id)
+            .join(Role, user_roles.c.role_id == Role.id)
+            .join(PatientProfile, PatientProfile.user_id == User.id)
+            .where(
+                User.hospital_id == self.hospital_id,
+                Role.name == UserRole.PATIENT.value,
+            )
         )
 
-    async def search_patients(self, q: Optional[str], *, limit: int = 25) -> LabPatientSearchResponse:
-        """Patients in this hospital for lab registration autocomplete (name + patient_id)."""
-        cap = max(1, min(limit, 50))
-        stmt = (
-            select(PatientProfile, User)
-            .join(User, PatientProfile.user_id == User.id)
-            .where(PatientProfile.hospital_id == self.hospital_id)
-            .order_by(PatientProfile.created_at.desc())
-        )
-        if q and q.strip():
-            term = f"%{q.strip().lower()}%"
+        if term:
+            like = f"%{term.strip()}%"
             stmt = stmt.where(
                 or_(
-                    func.lower(PatientProfile.patient_id).like(term),
-                    func.lower(func.coalesce(PatientProfile.mrn, "")).like(term),
-                    func.lower(User.first_name).like(term),
-                    func.lower(User.last_name).like(term),
-                    func.lower(User.email).like(term),
-                    func.lower(func.coalesce(User.phone, "")).like(term),
+                    User.first_name.ilike(like),
+                    User.last_name.ilike(like),
+                    User.middle_name.ilike(like),
+                    PatientProfile.patient_id.ilike(like),
                 )
             )
-        stmt = stmt.limit(cap)
-        rows = (await self.db.execute(stmt)).all()
-        out: list[LabPatientOption] = []
-        for profile, user in rows:
-            name = f"{(user.first_name or '').strip()} {(user.last_name or '').strip()}".strip() or (
-                user.email or profile.patient_id
-            )
-            out.append(
-                LabPatientOption(
-                    patient_id=profile.patient_id,
-                    patient_name=name,
-                    patient_profile_id=str(profile.id),
-                    email=user.email,
-                    phone=user.phone,
-                    gender=profile.gender,
-                    date_of_birth=profile.date_of_birth,
-                    mrn=profile.mrn,
-                )
-            )
-        return LabPatientSearchResponse(patients=out)
 
-    async def update_status(self, test_id: str, new_status: str) -> UpdateTestRegistrationStatusResponse:
-        if new_status not in _ALLOWED_REGISTRATION_STATUSES:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Invalid status. Allowed: {', '.join(sorted(_ALLOWED_REGISTRATION_STATUSES))}",
-            )
-        stmt = select(LabTestRegistration).where(
-            LabTestRegistration.test_id == test_id,
-            LabTestRegistration.hospital_id == self.hospital_id,
-        )
-        rec = (await self.db.execute(stmt)).scalar_one_or_none()
-        if not rec:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test registration not found")
-        rec.status = new_status
-        await self.db.commit()
-        return UpdateTestRegistrationStatusResponse(
-            message="Status updated successfully.",
-            test_id=rec.test_id,
-            status=new_status,
-        )
-
-    async def _db_rows(self) -> list[TestRegistrationRow]:
         stmt = (
-            select(LabTestRegistration)
-            .where(LabTestRegistration.hospital_id == self.hospital_id)
-            .order_by(LabTestRegistration.created_at.desc())
+            stmt.order_by(User.first_name.asc(), User.last_name.asc())
+            .limit(limit)
         )
-        recs = (await self.db.execute(stmt)).scalars().all()
-        return [
-            TestRegistrationRow(
-                test_id=r.test_id,
-                patient_ref=r.patient_ref,
-                patient_name=r.patient_name,
-                test_type=r.test_type,
-                sample_type=r.sample_type,
-                registered_date=r.registered_date,
-                status=r.status,
-                priority=r.priority,
+
+        rows = (await self.db.execute(stmt)).all()
+
+        patients = [
+            LabPatientSearchItem(
+                patient_ref=profile.patient_id,
+                patient_name=_user_full_name(user),
+                contact_number=user.phone,
             )
-            for r in recs
+            for user, profile in rows
         ]
 
+        return LabPatientSearchResponse(
+            total=len(patients),
+            patients=patients,
+        )
