@@ -157,36 +157,55 @@ async def update_schedule_slot(
     schedule_id: str,
     request: ScheduleUpdate,
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Update existing schedule slot.
-    
+
     Access Control:
     - Only Doctors can update their own schedule slots
     """
-    result = await _doctor_service(db, platform_db).update_schedule_slot(
-        schedule_id, request.model_dump(exclude_unset=True), current_user
+    result = await _doctor_service(
+        db,
+        platform_db
+    ).update_schedule_slot(
+        schedule_id,
+        request.model_dump(exclude_unset=True),
+        current_user
     )
-    return success_response(message="Schedule slot updated successfully", data=result)
+
+    return success_response(
+        message="Schedule slot updated successfully",
+        data=result
+    )
 
 
 @router.delete("/schedule/{schedule_id}")
 async def delete_schedule_slot(
     schedule_id: str,
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Delete schedule slot.
-    
+
     Access Control:
     - Only Doctors can delete their own schedule slots
     """
-    result = await _doctor_service(db, platform_db).delete_schedule_slot(schedule_id, current_user)
-    return success_response(message="Schedule slot deleted successfully", data=result)
+    result = await _doctor_service(
+        db,
+        platform_db
+    ).delete_schedule_slot(
+        schedule_id,
+        current_user
+    )
+
+    return success_response(
+        message="Schedule slot deleted successfully",
+        data=result
+    )
 
 
 # ============================================================================
