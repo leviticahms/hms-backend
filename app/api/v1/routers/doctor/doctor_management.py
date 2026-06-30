@@ -19,7 +19,7 @@ from app.api.deps import (
     get_db_session, get_current_user, require_doctor, 
     get_service_context, require_doctor_context
 )
-from app.core.database import get_platform_db_session
+from app.core.database import get_platform_db_session,get_db_session
 from app.models.user import User
 from app.services.doctor_service import DoctorService
 from app.schemas.doctor import (
@@ -83,46 +83,73 @@ async def get_weekly_schedule(
 @router.get("/schedule/slots")
 async def get_schedule_slots(
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get doctor's schedule slots configuration.
-    
+
     Access Control:
     - Only Doctors can access their schedule slots
     """
-    result = await _doctor_service(db, platform_db).get_schedule_slots(current_user)
-    return success_response(message="Schedule slots retrieved successfully", data=result)
+    result = await _doctor_service(
+        db,
+        platform_db
+    ).get_schedule_slots(current_user)
+
+    return success_response(
+        message="Schedule slots retrieved successfully",
+        data=result
+    )
 
 
 @router.get("/schedule/{schedule_id}")
 async def get_schedule_slot_details(
     schedule_id: str,
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """Get a single schedule slot by id (for edit forms)."""
-    result = await _doctor_service(db, platform_db).get_schedule_slot_by_id(schedule_id, current_user)
-    return success_response(message="Schedule slot retrieved successfully", data=result)
+    result = await _doctor_service(
+        db,
+        platform_db
+    ).get_schedule_slot_by_id(
+        schedule_id,
+        current_user
+    )
+
+    return success_response(
+        message="Schedule slot retrieved successfully",
+        data=result
+    )
 
 
 @router.post("/schedule/create")
 async def create_schedule_slot(
     request: ScheduleCreate,
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Create a date-specific schedule slot for doctor.
-    
+
     Access Control:
     - Only Doctors can create their schedule slots
     """
-    result = await _doctor_service(db, platform_db).create_schedule_slot(request.model_dump(), current_user)
-    return success_response(message="Schedule slot created successfully", data=result)
+    result = await _doctor_service(
+        db,
+        platform_db
+    ).create_schedule_slot(
+        request.model_dump(),
+        current_user
+    )
+
+    return success_response(
+        message="Schedule slot created successfully",
+        data=result
+    )
 
 
 @router.put("/schedule/{schedule_id}")
