@@ -19,7 +19,7 @@ from app.api.deps import (
     get_db_session, get_current_user, require_doctor, 
     get_service_context, require_doctor_context
 )
-from app.core.database import get_platform_db_session
+from app.core.database import get_platform_db_session,get_db_session
 from app.models.user import User
 from app.services.doctor_service import DoctorService
 from app.schemas.doctor import (
@@ -112,17 +112,27 @@ async def get_schedule_slot_details(
 async def create_schedule_slot(
     request: ScheduleCreate,
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Create a date-specific schedule slot for doctor.
-    
+
     Access Control:
     - Only Doctors can create their schedule slots
     """
-    result = await _doctor_service(db, platform_db).create_schedule_slot(request.model_dump(), current_user)
-    return success_response(message="Schedule slot created successfully", data=result)
+    result = await _doctor_service(
+        db,
+        platform_db
+    ).create_schedule_slot(
+        request.model_dump(),
+        current_user
+    )
+
+    return success_response(
+        message="Schedule slot created successfully",
+        data=result
+    )
 
 
 @router.put("/schedule/{schedule_id}")
