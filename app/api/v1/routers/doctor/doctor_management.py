@@ -63,21 +63,36 @@ class CreateMedicalRecordRequest(BaseModel):
 # SCHEDULE MANAGEMENT
 # ============================================================================
 
+
+
 @router.get("/schedule/weekly")
 async def get_weekly_schedule(
-    week_start: Optional[str] = Query(None, pattern="^\\d{4}-\\d{2}-\\d{2}$"),
+    week_start: Optional[str] = Query(
+        None,
+        pattern="^\\d{4}-\\d{2}-\\d{2}$"
+    ),
     current_user: User = Depends(require_doctor()),
-    db: AsyncSession = Depends(get_platform_db_session),
+    db: AsyncSession = Depends(get_db_session),
     platform_db: AsyncSession = Depends(get_platform_db_session),
 ):
     """
     Get doctor's weekly schedule with appointments.
-    
+
     Access Control:
     - Only Doctors can access their schedule
     """
-    result = await _doctor_service(db, platform_db).get_weekly_schedule(week_start, current_user)
-    return success_response(message="Weekly schedule retrieved successfully", data=result)
+    result = await _doctor_service(
+        db,
+        platform_db
+    ).get_weekly_schedule(
+        week_start,
+        current_user
+    )
+
+    return success_response(
+        message="Weekly schedule retrieved successfully",
+        data=result
+    )
 
 
 @router.get("/schedule/slots")
