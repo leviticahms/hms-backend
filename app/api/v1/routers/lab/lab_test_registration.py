@@ -1,83 +1,129 @@
-"""
-Test Registration endpoints for Lab portal UI.
-"""
 from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.routers.lab.rbac import LAB_GET_ROLES, LAB_MUTATION_ROLES
+from app.api.v1.routers.lab.rbac import (
+    LAB_GET_ROLES,
+    LAB_MUTATION_ROLES,
+    PATIENT_LAB_ROLES,
+    DOCTOR_LAB_ROLES,
+)
 from app.core.security import require_roles
 from app.database.session import get_db_session
 from app.models.user import User
+from app.core.enums import UserRole
+
 from app.schemas.lab_test_registration import (
-    LabPatientSearchResponse,
-    RegisterTestRequest,
-    RegisterTestResponse,
+    AssignLabTestRequest,
+    AssignLabTestResponse,
+    DoctorAssignedTestResponse,
+    ReassignTestRequest,
+    ReassignTestResponse,
     TestRegistrationListResponse,
     UpdateTestRegistrationStatusRequest,
     UpdateTestRegistrationStatusResponse,
 )
-from app.services.lab_test_registration_service import LabTestRegistrationService
 
-router = APIRouter(
-    prefix="/lab/test-registration",
-    tags=["Lab - Test Registration"],
+from app.services.lab_test_registration_service import (
+    LabTestRegistrationService,
 )
 
+router = APIRouter(
+    tags=["Lab Test Registration"],
+)
 
-@router.get("/patients", response_model=LabPatientSearchResponse)
-async def search_patients_for_lab_registration(
-    q: Optional[str] = Query(
-        None,
-        description="Filter by patient name, hospital patient id, MRN, email, or phone. Omit for recent patients.",
-    ),
-    limit: int = Query(25, ge=1, le=50),
-    current_user: User = Depends(require_roles(LAB_GET_ROLES)),
+# ==========================================================
+# Doctor Assign Lab Tests
+# ==========================================================
+
+@router.post(
+    "/doctor/lab-tests",
+    response_model=AssignLabTestResponse,
+)
+async def assign_lab_tests(
+    request: AssignLabTestRequest,
+    current_user: User = Depends(require_roles([UserRole.DOCTOR])),
     db: AsyncSession = Depends(get_db_session),
-) -> LabPatientSearchResponse:
-    """Dropdown / autocomplete data for Register New Test (patient name + patient id)."""
-    svc = LabTestRegistrationService(db, current_user.hospital_id)
-    return await svc.search_patients(q, limit=limit)
+):
+    service = LabTestRegistrationService(db, current_user.hospital_id)
+    return await service.assign_test(request)
 
+# ==========================================================
+# Doctor Assigned Tests
+# ==========================================================
 
-@router.patch("/{test_id}/status", response_model=UpdateTestRegistrationStatusResponse)
-async def update_test_registration_status(
+@router.get(
+    "/doctor/lab-tests",
+    response_model=DoctorAssignedTestResponse,
+)
+async def doctor_lab_tests(
+    patient_ref: Optional[str] = Query(None),
+    current_user: User = Depends(require_roles([UserRole.DOCTOR])),
+    db: AsyncSession = Depends(get_db_session),
+):
+    service = LabTestRegistrationService(db, current_user.hospital_id)
+    return await service.doctor_tests(patient_ref)
+# ==========================================================
+# Doctor Reassign Test
+# ==========================================================
+
+@router.patch(
+    "/doctor/lab-tests/{test_id}",
+    response_model=ReassignTestResponse,
+)
+async def reassign_lab_test(
     test_id: str,
-    body: UpdateTestRegistrationStatusRequest,
-    current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
+    request: ReassignTestRequest,
+    current_user: User = Depends(require_roles([UserRole.DOCTOR])),
     db: AsyncSession = Depends(get_db_session),
-) -> UpdateTestRegistrationStatusResponse:
-    """Update workflow status for a registered lab test (e.g. Sample Pending → In Progress)."""
-    svc = LabTestRegistrationService(db, current_user.hospital_id)
-    return await svc.update_status(test_id, body.status)
+):
+    service = LabTestRegistrationService(db, current_user.hospital_id)
+    return await service.reassign_test(test_id, request)
 
+# ==========================================================
+# Lab Registration List
+# ==========================================================
 
-@router.get("", response_model=TestRegistrationListResponse)
-async def list_test_registrations(
+@router.get(
+    "/lab/test-registration",
+    response_model=TestRegistrationListResponse,
+)
+async def get_lab_registrations(
     for_date: Optional[date] = Query(None),
     search: Optional[str] = Query(None),
-    status: Optional[str] = Query(None, description="SAMPLE_PENDING|SAMPLE_COLLECTED|IN_PROGRESS|COMPLETED"),
-    priority: Optional[str] = Query(None, description="URGENT|ROUTINE"),
-    current_user: User = Depends(require_roles(LAB_GET_ROLES)),
+    status: Optional[str] = Query(None),
+    priority: Optional[str] = Query(None),
+
+    current_user: User = Depends(
+        require_roles(LAB_GET_ROLES + PATIENT_LAB_ROLES + DOCTOR_LAB_ROLES)
+    ),
+
     db: AsyncSession = Depends(get_db_session),
-) -> TestRegistrationListResponse:
-    svc = LabTestRegistrationService(db, current_user.hospital_id)
-    return await svc.list_tests(
+):
+    service = LabTestRegistrationService(db, current_user.hospital_id)
+
+    return await service.list_tests(
         for_date=for_date,
         search=search,
         status=status,
         priority=priority,
+        current_user=current_user,   # IMPORTANT
     )
+# ==========================================================
+# Lab Accept / Reject
+# ==========================================================
 
-
-@router.post("", response_model=RegisterTestResponse)
-async def register_new_test(
-    request: RegisterTestRequest,
+@router.patch(
+    "/lab/test-registration/{test_id}/status",
+    response_model=UpdateTestRegistrationStatusResponse,
+)
+async def update_registration_status(
+    test_id: str,
+    request: UpdateTestRegistrationStatusRequest,
     current_user: User = Depends(require_roles(LAB_MUTATION_ROLES)),
     db: AsyncSession = Depends(get_db_session),
-) -> RegisterTestResponse:
-    svc = LabTestRegistrationService(db, current_user.hospital_id)
-    return await svc.register_test(request)
-
+):
+    service = LabTestRegistrationService(db, current_user.hospital_id)
+    return await service.update_status(test_id, request)

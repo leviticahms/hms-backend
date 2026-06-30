@@ -26,6 +26,19 @@ LAB_ACCESS_ROLES: Final[List[str]] = [
     UserRole.HOSPITAL_ADMIN.value,
 ]
 
+PATIENT_LAB_ROLES: Final[List[str]] = [
+    UserRole.PATIENT.value,
+    UserRole.HOSPITAL_ADMIN.value,
+]
+
+# Doctors can view the registration grid filtered to their own assigned
+# tests (see LabTestRegistrationService.list_tests DOCTOR branch). Without
+# this role list, doctors get a 403 before that filtering logic is ever
+# reached, which is why the doctor-facing GET endpoint appears "missing".
+DOCTOR_LAB_ROLES: Final[List[str]] = [
+    UserRole.DOCTOR.value,
+]
+
 LAB_GET_ROLES: Final[List[str]] = list(LAB_ACCESS_ROLES)
 
 LAB_MUTATION_ROLES: Final[List[str]] = list(LAB_ACCESS_ROLES)
