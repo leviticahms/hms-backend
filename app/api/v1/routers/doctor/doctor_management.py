@@ -180,7 +180,6 @@ async def update_schedule_slot(
         data=result
     )
 
-
 @router.delete("/schedule/{schedule_id}")
 async def delete_schedule_slot(
     schedule_id: str,
