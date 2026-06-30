@@ -148,10 +148,39 @@ class AppointmentService:
             return []
 
         slots: List[Dict[str, Any]] = []
-        current_time = datetime.combine(target_date.date(), doctor_schedule.start_time)
-        end_boundary = datetime.combine(target_date.date(), doctor_schedule.end_time)
+        from datetime import time
+
+        start_time = doctor_schedule.start_time
+        end_time = doctor_schedule.end_time
+
+        # string → time conversion if needed
+        if isinstance(start_time, str):
+            start_time = datetime.strptime(
+                start_time[:5],
+                "%H:%M"
+            ).time()
+
+        if isinstance(end_time, str):
+            end_time = datetime.strptime(
+                end_time[:5],
+                "%H:%M"
+            ).time()
+
+        current_time = datetime.combine(
+            target_date.date(),
+            start_time
+        )
+
+        end_boundary = datetime.combine(
+            target_date.date(),
+            end_time
+        )
+
         slot_duration = timedelta(minutes=slot_mins)
-        max_patients = max(1, doctor_schedule.max_patients_per_slot or 1)
+        max_patients = max(
+            1,
+            doctor_schedule.max_patients_per_slot or 1
+        )
 
         while current_time + slot_duration <= end_boundary:
             t = current_time.time()
