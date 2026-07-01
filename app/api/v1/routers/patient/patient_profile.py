@@ -72,15 +72,23 @@ async def get_my_details(
 
 @router.patch("/my/details")
 async def patch_my_details(
-    payload: dict,
+    payload: PatientProfileUpdate,
     current_patient: PatientProfile = Depends(get_current_patient),
     db: AsyncSession = Depends(get_platform_db_session),
 ):
+    payload = payload.model_dump(exclude_unset=True)
     user_result = await db.execute(select(User).where(User.id == current_patient.user_id))
     user = user_result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    for field in ("first_name", "last_name", "email", "phone"):
+    if "full_name" in payload:
+        full_name = payload["full_name"].strip()
+    parts = full_name.split(maxsplit=1)
+
+    user.first_name = parts[0]
+    user.last_name = parts[1] if len(parts) > 1 else ""
+
+    for field in ("email", "phone"):
         if field in payload:
             setattr(user, field, payload[field])
     for field in (
@@ -95,6 +103,30 @@ async def patch_my_details(
         "emergency_contact_name",
         "emergency_contact_phone",
         "emergency_contact_relation",
+        "mrn",
+        "date_of_birth",
+        "gender",
+        "blood_group",
+        "blood_group_value",
+        "id_type",
+        "id_number",
+        "id_name",
+        "address",
+        "city",
+        "district",
+        "state",
+        "country",
+        "pincode",
+        "emergency_contact_name",
+        "emergency_contact_phone",
+        "emergency_contact_relation",
+        "medical_history",
+        "allergies",
+        "chronic_conditions",
+        "current_medications",
+        "insurance_provider",
+        "insurance_policy_number",
+        "insurance_expiry",
     ):
         if field in payload:
             setattr(current_patient, field, payload[field])

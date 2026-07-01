@@ -56,34 +56,55 @@ class PatientProfileCreate(PatientProfileBase):
 
 class PatientProfileUpdate(BaseModel):
     """Schema for updating a patient profile"""
+
+    # User fields
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+    # Patient identification
     mrn: Optional[str] = Field(None, max_length=50)
+
+    # Personal details
+    date_of_birth: Optional[str] = Field(None, pattern=r'^\d{4}-\d{2}-\d{2}$')
+    gender: Optional[Gender] = None
     blood_group: Optional[BloodGroup] = None
+    blood_group_value: Optional[str] = Field(None, max_length=50)
+
+    # Government / Facility ID
+    id_type: Optional[str] = Field(None, max_length=50)
+    id_number: Optional[str] = Field(None, max_length=100)
+    id_name: Optional[str] = Field(None, max_length=255)
+
+    # Contact details
     address: Optional[str] = None
     city: Optional[str] = Field(None, max_length=100)
+    district: Optional[str] = Field(None, max_length=100)
     state: Optional[str] = Field(None, max_length=100)
     country: Optional[str] = Field(None, max_length=100)
     pincode: Optional[str] = Field(None, pattern=r'^\d{5,10}$')
+
+    # Emergency contact
     emergency_contact_name: Optional[str] = Field(None, max_length=100)
-    emergency_contact_phone: Optional[str] = Field(None, pattern=r'^\+?[\d\s\-\(\)]{10,20}$')
+    emergency_contact_phone: Optional[str] = Field(
+        None,
+        pattern=r'^\+?[\d\s\-\(\)]{10,20}$'
+    )
     emergency_contact_relation: Optional[str] = Field(None, max_length=50)
+
+    # Medical information
+    medical_history: Optional[str] = None
     allergies: Optional[List[str]] = None
     chronic_conditions: Optional[List[str]] = None
     current_medications: Optional[List[str]] = None
+
+    # Insurance
     insurance_provider: Optional[str] = Field(None, max_length=100)
     insurance_policy_number: Optional[str] = Field(None, max_length=100)
-    insurance_expiry: Optional[str] = Field(None, pattern=r'^\d{4}-\d{2}-\d{2}$')
-
-
-class PatientProfileResponse(PatientProfileBase, TenantBaseSchema, TimestampMixin):
-    """Schema for patient profile API responses"""
-    id: int
-    user_id: int
-    
-    # User information
-    full_name: Optional[str] = None
-    user_email: Optional[str] = None
-    user_phone: Optional[str] = None
-    avatar_url: Optional[str] = None
+    insurance_expiry: Optional[str] = Field(
+        None,
+        pattern=r'^\d{4}-\d{2}-\d{2}$'
+    )
 
 
 # Appointment Schemas
