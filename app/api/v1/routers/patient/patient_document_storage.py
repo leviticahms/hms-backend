@@ -227,23 +227,26 @@ async def upload_my_document(
         file_size = await save_uploaded_file(file, file_path)
         
         document = PatientDocument(
-            id=uuid.uuid4(),
-            hospital_id=uuid.UUID(hospital_id_for_doc),
-            patient_id=patient.id,
-            uploaded_by=current_user.id,
-            document_type=document_type,
-            title=title,
-            description=description,
-            file_name=file.filename or unique_filename,
-            file_path=file_path,
-            file_size=file_size,
-            mime_type=file.content_type,
-            document_date=document_date,
-            is_sensitive=is_sensitive
-        )
-        
+    id=uuid.uuid4(),
+    hospital_id=uuid.UUID(hospital_id_for_doc),
+    patient_id=current_patient.id,
+    uploaded_by=current_user.id,
+    document_type=doc_type.value,
+    title=title,
+    description=description,
+    file_name=file.filename or unique_filename,
+    file_path=file_path,
+    file_size=file_size,
+    mime_type=file.content_type,
+    document_date=document_date,
+    is_sensitive=is_sensitive
+)
+
         db.add(document)
+
+        await db.flush()
         await db.commit()
+        await db.refresh(document)
         
         return DocumentUploadOut(
             document_id=str(document.id),

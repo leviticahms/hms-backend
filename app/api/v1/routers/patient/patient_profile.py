@@ -20,24 +20,53 @@ async def get_my_details(
     current_patient: PatientProfile = Depends(get_current_patient),
     db: AsyncSession = Depends(get_platform_db_session),
 ):
-    user_result = await db.execute(select(User).where(User.id == current_patient.user_id))
+    user_result = await db.execute(
+        select(User).where(User.id == current_patient.user_id)
+    )
+
     user = user_result.scalar_one_or_none()
+
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
     return {
         "patient_ref": current_patient.patient_id,
-        "first_name": user.first_name,
-        "last_name": user.last_name,
+        "full_name": f"{user.first_name} {user.last_name}".strip(),
+
         "email": user.email,
         "phone": user.phone,
+        "avatar_url": absolute_public_asset_url(user.avatar_url),
+
+        "mrn": current_patient.mrn,
         "date_of_birth": current_patient.date_of_birth,
         "gender": current_patient.gender,
+
+        "blood_group": current_patient.blood_group,
+        "blood_group_value": current_patient.blood_group_value,
+
+        "id_type": current_patient.id_type,
+        "id_number": current_patient.id_number,
+        "id_name": current_patient.id_name,
+
         "address": current_patient.address,
         "city": current_patient.city,
+        "district": current_patient.district,
         "state": current_patient.state,
         "country": current_patient.country,
         "pincode": current_patient.pincode,
-        "avatar_url": absolute_public_asset_url(user.avatar_url),
+
+        "emergency_contact_name": current_patient.emergency_contact_name,
+        "emergency_contact_phone": current_patient.emergency_contact_phone,
+        "emergency_contact_relation": current_patient.emergency_contact_relation,
+
+        "medical_history": current_patient.medical_history,
+        "allergies": current_patient.allergies,
+        "chronic_conditions": current_patient.chronic_conditions,
+        "current_medications": current_patient.current_medications,
+
+        "insurance_provider": current_patient.insurance_provider,
+        "insurance_policy_number": current_patient.insurance_policy_number,
+        "insurance_expiry": current_patient.insurance_expiry,
     }
 
 

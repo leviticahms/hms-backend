@@ -17,11 +17,18 @@ class PatientProfileBase(BaseModel):
     date_of_birth: str = Field(..., pattern=r'^\d{4}-\d{2}-\d{2}$')
     gender: Gender
     blood_group: Optional[BloodGroup] = None
+    blood_group_value: Optional[str] = Field(None, max_length=50)
+    
+    # Government / Facility ID
+    id_type: Optional[str] = Field(None, max_length=50)
+    id_number: Optional[str] = Field(None, max_length=100)
+    id_name: Optional[str] = Field(None, max_length=255)
     
     # Contact details
     address: Optional[str] = None
     city: Optional[str] = Field(None, max_length=100)
     state: Optional[str] = Field(None, max_length=100)
+    district: Optional[str] = Field(None, max_length=100)
     country: Optional[str] = Field(None, max_length=100)
     pincode: Optional[str] = Field(None, pattern=r'^\d{5,10}$')
     
@@ -31,6 +38,7 @@ class PatientProfileBase(BaseModel):
     emergency_contact_relation: Optional[str] = Field(None, max_length=50)
     
     # Medical information
+    medical_history: Optional[str] = None
     allergies: Optional[List[str]] = Field(default_factory=list)
     chronic_conditions: Optional[List[str]] = Field(default_factory=list)
     current_medications: Optional[List[str]] = Field(default_factory=list)
@@ -72,9 +80,10 @@ class PatientProfileResponse(PatientProfileBase, TenantBaseSchema, TimestampMixi
     user_id: int
     
     # User information
-    user_name: Optional[str] = None
+    full_name: Optional[str] = None
     user_email: Optional[str] = None
     user_phone: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 
 # Appointment Schemas
