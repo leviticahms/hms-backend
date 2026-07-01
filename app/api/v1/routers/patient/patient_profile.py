@@ -7,6 +7,7 @@ from app.core.database import get_platform_db_session
 from app.core.utils import absolute_public_asset_url
 from app.dependencies.auth import get_current_patient
 from app.models.patient import PatientProfile
+from app.schemas.patient import PatientProfileUpdate
 from app.models.user import User
 from app.services.logo import get_staff_avatar_url, upload_or_update_staff_avatar
 from app.api.deps import (
