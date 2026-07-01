@@ -23,6 +23,8 @@ from app.models.doctor import DoctorProfile
 from app.core.enums import UserRole, UserStatus
 from app.core.security import SecurityManager
 from app.models.hospital import StaffDepartmentAssignment
+import copy 
+from sqlalchemy.orm.attributes import flag_modified
 
 logger = logging.getLogger(__name__)
 
@@ -3342,54 +3344,39 @@ class HospitalAdminService:
             "notice": "This action affects account access only. Medical records remain unchanged."
         }
 
-    # ============================================================================
-    # TASK 2.6 - BED & WARD MANAGEMENT
-    # ============================================================================
-    
     async def create_ward(self, ward_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new ward/unit"""
+        """Create a new ward/unit. ward_type is free text. Rooms are NOT
+        created here — use create_room."""
         from app.models.hospital import Ward
-        from app.core.enums import WardType
-        
-        # ---------------------------------------------------------------------
-        # INPUT NORMALIZATION (ALIGN WITH WardCreate SCHEMA)
-        # ---------------------------------------------------------------------
-        # Backward compatible handling of old/new field names coming from API
-        # so that this service never crashes with KeyError for optional fields.
 
         # 1) Ward code: generate if not explicitly provided
         code = ward_data.get("code")
         if not code:
-            # Auto-generate a simple, unique-ish ward code from name and floor_number
             name = ward_data.get("name", "").strip()
             base_code = name.upper().replace(" ", "_") if name else "WARD"
             floor_number = ward_data.get("floor_number")
-            if floor_number is not None:
-                code = f"{base_code}_F{floor_number}"
-            else:
-                code = base_code
-            # Truncate to max 100 characters to match database column length
+            code = f"{base_code}_F{floor_number}" if floor_number is not None else base_code
             if len(code) > 100:
                 code = code[:97] + "..."
             ward_data["code"] = code
 
-        # 2) Head nurse: accept either "head_nurse" (schema) or legacy "head_nurse_name"
+        # 2) Head nurse: accept "head_nurse" (schema) -> "head_nurse_name"
         if "head_nurse_name" not in ward_data and ward_data.get("head_nurse"):
             ward_data["head_nurse_name"] = ward_data["head_nurse"]
 
-        # 3) Phone: map generic "phone" from schema to nurse_station_phone if missing
+        # 3) Phone -> nurse_station_phone
         if "nurse_station_phone" not in ward_data and ward_data.get("phone"):
             ward_data["nurse_station_phone"] = ward_data["phone"]
 
-        # 4) Floor: map integer floor_number to string floor if needed
+        # 4) floor_number -> floor (string)
         if "floor" not in ward_data and ward_data.get("floor_number") is not None:
             ward_data["floor"] = str(ward_data["floor_number"])
 
-        # 5) Location details: reuse nurse_station_location if provided
+        # 5) nurse_station_location -> location_details
         if "location_details" not in ward_data and ward_data.get("nurse_station_location"):
             ward_data["location_details"] = ward_data["nurse_station_location"]
 
-        # 6) Booleans for isolation / emergency / oxygen – align with schema flags
+        # 6) Boolean flags
         if "is_isolation_ward" not in ward_data and "isolation_capability" in ward_data:
             ward_data["is_isolation_ward"] = bool(ward_data["isolation_capability"])
         if "is_emergency_accessible" not in ward_data and "emergency_access" in ward_data:
@@ -3397,7 +3384,7 @@ class HospitalAdminService:
         if "has_oxygen_supply" not in ward_data and "oxygen_supply" in ward_data:
             ward_data["has_oxygen_supply"] = bool(ward_data["oxygen_supply"])
 
-        # 7) Visiting hours: accept either explicit start/end or a single "visiting_hours" string
+        # 7) Visiting hours
         visiting_hours_start = None
         visiting_hours_end = None
         if ward_data.get("visiting_hours_start") or ward_data.get("visiting_hours_end"):
@@ -3407,30 +3394,21 @@ class HospitalAdminService:
             if ward_data.get("visiting_hours_end"):
                 visiting_hours_end = parse_time_string(ward_data["visiting_hours_end"])
         elif ward_data.get("visiting_hours"):
-            # Expect formats like "10:00 AM - 8:00 PM"
             from app.core.utils import parse_time_string
             raw = str(ward_data["visiting_hours"])
             parts = raw.split("-")
             if len(parts) == 2:
-                start_raw = parts[0].strip()
-                end_raw = parts[1].strip()
                 try:
-                    visiting_hours_start = parse_time_string(start_raw)
-                    visiting_hours_end = parse_time_string(end_raw)
+                    visiting_hours_start = parse_time_string(parts[0].strip())
+                    visiting_hours_end = parse_time_string(parts[1].strip())
                 except Exception:
-                    # If parsing fails, keep them as None instead of breaking ward creation
                     visiting_hours_start = None
                     visiting_hours_end = None
 
-        # Check if ward code already exists in this hospital
+        # Ward code uniqueness
         existing_ward = await self.db.execute(
             select(Ward.id)
-            .where(
-                and_(
-                    Ward.hospital_id == self.hospital_id,
-                    Ward.code == ward_data['code']
-                )
-            )
+            .where(and_(Ward.hospital_id == self.hospital_id, Ward.code == ward_data['code']))
             .limit(1)
         )
         if existing_ward.scalar_one_or_none():
@@ -3438,26 +3416,22 @@ class HospitalAdminService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "WARD_CODE_EXISTS", "message": "Ward with this code already exists"}
             )
-        
-        # Validate ward type. Accept UI labels like "General Ward" in addition to enum values.
-        ward_type_raw = str(ward_data['ward_type']).strip().upper().replace("-", "_").replace(" ", "_")
-        ward_type = {
-            "GENERAL_WARD": "GENERAL",
-            "PRIVATE_ROOM": "PRIVATE",
-            "PRIVATE_WARD": "PRIVATE",
-            "ICU_WARD": "ICU",
-            "EMERGENCY_WARD": "EMERGENCY",
-            "MATERNITY_WARD": "MATERNITY",
-            "PEDIATRIC_WARD": "PEDIATRIC",
-            "SURGICAL_WARD": "SURGICAL",
-            "CARDIAC_WARD": "CARDIAC",
-        }.get(ward_type_raw, ward_type_raw)
-        if ward_type not in [wt.value for wt in WardType]:
+
+        # Ward name uniqueness — required since rooms/beds resolve wards by name
+        existing_name = await self.db.execute(
+            select(Ward.id)
+            .where(and_(Ward.hospital_id == self.hospital_id, Ward.name == ward_data["name"]))
+            .limit(1)
+        )
+        if existing_name.scalar_one_or_none():
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "INVALID_WARD_TYPE", "message": f"Invalid ward type. Must be one of: {', '.join([wt.value for wt in WardType])}"}
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "WARD_NAME_EXISTS", "message": "Ward with this name already exists in this hospital"}
             )
-        
+
+        # ward_type is free text — schema already normalized casing. No enum check.
+        ward_type = ward_data['ward_type']
+
         # Validate head nurse if provided
         head_nurse_id = None
         head_nurse_name = ward_data.get('head_nurse_name')
@@ -3468,42 +3442,39 @@ class HospitalAdminService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail={"code": "HEAD_NURSE_NOT_FOUND", "message": f"Nurse '{head_nurse_name}' not found in this hospital"}
                 )
-            
-            # Verify the staff member has NURSE role
             user_roles = [role.name for role in head_nurse.roles]
             if not any(normalize_staff_role_name(role_name) == UserRole.NURSE.value for role_name in user_roles):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={"code": "NOT_A_NURSE", "message": f"Staff member '{head_nurse_name}' is not a nurse"}
                 )
-            
             head_nurse_id = head_nurse.id
-        
-        # Create ward
+
+        # Create ward — settings.rooms starts EMPTY; rooms added via create_room
         ward = Ward(
             id=uuid.uuid4(),
             hospital_id=self.hospital_id,
-            name=ward_data['name'],
-            code=ward_data['code'],
+            name=ward_data["name"],
+            code=ward_data["code"],
             ward_type=ward_type,
-            description=ward_data.get('description'),
-            floor=ward_data.get('floor'),
-            building=ward_data.get('building'),
-            location_details=ward_data.get('location_details'),
-            total_beds=ward_data.get('total_beds', 0),
-            nurse_station_phone=ward_data.get('nurse_station_phone'),
+            description=ward_data.get("description"),
+            floor=ward_data.get("floor"),
+            building=ward_data.get("building"),
+            location_details=ward_data.get("location_details"),
+            total_beds=0,
+            nurse_station_phone=ward_data.get("nurse_station_phone"),
             head_nurse_id=head_nurse_id,
-            is_isolation_ward=ward_data.get('is_isolation_ward', False),
-            is_emergency_accessible=ward_data.get('is_emergency_accessible', True),
+            is_isolation_ward=ward_data.get("is_isolation_ward", False),
+            is_emergency_accessible=ward_data.get("is_emergency_accessible", True),
             visiting_hours_start=visiting_hours_start,
             visiting_hours_end=visiting_hours_end,
-            has_oxygen_supply=ward_data.get('has_oxygen_supply', False),
-            has_suction=ward_data.get('has_suction', False),
-            has_cardiac_monitor=ward_data.get('has_cardiac_monitor', False),
-            has_ventilator_support=ward_data.get('has_ventilator_support', False),
-            settings=ward_data.get('settings', {})
+            has_oxygen_supply=ward_data.get("has_oxygen_supply", False),
+            has_suction=ward_data.get("has_suction", False),
+            has_cardiac_monitor=ward_data.get("has_cardiac_monitor", False),
+            has_ventilator_support=ward_data.get("has_ventilator_support", False),
+            settings={"rooms": []},
         )
-        
+
         self.db.add(ward)
         await self.db.flush()
         out = {
@@ -3511,44 +3482,41 @@ class HospitalAdminService:
             "name": ward.name,
             "code": ward.code,
             "ward_type": ward.ward_type,
+            "floor": ward.floor,
+            "building": ward.building,
+            "total_beds": ward.total_beds,
             "message": "Ward created successfully",
         }
         await self.db.commit()
         return out
-    
+
     async def get_wards(
-        self, 
-        page: int = 1, 
+        self,
+        page: int = 1,
         limit: int = 50,
         ward_type: Optional[str] = None,
         active_only: bool = False
     ) -> Dict[str, Any]:
         """Get paginated list of wards"""
         from app.models.hospital import Bed, Ward
-        
+
         offset = (page - 1) * limit
-        
-        # Build query with hospital filter
+
         query = select(Ward).where(Ward.hospital_id == self.hospital_id)
-        
-        # Filter by ward type
         if ward_type:
             query = query.where(Ward.ward_type == ward_type)
-        
         if active_only:
             query = query.where(Ward.is_active == True)
-        
-        # Get total count
+
         count_query = select(func.count(Ward.id)).where(Ward.hospital_id == self.hospital_id)
         if ward_type:
             count_query = count_query.where(Ward.ward_type == ward_type)
         if active_only:
             count_query = count_query.where(Ward.is_active == True)
-        
+
         total_result = await self.db.execute(count_query)
         total = total_result.scalar()
-        
-        # Get paginated results
+
         query = query.offset(offset).limit(limit).order_by(Ward.name.asc())
         result = await self.db.execute(query)
         wards = result.scalars().all()
@@ -3561,16 +3529,12 @@ class HospitalAdminService:
         if ward_ids:
             bed_result = await self.db.execute(
                 select(Bed.ward_id, Bed.status).where(
-                    and_(
-                        Bed.hospital_id == self.hospital_id,
-                        Bed.ward_id.in_(ward_ids),
-                    )
+                    and_(Bed.hospital_id == self.hospital_id, Bed.ward_id.in_(ward_ids))
                 )
             )
             for ward_id, bed_status in bed_result.all():
                 stats = bed_stats.setdefault(
-                    ward_id,
-                    {"total": 0, "available": 0, "occupied": 0, "maintenance": 0},
+                    ward_id, {"total": 0, "available": 0, "occupied": 0, "maintenance": 0}
                 )
                 status_label = (
                     bed_status.value if hasattr(bed_status, "value") else str(bed_status or "")
@@ -3588,29 +3552,20 @@ class HospitalAdminService:
         if nurse_ids:
             nurse_result = await self.db.execute(
                 select(User.id, User.first_name, User.last_name).where(
-                    and_(
-                        User.hospital_id == self.hospital_id,
-                        User.id.in_(nurse_ids),
-                    )
+                    and_(User.hospital_id == self.hospital_id, User.id.in_(nurse_ids))
                 )
             )
             for nurse_id, first_name, last_name in nurse_result.all():
                 head_nurse_names[nurse_id] = f"{first_name or ''} {last_name or ''}".strip()
-        
-        # Format response
+
         ward_list = []
         for ward in wards:
-            # Calculate bed statistics
-            stats = bed_stats.get(
-                ward.id,
-                {"total": 0, "available": 0, "occupied": 0, "maintenance": 0},
-            )
+            stats = bed_stats.get(ward.id, {"total": 0, "available": 0, "occupied": 0, "maintenance": 0})
             total_beds = stats["total"]
-            available_beds = stats["available"]
             occupied_beds = stats["occupied"]
-            maintenance_beds = stats["maintenance"]
             head_nurse_name = head_nurse_names.get(ward.head_nurse_id)
-            
+            room_count = len((ward.settings or {}).get("rooms", []))
+
             ward_list.append({
                 "id": str(ward.id),
                 "name": ward.name,
@@ -3620,12 +3575,13 @@ class HospitalAdminService:
                 "floor": ward.floor,
                 "building": ward.building,
                 "location_details": ward.location_details,
+                "total_rooms": room_count,
                 "total_beds": total_beds,
                 "bed_statistics": {
                     "total": total_beds,
-                    "available": available_beds,
+                    "available": stats["available"],
                     "occupied": occupied_beds,
-                    "maintenance": maintenance_beds,
+                    "maintenance": stats["maintenance"],
                     "occupancy_rate": round((occupied_beds / total_beds * 100) if total_beds > 0 else 0, 1)
                 },
                 "nurse_station_phone": ward.nurse_station_phone,
@@ -3645,34 +3601,19 @@ class HospitalAdminService:
                 "created_at": ward.created_at.isoformat(),
                 "updated_at": ward.updated_at.isoformat()
             })
-        
+
         return {
             "wards": ward_list,
-            "pagination": {
-                "page": page,
-                "limit": limit,
-                "total": total,
-                "pages": (total + limit - 1) // limit
-            }
+            "pagination": {"page": page, "limit": limit, "total": total, "pages": (total + limit - 1) // limit}
         }
-    
-    async def update_ward(self, ward_id: uuid.UUID, update_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Update ward information.
 
-        Maps WardUpdate / API field names to SQLAlchemy columns. Never assigns relationship
-        names like ``head_nurse`` directly (that triggers async MissingGreenlet).
-        """
+    async def update_ward(self, ward_id: uuid.UUID, update_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Update ward information (never touches rooms). ward_type is free text."""
         from app.models.hospital import Ward
-        from app.core.enums import WardType
         from app.core.utils import parse_time_string
 
         result = await self.db.execute(
-            select(Ward).where(
-                and_(
-                    Ward.id == ward_id,
-                    Ward.hospital_id == self.hospital_id,
-                )
-            )
+            select(Ward).where(and_(Ward.id == ward_id, Ward.hospital_id == self.hospital_id))
         )
         ward = result.scalar_one_or_none()
 
@@ -3684,16 +3625,22 @@ class HospitalAdminService:
 
         data = dict(update_data)
 
+        if "name" in data and data["name"] is not None and data["name"] != ward.name:
+            existing_name = await self.db.execute(
+                select(Ward.id)
+                .where(and_(Ward.hospital_id == self.hospital_id, Ward.name == data["name"], Ward.id != ward_id))
+                .limit(1)
+            )
+            if existing_name.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": "WARD_NAME_EXISTS", "message": "Ward with this name already exists"},
+                )
+
         if "code" in data and data["code"] is not None and data["code"] != ward.code:
             existing_ward = await self.db.execute(
                 select(Ward.id)
-                .where(
-                    and_(
-                        Ward.hospital_id == self.hospital_id,
-                        Ward.code == data["code"],
-                        Ward.id != ward_id,
-                    )
-                )
+                .where(and_(Ward.hospital_id == self.hospital_id, Ward.code == data["code"], Ward.id != ward_id))
                 .limit(1)
             )
             if existing_ward.scalar_one_or_none():
@@ -3702,7 +3649,6 @@ class HospitalAdminService:
                     detail={"code": "WARD_CODE_EXISTS", "message": "Ward with this code already exists"},
                 )
 
-        # head_nurse (API) -> head_nurse_id (FK). Do not setattr(head_nurse, ...) on the model.
         if "head_nurse" in data:
             hn_raw = data.pop("head_nurse")
             if hn_raw is not None and str(hn_raw).strip():
@@ -3711,44 +3657,15 @@ class HospitalAdminService:
                 if not head_nurse_user:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
-                        detail={
-                            "code": "HEAD_NURSE_NOT_FOUND",
-                            "message": f"Nurse '{hn_name}' not found in this hospital",
-                        },
+                        detail={"code": "HEAD_NURSE_NOT_FOUND", "message": f"Nurse '{hn_name}' not found in this hospital"},
                     )
                 nurse_roles = [r.name for r in head_nurse_user.roles]
                 if not any(normalize_staff_role_name(role_name) == UserRole.NURSE.value for role_name in nurse_roles):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail={
-                            "code": "NOT_A_NURSE",
-                            "message": f"Staff member '{hn_name}' is not a nurse",
-                        },
+                        detail={"code": "NOT_A_NURSE", "message": f"Staff member '{hn_name}' is not a nurse"},
                     )
                 data["head_nurse_id"] = head_nurse_user.id
-            else:
-                data["head_nurse_id"] = None
-
-        if "head_nurse_id" in data:
-            hid = data["head_nurse_id"]
-            if hid:
-                hid_uuid = hid if isinstance(hid, uuid.UUID) else uuid.UUID(str(hid))
-                head_nurse = await self._get_hospital_staff_user(hid_uuid)
-                if not head_nurse:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail={"code": "HEAD_NURSE_NOT_FOUND", "message": "Head nurse not found in this hospital"},
-                    )
-                nurse_roles = [r.name for r in head_nurse.roles]
-                if not any(normalize_staff_role_name(role_name) == UserRole.NURSE.value for role_name in nurse_roles):
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail={
-                            "code": "NOT_A_NURSE",
-                            "message": "Selected user is not a nurse in this hospital",
-                        },
-                    )
-                data["head_nurse_id"] = hid_uuid
             else:
                 data["head_nurse_id"] = None
 
@@ -3758,28 +3675,7 @@ class HospitalAdminService:
         if "floor_number" in data and data["floor_number"] is not None:
             data["floor"] = str(data.pop("floor_number"))
 
-        if "ward_type" in data and data["ward_type"] is not None:
-            ward_type_raw = str(data["ward_type"]).strip().upper().replace("-", "_").replace(" ", "_")
-            data["ward_type"] = {
-                "GENERAL_WARD": "GENERAL",
-                "PRIVATE_ROOM": "PRIVATE",
-                "PRIVATE_WARD": "PRIVATE",
-                "ICU_WARD": "ICU",
-                "EMERGENCY_WARD": "EMERGENCY",
-                "MATERNITY_WARD": "MATERNITY",
-                "PEDIATRIC_WARD": "PEDIATRIC",
-                "SURGICAL_WARD": "SURGICAL",
-                "CARDIAC_WARD": "CARDIAC",
-            }.get(ward_type_raw, ward_type_raw)
-            if data["ward_type"] not in [wt.value for wt in WardType]:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "code": "INVALID_WARD_TYPE",
-                        "message": f"Invalid ward type. Must be one of: {', '.join([wt.value for wt in WardType])}",
-                    },
-                )
-
+        # ward_type: free text, already normalized by schema — pass through as-is, no enum check
         if "nurse_station_location" in data:
             loc = data.pop("nurse_station_location")
             if loc is not None:
@@ -3822,25 +3718,11 @@ class HospitalAdminService:
             data["visiting_hours_end"] = visiting_hours_end
 
         allowed_columns = {
-            "name",
-            "code",
-            "ward_type",
-            "description",
-            "floor",
-            "building",
-            "location_details",
-            "total_beds",
-            "nurse_station_phone",
-            "head_nurse_id",
-            "is_isolation_ward",
-            "is_emergency_accessible",
-            "visiting_hours_start",
-            "visiting_hours_end",
-            "has_oxygen_supply",
-            "has_suction",
-            "has_cardiac_monitor",
-            "has_ventilator_support",
-            "settings",
+            "name", "code", "ward_type", "description", "floor", "building",
+            "location_details", "total_beds", "nurse_station_phone", "head_nurse_id",
+            "is_isolation_ward", "is_emergency_accessible", "visiting_hours_start",
+            "visiting_hours_end", "has_oxygen_supply", "has_suction",
+            "has_cardiac_monitor", "has_ventilator_support", "settings",
         }
 
         for field, value in list(data.items()):
@@ -3852,91 +3734,279 @@ class HospitalAdminService:
         ward_id_str = str(ward.id)
         await self.db.commit()
 
-        return {
-            "ward_id": ward_id_str,
-            "message": "Ward updated successfully",
-        }
+        return {"ward_id": ward_id_str, "message": "Ward updated successfully"}
 
     async def update_ward_status(self, ward_id: uuid.UUID, is_active: bool) -> Dict[str, Any]:
-        """Enable or disable ward"""
+        """Enable or disable ward. Returns ward_name in response."""
         from app.models.hospital import Ward
-        
-        # Get ward
+
         result = await self.db.execute(
-            select(Ward).where(
-                and_(
-                    Ward.id == ward_id,
-                    Ward.hospital_id == self.hospital_id
-                )
-            )
+            select(Ward).where(and_(Ward.id == ward_id, Ward.hospital_id == self.hospital_id))
         )
         ward = result.scalar_one_or_none()
-        
+
         if not ward:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "WARD_NOT_FOUND", "message": "Ward not found"}
             )
-        
-        # Update status
+
         old_status = ward.is_active
         ward.is_active = is_active
         ward.updated_at = datetime.utcnow()
 
-        ward_id_str = str(ward.id)
+        ward_name_str = ward.name
         await self.db.commit()
 
         status_text = "enabled" if is_active else "disabled"
-
         return {
-            "ward_id": ward_id_str,
+            "ward_name": ward_name_str,
             "old_status": old_status,
             "new_status": is_active,
             "message": f"Ward {status_text} successfully",
         }
-    
-    async def create_bed(self, bed_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new bed"""
-        from app.models.hospital import Bed, Ward
-        from app.core.enums import BedStatus
-        
-        # ---------------------------------------------------------------------
-        # INPUT NORMALIZATION (ALIGN WITH BedCreate SCHEMA)
-        # ---------------------------------------------------------------------
 
-        # 1) Ensure ward_name exists (schema already enforces this)
-        ward_name = bed_data['ward_name']
+    async def delete_ward(self, ward_id: uuid.UUID) -> Dict[str, Any]:
+        """Delete a ward. Blocked if it still has beds. Returns ward_name."""
+        from app.models.hospital import Ward, Bed
 
-        # 2) Generate bed_code if not explicitly provided
-        bed_code = bed_data.get("bed_code")
-        if not bed_code:
-            # Build a readable unique code from ward name and bed_number
-            bed_number = bed_data.get("bed_number", "").strip()
-            safe_ward = ward_name.upper().replace(" ", "_") if ward_name else "WARD"
-            safe_bed = bed_number.upper().replace(" ", "_") if bed_number else "BED"
-            bed_code = f"{safe_ward}-BED-{safe_bed}"
-            bed_data["bed_code"] = bed_code
+        result = await self.db.execute(
+            select(Ward).where(and_(Ward.id == ward_id, Ward.hospital_id == self.hospital_id))
+        )
+        ward = result.scalar_one_or_none()
+        if not ward:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "WARD_NOT_FOUND", "message": "Ward not found"}
+            )
 
-        # 3) Map boolean convenience flags if coming from simpler payloads
-        #    (BedCreate already has booleans named has_oxygen / has_monitor etc.)
-        if "has_cardiac_monitor" not in bed_data and bed_data.get("has_monitor") is not None:
-            bed_data["has_cardiac_monitor"] = bool(bed_data["has_monitor"])
-        
-        # Find ward by name
+        bed_count_result = await self.db.execute(
+            select(func.count(Bed.id)).where(
+                and_(Bed.hospital_id == self.hospital_id, Bed.ward_id == ward.id)
+            )
+        )
+        if bed_count_result.scalar():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "WARD_HAS_BEDS", "message": "Cannot delete a ward that still has beds. Delete the beds first."}
+            )
+
+        ward_name_str = ward.name
+        await self.db.delete(ward)
+        await self.db.commit()
+
+        return {"ward_name": ward_name_str, "message": "Ward deleted successfully"}
+
+    # ============================================================================
+    # ROOM MANAGEMENT
+    # ============================================================================
+
+    async def _get_ward_or_404(self, ward_id: str):
+        from app.models.hospital import Ward
+        try:
+            ward_uuid = uuid.UUID(ward_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "INVALID_WARD_ID", "message": "Invalid ward ID format"},
+            )
+        result = await self.db.execute(
+            select(Ward).where(and_(Ward.id == ward_uuid, Ward.hospital_id == self.hospital_id))
+        )
+        ward = result.scalar_one_or_none()
+        if not ward:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "WARD_NOT_FOUND", "message": "Ward not found"},
+            )
+        return ward
+
+    async def _get_ward_by_name_or_404(self, ward_name: str):
         ward = await self._get_ward_by_name(ward_name)
         if not ward:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "WARD_NOT_FOUND", "message": f"Ward '{ward_name}' not found in this hospital"}
             )
-        
-        # Check if bed code already exists in this hospital
+        return ward
+
+    async def create_room(self, room_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Add a room to a ward, identified by ward_name."""
+        ward_name = room_data["ward_name"]
+        room_number = str(room_data["room_number"]).strip()
+
+        ward = await self._get_ward_by_name_or_404(ward_name)
+
+        rooms = list((ward.settings or {}).get("rooms", []))
+        if any(r["room_number"] == room_number for r in rooms):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "ROOM_EXISTS", "message": f"Room '{room_number}' already exists in this ward"},
+            )
+
+        rooms.append({"room_number": room_number})
+        st = dict(ward.settings or {})
+        st["rooms"] = rooms
+        ward.settings = st
+        ward.updated_at = datetime.utcnow()
+
+        ward_id_str = str(ward.id)
+        ward_name_str = ward.name
+        await self.db.commit()
+
+        return {
+            "ward_id": ward_id_str,
+            "ward_name": ward_name_str,
+            "room_number": room_number,
+            "total_rooms": len(rooms),
+            "message": "Room created successfully",
+        }
+
+    async def get_rooms(self, ward_id: str) -> Dict[str, Any]:
+        """List rooms in a ward, with bed counts per room"""
+        from app.models.hospital import Bed
+        ward = await self._get_ward_or_404(ward_id)
+        rooms = list((ward.settings or {}).get("rooms", []))
+
+        bed_counts: Dict[str, int] = {}
+        if rooms:
+            bed_result = await self.db.execute(
+                select(Bed.room_number, func.count(Bed.id))
+                .where(and_(Bed.hospital_id == self.hospital_id, Bed.ward_id == ward.id))
+                .group_by(Bed.room_number)
+            )
+            bed_counts = {rn: cnt for rn, cnt in bed_result.all()}
+
+        room_list = [
+            {"room_number": r["room_number"], "total_beds": bed_counts.get(r["room_number"], 0)}
+            for r in rooms
+        ]
+
+        return {"ward_id": str(ward.id), "ward_name": ward.name, "rooms": room_list, "total_rooms": len(room_list)}
+
+
+    async def update_room(self, ward_id: str, room_number: str, room_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Rename a room, cascading the change to any beds currently in it"""
+        from app.models.hospital import Bed
+        ward = await self._get_ward_or_404(ward_id)
+        new_room_number = room_data.get("room_number")
+
+        # Deep copy so we never touch the same dict objects that live inside ward.settings
+        rooms = copy.deepcopy((ward.settings or {}).get("rooms", []))
+        match = next((r for r in rooms if r["room_number"] == room_number), None)
+        if not match:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "ROOM_NOT_FOUND", "message": f"Room '{room_number}' not found in this ward"},
+            )
+
+        if not new_room_number or new_room_number == room_number:
+            return {"ward_id": str(ward.id), "room_number": room_number, "message": "No changes made"}
+
+        if any(r["room_number"] == new_room_number for r in rooms):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "ROOM_EXISTS", "message": f"Room '{new_room_number}' already exists in this ward"},
+            )
+
+        match["room_number"] = new_room_number
+
+        st = copy.deepcopy(ward.settings or {})
+        st["rooms"] = rooms
+        ward.settings = st
+        flag_modified(ward, "settings")   
+        ward.updated_at = datetime.utcnow()
+
+        # Cascade: keep beds pointing at the correct room
+        await self.db.execute(
+            Bed.__table__.update()
+            .where(and_(Bed.hospital_id == self.hospital_id, Bed.ward_id == ward.id, Bed.room_number == room_number))
+            .values(room_number=new_room_number, updated_at=datetime.utcnow())
+        )
+
+        ward_id_str = str(ward.id)
+        await self.db.commit()
+
+        return {
+            "ward_id": ward_id_str,
+            "old_room_number": room_number,
+            "new_room_number": new_room_number,
+            "message": "Room updated successfully",
+        }
+
+    async def delete_room(self, ward_id: str, room_number: str) -> Dict[str, Any]:
+        """Delete a room — blocked if it still has beds"""
+        from app.models.hospital import Bed
+        ward = await self._get_ward_or_404(ward_id)
+
+        rooms = list((ward.settings or {}).get("rooms", []))
+        if not any(r["room_number"] == room_number for r in rooms):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "ROOM_NOT_FOUND", "message": f"Room '{room_number}' not found in this ward"},
+            )
+
+        bed_count_result = await self.db.execute(
+            select(func.count(Bed.id)).where(
+                and_(Bed.hospital_id == self.hospital_id, Bed.ward_id == ward.id, Bed.room_number == room_number)
+            )
+        )
+        if bed_count_result.scalar():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "ROOM_HAS_BEDS", "message": "Cannot delete a room that still has beds. Delete or move the beds first."},
+            )
+
+        rooms = [r for r in rooms if r["room_number"] != room_number]
+        st = dict(ward.settings or {})
+        st["rooms"] = rooms
+        ward.settings = st
+        ward.updated_at = datetime.utcnow()
+
+        ward_id_str = str(ward.id)
+        await self.db.commit()
+
+        return {"ward_id": ward_id_str, "room_number": room_number, "message": "Room deleted successfully"}
+
+    # ============================================================================
+    # BED MANAGEMENT
+    # ============================================================================
+
+    async def create_bed(self, bed_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new bed inside an existing room of an existing ward."""
+        from app.models.hospital import Bed
+        from app.core.enums import BedStatus
+
+        ward_name = bed_data['ward_name']
+
+        bed_code = bed_data.get("bed_code")
+        if not bed_code:
+            bed_number = bed_data.get("bed_number", "").strip()
+            safe_ward = ward_name.upper().replace(" ", "_") if ward_name else "WARD"
+            safe_bed = bed_number.upper().replace(" ", "_") if bed_number else "BED"
+            bed_code = f"{safe_ward}-BED-{safe_bed}"
+            bed_data["bed_code"] = bed_code
+
+        if "has_cardiac_monitor" not in bed_data and bed_data.get("has_monitor") is not None:
+            bed_data["has_cardiac_monitor"] = bool(bed_data["has_monitor"])
+
+        ward = await self._get_ward_by_name_or_404(ward_name)
+
+        # Validate the room exists under this ward
+        room_number = bed_data.get("room_number")
+        rooms = list((ward.settings or {}).get("rooms", []))
+        if not any(r["room_number"] == room_number for r in rooms):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "ROOM_NOT_FOUND",
+                    "message": f"Room '{room_number}' not found in ward '{ward_name}'. Create the room first via POST /rooms.",
+                },
+            )
+
         existing_bed = await self.db.execute(
             select(Bed).where(
-                and_(
-                    Bed.hospital_id == self.hospital_id,
-                    Bed.bed_code == bed_data['bed_code']
-                )
+                and_(Bed.hospital_id == self.hospital_id, Bed.bed_code == bed_data['bed_code'])
             )
         )
         if existing_bed.scalar_one_or_none():
@@ -3944,16 +4014,14 @@ class HospitalAdminService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "BED_CODE_EXISTS", "message": "Bed with this code already exists"}
             )
-        
-        # Validate bed status
+
         bed_status = bed_data.get('status', BedStatus.AVAILABLE)
         if bed_status not in [bs.value for bs in BedStatus]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "INVALID_BED_STATUS", "message": f"Invalid bed status. Must be one of: {', '.join([bs.value for bs in BedStatus])}"}
             )
-        
-        # Create bed
+
         bed = Bed(
             id=uuid.uuid4(),
             hospital_id=self.hospital_id,
@@ -3963,7 +4031,7 @@ class HospitalAdminService:
             status=bed_status,
             bed_type=bed_data.get('bed_type', 'STANDARD'),
             floor=bed_data.get('floor'),
-            room_number=bed_data.get('room_number'),
+            room_number=room_number,
             bed_position=bed_data.get('bed_position'),
             has_oxygen=bed_data.get('has_oxygen', False),
             has_suction=bed_data.get('has_suction', False),
@@ -3974,7 +4042,7 @@ class HospitalAdminService:
             notes=bed_data.get('notes'),
             settings=bed_data.get('settings', {})
         )
-        
+
         ward_name_str = ward.name
         ward_id_str = str(ward.id)
         self.db.add(bed)
@@ -3983,6 +4051,7 @@ class HospitalAdminService:
             "bed_id": str(bed.id),
             "bed_code": bed.bed_code,
             "bed_number": bed.bed_number,
+            "room_number": room_number,
             "ward_name": ward_name_str,
             "ward_id": ward_id_str,
             "status": bed.status,
@@ -3990,39 +4059,32 @@ class HospitalAdminService:
         }
         await self.db.commit()
         return out
-    
+
     async def get_beds(
-        self, 
-        page: int = 1, 
+        self,
+        page: int = 1,
         limit: int = 50,
         ward_id: Optional[str] = None,
         status_filter: Optional[str] = None,
         bed_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """Get paginated list of beds"""
-        from app.models.hospital import Bed, Ward
-        
+        from app.models.hospital import Bed
+
         offset = (page - 1) * limit
-        
-        # Build query with hospital filter
+
         query = select(Bed).options(
             selectinload(Bed.ward),
             selectinload(Bed.current_patient).selectinload(PatientProfile.user),
         ).where(Bed.hospital_id == self.hospital_id)
-        
-        # Filter by ward
+
         if ward_id:
             query = query.where(Bed.ward_id == uuid.UUID(ward_id))
-        
-        # Filter by status
         if status_filter:
             query = query.where(Bed.status == status_filter)
-        
-        # Filter by bed type
         if bed_type:
             query = query.where(Bed.bed_type == bed_type)
-        
-        # Get total count
+
         count_query = select(func.count(Bed.id)).where(Bed.hospital_id == self.hospital_id)
         if ward_id:
             count_query = count_query.where(Bed.ward_id == uuid.UUID(ward_id))
@@ -4030,16 +4092,14 @@ class HospitalAdminService:
             count_query = count_query.where(Bed.status == status_filter)
         if bed_type:
             count_query = count_query.where(Bed.bed_type == bed_type)
-        
+
         total_result = await self.db.execute(count_query)
         total = total_result.scalar()
-        
-        # Get paginated results
+
         query = query.offset(offset).limit(limit).order_by(Bed.ward_id.asc(), Bed.bed_number.asc())
         result = await self.db.execute(query)
         beds = result.scalars().all()
-        
-        # Format response
+
         bed_list = []
         for bed in beds:
             current_patient_info = None
@@ -4049,11 +4109,12 @@ class HospitalAdminService:
                     "patient_id": bed.current_patient.patient_id,
                     "name": f"{bed.current_patient.user.first_name} {bed.current_patient.user.last_name}" if bed.current_patient.user else "Unknown"
                 }
-            
+
             bed_list.append({
                 "id": str(bed.id),
                 "bed_code": bed.bed_code,
                 "bed_number": bed.bed_number,
+                "room_number": bed.room_number,
                 "ward": {
                     "id": str(bed.ward_id),
                     "name": bed.ward.name,
@@ -4063,7 +4124,6 @@ class HospitalAdminService:
                 "status": bed.status,
                 "bed_type": bed.bed_type,
                 "floor": bed.floor,
-                "room_number": bed.room_number,
                 "bed_position": bed.bed_position,
                 "equipment": {
                     "oxygen": bed.has_oxygen,
@@ -4082,42 +4142,30 @@ class HospitalAdminService:
                 "created_at": bed.created_at.isoformat(),
                 "updated_at": bed.updated_at.isoformat()
             })
-        
+
         return {
             "beds": bed_list,
-            "pagination": {
-                "page": page,
-                "limit": limit,
-                "total": total,
-                "pages": (total + limit - 1) // limit
-            }
+            "pagination": {"page": page, "limit": limit, "total": total, "pages": (total + limit - 1) // limit}
         }
-    
+
     async def get_bed_details(self, bed_id: uuid.UUID) -> Dict[str, Any]:
         """Get detailed bed information"""
         from app.models.hospital import Bed
-        
-        # Get bed with ward and patient details
+
         query = select(Bed).options(
             selectinload(Bed.ward),
             selectinload(Bed.current_patient).selectinload(PatientProfile.user)
-        ).where(
-            and_(
-                Bed.id == bed_id,
-                Bed.hospital_id == self.hospital_id
-            )
-        )
-        
+        ).where(and_(Bed.id == bed_id, Bed.hospital_id == self.hospital_id))
+
         result = await self.db.execute(query)
         bed = result.scalar_one_or_none()
-        
+
         if not bed:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "BED_NOT_FOUND", "message": "Bed not found"}
             )
-        
-        # Format ward information
+
         ward_info = {
             "id": str(bed.ward_id),
             "name": bed.ward.name,
@@ -4126,8 +4174,7 @@ class HospitalAdminService:
             "floor": bed.ward.floor,
             "building": bed.ward.building
         }
-        
-        # Format current patient information (if occupied)
+
         current_patient_info = None
         if bed.current_patient and bed.current_patient.user:
             current_patient_info = {
@@ -4138,16 +4185,16 @@ class HospitalAdminService:
                 "gender": bed.current_patient.gender,
                 "phone": bed.current_patient.user.phone,
             }
-        
+
         return {
             "id": str(bed.id),
             "bed_code": bed.bed_code,
             "bed_number": bed.bed_number,
+            "room_number": bed.room_number,
             "ward": ward_info,
             "status": bed.status,
             "bed_type": bed.bed_type,
             "floor": bed.floor,
-            "room_number": bed.room_number,
             "bed_position": bed.bed_position,
             "equipment": {
                 "oxygen": bed.has_oxygen,
@@ -4167,10 +4214,10 @@ class HospitalAdminService:
             "created_at": bed.created_at.isoformat(),
             "updated_at": bed.updated_at.isoformat()
         }
-    
+
     async def update_bed_status(
-        self, 
-        bed_id: uuid.UUID, 
+        self,
+        bed_id: uuid.UUID,
         new_status: str,
         maintenance_notes: Optional[str] = None,
         patient_id: Optional[str] = None
@@ -4178,24 +4225,18 @@ class HospitalAdminService:
         """Update bed status"""
         from app.models.hospital import Bed
         from app.core.enums import BedStatus
-        
-        # Get bed
+
         result = await self.db.execute(
-            select(Bed).where(
-                and_(
-                    Bed.id == bed_id,
-                    Bed.hospital_id == self.hospital_id
-                )
-            )
+            select(Bed).where(and_(Bed.id == bed_id, Bed.hospital_id == self.hospital_id))
         )
         bed = result.scalar_one_or_none()
-        
+
         if not bed:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "BED_NOT_FOUND", "message": "Bed not found"}
             )
-        
+
         allowed_statuses = {bs.value for bs in BedStatus}
         new_status_norm = str(new_status).strip().upper()
         if new_status_norm not in allowed_statuses:
@@ -4208,11 +4249,8 @@ class HospitalAdminService:
             )
 
         old_status = bed.status
-        old_status_label = (
-            old_status.value if isinstance(old_status, BedStatus) else str(old_status)
-        )
+        old_status_label = old_status.value if isinstance(old_status, BedStatus) else str(old_status)
 
-        # Handle status-specific logic (compare using normalized enum values)
         if new_status_norm == BedStatus.OCCUPIED.value:
             if not patient_id or not str(patient_id).strip():
                 raise HTTPException(
@@ -4222,21 +4260,18 @@ class HospitalAdminService:
                         "message": "patient_id is required when marking bed as OCCUPIED (profile UUID or hospital ref e.g. PAT-001)",
                     },
                 )
-
             profile_uuid = await self._resolve_patient_profile_uuid(patient_id)
             bed.current_patient_id = profile_uuid
             bed.occupied_since = datetime.utcnow()
             patient_id_out = str(profile_uuid)
 
         elif new_status_norm == BedStatus.AVAILABLE.value:
-            # Clear patient assignment
             bed.current_patient_id = None
             bed.occupied_since = None
             bed.last_cleaned = datetime.utcnow()
             patient_id_out = None
 
         elif new_status_norm == BedStatus.MAINTENANCE.value:
-            # Clear patient assignment and add maintenance notes
             bed.current_patient_id = None
             bed.occupied_since = None
             if maintenance_notes:
@@ -4246,7 +4281,6 @@ class HospitalAdminService:
         else:
             patient_id_out = None
 
-        # Update bed status (persist canonical uppercase value)
         bed.status = new_status_norm
         bed.updated_at = datetime.utcnow()
 
@@ -4263,6 +4297,35 @@ class HospitalAdminService:
             "maintenance_notes": maintenance_notes,
             "message": f"Bed status updated from {old_status_label} to {new_status_norm}",
         }
+
+    async def delete_bed(self, bed_id: uuid.UUID) -> Dict[str, Any]:
+        """Delete a bed. Blocked if currently occupied."""
+        from app.models.hospital import Bed
+        from app.core.enums import BedStatus
+
+        result = await self.db.execute(
+            select(Bed).where(and_(Bed.id == bed_id, Bed.hospital_id == self.hospital_id))
+        )
+        bed = result.scalar_one_or_none()
+        if not bed:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "BED_NOT_FOUND", "message": "Bed not found"}
+            )
+
+        status_label = bed.status.value if isinstance(bed.status, BedStatus) else str(bed.status)
+        if status_label == BedStatus.OCCUPIED.value:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "BED_OCCUPIED", "message": "Cannot delete a bed that is currently occupied"}
+            )
+
+        bed_id_str = str(bed.id)
+        await self.db.delete(bed)
+        await self.db.commit()
+
+        return {"bed_id": bed_id_str, "message": "Bed deleted successfully"}
+
 
     # ============================================================================
     # TASK 2.7 - BED ASSIGNMENT (ADMISSION FLOW)

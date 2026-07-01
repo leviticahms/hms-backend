@@ -47,7 +47,7 @@ from app.schemas.admin import (
     StaffCreate, StaffStatusUpdate, StaffUpdateResponse,
     DoctorStaffUpdate, ReceptionistStaffUpdate, LabTechStaffUpdate, PharmacistStaffUpdate,
     AppointmentStatusUpdate,
-    PatientStatusUpdate, WardCreate, WardUpdate, WardStatusUpdate,
+    PatientStatusUpdate, RoomCreate,RoomUpdate, WardCreate, WardUpdate, WardStatusUpdate,
     BedCreate, BedStatusUpdate, AdmissionCreate, BedAssignmentCreate,
     DischargeCreate, DepartmentAssignmentCreate, DepartmentUnassignmentCreate,
     DashboardOverviewOut, StaffStatisticsOut, AppointmentStatisticsOut,
@@ -880,6 +880,10 @@ async def update_patient_status(
 # TASK 2.6 - BED & WARD MANAGEMENT ENDPOINTS
 # ============================================================================
 
+# ============================================================================
+# WARD MANAGEMENT
+# ============================================================================
+
 @router.post("/wards", status_code=status.HTTP_201_CREATED, tags=["Hospital Admin - Ward & Bed Management"])
 async def create_ward(
     ward_data: WardCreate,
@@ -888,15 +892,11 @@ async def create_ward(
 ):
     """
     Create a new ward/unit in the hospital.
-    
-    Creates a ward with:
-    - Ward type classification (ICU, General, Emergency, Private)
-    - Capacity and facility specifications
-    - Staff assignments and contact information
-    - Equipment and service capabilities
+
+    Creates ONLY the ward — rooms are added afterwards via POST /rooms,
+    and beds via POST /beds. ward_type accepts any free-text value.
     """
-    result = await service.create_ward(ward_data.dict())
-    return result
+    return await service.create_ward(ward_data.dict())
 
 
 @router.get("/wards", response_model=WardListOut, tags=["Hospital Admin - Ward & Bed Management"])
@@ -908,22 +908,10 @@ async def list_wards(
     current_user: User = Depends(require_hospital_operations()),
     service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
-    """
-    Get paginated list of hospital wards.
-    
-    Returns wards with:
-    - Ward information and specifications
-    - Bed statistics and occupancy rates
-    - Staff assignments and facilities
-    - Equipment and service capabilities
-    """
-    result = await service.get_wards(
-        page=page,
-        limit=limit,
-        ward_type=ward_type,
-        active_only=active_only
+    """Get paginated list of hospital wards with bed statistics."""
+    return await service.get_wards(
+        page=page, limit=limit, ward_type=ward_type, active_only=active_only
     )
-    return result
 
 
 @router.put("/wards/{ward_id}", tags=["Hospital Admin - Ward & Bed Management"])
@@ -933,14 +921,7 @@ async def update_ward(
     current_user: User = Depends(require_hospital_operations()),
     service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
-    """
-    Update ward information.
-    
-    Allows updating ward details with proper validation:
-    - Ensures ward code uniqueness
-    - Validates staff assignments
-    - Maintains facility and equipment specifications
-    """
+    """Update ward information."""
     try:
         ward_uuid = uuid.UUID(ward_id)
     except ValueError:
@@ -948,18 +929,15 @@ async def update_ward(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "INVALID_WARD_ID", "message": "Invalid ward ID format"}
         )
-    
-    # Convert to dict, excluding None values
+
     update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
-    
     if not update_dict:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "NO_UPDATE_DATA", "message": "No valid update data provided"}
         )
-    
-    result = await service.update_ward(ward_uuid, update_dict)
-    return result
+
+    return await service.update_ward(ward_uuid, update_dict)
 
 
 @router.patch("/wards/{ward_id}/status", tags=["Hospital Admin - Ward & Bed Management"])
@@ -969,14 +947,7 @@ async def update_ward_status(
     current_user: User = Depends(require_hospital_operations()),
     service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
-    """
-    Enable or disable a ward.
-    
-    Status changes affect:
-    - Ward availability for bed assignments
-    - Patient admission capabilities
-    - Ward visibility in the system
-    """
+    """Enable or disable a ward. Returns ward_name for confirmation."""
     try:
         ward_uuid = uuid.UUID(ward_id)
     except ValueError:
@@ -984,10 +955,83 @@ async def update_ward_status(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "INVALID_WARD_ID", "message": "Invalid ward ID format"}
         )
-    
-    result = await service.update_ward_status(ward_uuid, status_data.is_active)
-    return result
 
+    return await service.update_ward_status(ward_uuid, status_data.is_active)
+
+
+@router.delete("/wards/{ward_id}", tags=["Hospital Admin - Ward & Bed Management"])
+async def delete_ward(
+    ward_id: str,
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
+):
+    """Delete Ward. Blocked (409) if beds still exist under it. Returns ward_name."""
+    try:
+        ward_uuid = uuid.UUID(ward_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_WARD_ID", "message": "Invalid ward ID"}
+        )
+
+    return await service.delete_ward(ward_uuid)
+
+
+# ============================================================================
+# ROOM MANAGEMENT — ward identified by ward_name in the body
+# ============================================================================
+
+@router.post("/rooms", status_code=status.HTTP_201_CREATED, tags=["Hospital Admin - Ward & Bed Management"])
+async def create_room(
+    room_data: RoomCreate,
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
+):
+    """
+    Add a room to an existing ward, identified by ward name.
+
+    The ward must already exist (create it via POST /wards first).
+    Room numbers must be unique within the ward.
+    """
+    return await service.create_room(room_data.dict())
+
+
+@router.get("/wards/{ward_id}/rooms", tags=["Hospital Admin - Ward & Bed Management"])
+async def list_rooms(
+    ward_id: str,
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
+):
+    """List rooms in a ward, with bed counts per room."""
+    return await service.get_rooms(ward_id)
+
+
+@router.put("/wards/{ward_id}/rooms/{room_number}", tags=["Hospital Admin - Ward & Bed Management"])
+async def update_room(
+    ward_id: str,
+    room_number: str,
+    room_data: RoomUpdate,
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
+):
+    """Rename a room (cascades to any beds currently assigned to it)."""
+    return await service.update_room(ward_id, room_number, room_data.dict(exclude_none=True))
+
+
+@router.delete("/wards/{ward_id}/rooms/{room_number}", tags=["Hospital Admin - Ward & Bed Management"])
+async def delete_room(
+    ward_id: str,
+    room_number: str,
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
+):
+    """Delete a room. Blocked (409) if the room still has beds."""
+    return await service.delete_room(ward_id, room_number)
+
+
+# ============================================================================
+# BED MANAGEMENT
+# ============================================================================
 
 @router.post("/beds", status_code=status.HTTP_201_CREATED, tags=["Hospital Admin - Ward & Bed Management"])
 async def create_bed(
@@ -996,17 +1040,12 @@ async def create_bed(
     service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
     """
-    Create a new bed in a ward.
-    
-    Creates a bed with:
-    - Ward identification by name (not ID)
-    - Unique bed identification and coding
-    - Equipment and facility specifications
-    - Location and positioning details
-    - Pricing for private beds
+    Create a new bed inside an existing room, inside an existing ward.
+
+    Ward is identified by name; the room must already exist under that
+    ward (create it first via POST /rooms).
     """
-    result = await service.create_bed(bed_data.dict())
-    return result
+    return await service.create_bed(bed_data.dict())
 
 
 @router.get("/beds", response_model=BedListOut, tags=["Hospital Admin - Ward & Bed Management"])
@@ -1014,28 +1053,16 @@ async def list_beds(
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(50, ge=1, le=100, description="Items per page"),
     ward_id: Optional[str] = Query(None, description="Filter by ward UUID"),
-    status: Optional[str] = Query(None, description="Filter by bed status"),
+    bed_status: Optional[str] = Query(None, alias="status", description="Filter by bed status"),
     bed_type: Optional[str] = Query(None, description="Filter by bed type"),
     current_user: User = Depends(require_hospital_operations()),
     service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
-    """
-    Get paginated list of beds.
-    
-    Returns beds with:
-    - Bed identification and location
-    - Current status and occupancy
-    - Equipment and facility details
-    - Patient assignment information
-    """
-    result = await service.get_beds(
-        page=page,
-        limit=limit,
-        ward_id=ward_id,
-        status_filter=status,
-        bed_type=bed_type
+    """Get paginated list of beds. Query param stays `?status=` on the wire."""
+    return await service.get_beds(
+        page=page, limit=limit, ward_id=ward_id,
+        status_filter=bed_status, bed_type=bed_type
     )
-    return result
 
 
 @router.get("/beds/{bed_id}", response_model=BedDetailsOut, tags=["Hospital Admin - Ward & Bed Management"])
@@ -1044,15 +1071,7 @@ async def get_bed_details(
     current_user: User = Depends(require_hospital_operations()),
     service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
-    """
-    Get detailed bed information.
-    
-    Returns complete bed details including:
-    - Bed specifications and equipment
-    - Current occupancy and patient information
-    - Maintenance history and notes
-    - Ward and location details
-    """
+    """Get detailed bed information."""
     try:
         bed_uuid = uuid.UUID(bed_id)
     except ValueError:
@@ -1060,9 +1079,8 @@ async def get_bed_details(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "INVALID_BED_ID", "message": "Invalid bed ID format"}
         )
-    
-    result = await service.get_bed_details(bed_uuid)
-    return result
+
+    return await service.get_bed_details(bed_uuid)
 
 
 @router.patch("/beds/{bed_id}/status", tags=["Hospital Admin - Ward & Bed Management"])
@@ -1072,15 +1090,7 @@ async def update_bed_status(
     current_user: User = Depends(require_hospital_operations()),
     service: HospitalAdminService = Depends(get_hospital_operations_service)
 ):
-    """
-    Update bed status.
-    
-    Supports comprehensive bed management:
-    - Status changes (available, occupied, maintenance, reserved)
-    - Patient assignment and discharge
-    - Maintenance scheduling and notes
-    - Bed availability tracking
-    """
+    """Update bed status: available / occupied / maintenance / reserved."""
     try:
         bed_uuid = uuid.UUID(bed_id)
     except ValueError:
@@ -1088,16 +1098,31 @@ async def update_bed_status(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "INVALID_BED_ID", "message": "Invalid bed ID format"}
         )
-    
-    result = await service.update_bed_status(
+
+    return await service.update_bed_status(
         bed_id=bed_uuid,
         new_status=status_data.status,
         maintenance_notes=status_data.maintenance_notes,
         patient_id=status_data.patient_id
     )
-    return result
 
 
+@router.delete("/beds/{bed_id}", tags=["Hospital Admin - Ward & Bed Management"])
+async def delete_bed(
+    bed_id: str,
+    current_user: User = Depends(require_hospital_operations()),
+    service: HospitalAdminService = Depends(get_hospital_operations_service)
+):
+    """Delete Bed. Blocked (409) if currently occupied."""
+    try:
+        bed_uuid = uuid.UUID(bed_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_BED_ID", "message": "Invalid bed ID"}
+        )
+
+    return await service.delete_bed(bed_uuid)
 # ============================================================================
 # TASK 2.7 - BED ASSIGNMENT (ADMISSION FLOW) ENDPOINTS
 # ============================================================================

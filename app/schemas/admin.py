@@ -5,7 +5,6 @@ from typing import Optional, List, Dict, Any
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator, AliasChoices
 
-
 # ============================================================================
 # SUPER ADMIN — MY PROFILE (UI: Personal, Security tabs)
 # ============================================================================
@@ -410,18 +409,30 @@ class PatientStatusUpdate(BaseModel):
     """Patient status update request"""
     is_active: bool = Field(..., description="Activate (true) or deactivate (false) patient account")
 
+class RoomCreate(BaseModel):
+    """Room creation request — ward identified by name, not ID."""
+    ward_name: str = Field(..., description="Name of the ward this room belongs to")
+    room_number: str = Field(..., min_length=1, max_length=20, description="Room Number")
+
+
+class RoomUpdate(BaseModel):
+    room_number: str = Field(..., min_length=1, max_length=20, description="New room number")
+
 
 class WardCreate(BaseModel):
-    """Ward creation request"""
-    name: str = Field(..., min_length=2, max_length=100, description="Ward name")
-    ward_type: str = Field(..., description="Ward type: ICU, GENERAL, EMERGENCY, PRIVATE, MATERNITY, PEDIATRIC, SURGICAL, CARDIAC")
-    floor_number: int = Field(..., ge=0, description="Floor number (0 for ground floor)")
-    total_beds: int = Field(..., ge=1, le=100, description="Total number of beds")
+    """Ward creation request — creates ONLY the ward.
+    Rooms are added separately via POST /rooms.
+    ward_type is free text — users can define their own ward types.
+    """
+
+    name: str = Field(..., min_length=2, max_length=100)
+    ward_type: str = Field(..., min_length=2, max_length=50, description="Any ward type, e.g. ICU, General, Burns Unit, Neuro ICU")
+    floor_number: int = Field(..., ge=0, description="Floor Number")
     description: Optional[str] = Field(None, max_length=500)
-    head_nurse: Optional[str] = Field(None, description="Head nurse name")
+    head_nurse: Optional[str] = None
     phone: Optional[str] = Field(None, pattern=r'^\+?[\d\s\-\(\)]{10,20}$')
-    facilities: Optional[List[str]] = Field(default_factory=list, description="Available facilities")
-    visiting_hours: Optional[str] = Field(None, description="e.g., '10:00 AM - 8:00 PM'")
+    facilities: List[str] = Field(default_factory=list)
+    visiting_hours: Optional[str] = None
     emergency_access: bool = False
     isolation_capability: bool = False
     oxygen_supply: bool = False
@@ -437,28 +448,18 @@ class WardCreate(BaseModel):
     @field_validator("ward_type", mode="before")
     @classmethod
     def normalize_ward_type(cls, value):
-        if value is None:
-            return value
-        raw = str(value).strip().upper().replace("-", "_").replace(" ", "_")
-        return {
-            "GENERAL_WARD": "GENERAL",
-            "PRIVATE_ROOM": "PRIVATE",
-            "PRIVATE_WARD": "PRIVATE",
-            "ICU_WARD": "ICU",
-            "EMERGENCY_WARD": "EMERGENCY",
-            "MATERNITY_WARD": "MATERNITY",
-            "PEDIATRIC_WARD": "PEDIATRIC",
-            "SURGICAL_WARD": "SURGICAL",
-            "CARDIAC_WARD": "CARDIAC",
-        }.get(raw, raw)
+        # Free text — just trim/tidy casing, no enum restriction
+        if isinstance(value, str):
+            return value.strip().title()
+        return value
 
 
 class WardUpdate(BaseModel):
-    """Ward update request"""
+    """Ward update request — ward_type is free text, user-defined."""
+
     name: Optional[str] = Field(None, min_length=2, max_length=100)
-    ward_type: Optional[str] = None
+    ward_type: Optional[str] = Field(None, min_length=2, max_length=50)
     floor_number: Optional[int] = Field(None, ge=0)
-    total_beds: Optional[int] = Field(None, ge=1, le=100)
     description: Optional[str] = Field(None, max_length=500)
     head_nurse: Optional[str] = None
     phone: Optional[str] = Field(None, pattern=r'^\+?[\d\s\-\(\)]{10,20}$')
@@ -469,24 +470,20 @@ class WardUpdate(BaseModel):
     oxygen_supply: Optional[bool] = None
     nurse_station_location: Optional[str] = None
 
-    @field_validator("phone", "head_nurse", "nurse_station_location", "visiting_hours", "ward_type", mode="before")
+    @field_validator("phone", "head_nurse", "nurse_station_location", "visiting_hours", mode="before")
     @classmethod
-    def normalize_optional_text(cls, value):
+    def empty_strings_to_none(cls, value):
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("ward_type", mode="before")
+    @classmethod
+    def normalize_ward_type(cls, value):
         if isinstance(value, str):
-            raw = value.strip().upper().replace("-", "_").replace(" ", "_")
-            return {
-                "GENERAL_WARD": "GENERAL",
-                "PRIVATE_ROOM": "PRIVATE",
-                "PRIVATE_WARD": "PRIVATE",
-                "ICU_WARD": "ICU",
-                "EMERGENCY_WARD": "EMERGENCY",
-                "MATERNITY_WARD": "MATERNITY",
-                "PEDIATRIC_WARD": "PEDIATRIC",
-                "SURGICAL_WARD": "SURGICAL",
-                "CARDIAC_WARD": "CARDIAC",
-            }.get(raw, value)
+            if not value.strip():
+                return None
+            return value.strip().title()
         return value
 
 
@@ -496,12 +493,13 @@ class WardStatusUpdate(BaseModel):
 
 
 class BedCreate(BaseModel):
-    """Bed creation request"""
+    """Bed creation request — the room must already exist under the ward."""
     ward_name: str = Field(..., description="Name of ward")
-    bed_number: str = Field(..., min_length=1, max_length=20, description="Bed number/identifier")
+    room_number: str = Field(..., min_length=1, max_length=20, description="Must already exist under the ward")
+    bed_number: str = Field(..., min_length=1, max_length=20, description="Bed Number")
     bed_type: str = Field("GENERAL", description="Bed type: GENERAL, ICU, EMERGENCY, PRIVATE")
     equipment: Optional[List[str]] = Field(default_factory=list, description="Attached equipment")
-    daily_rate: Optional[float] = Field(None, ge=0, description="Daily rate for this bed")
+    daily_rate: Optional[float] = Field(None, ge=0, description="Daily rate")
     notes: Optional[str] = Field(None, max_length=500)
     is_isolation: bool = False
     has_oxygen: bool = False
@@ -511,14 +509,11 @@ class BedCreate(BaseModel):
 class BedStatusUpdate(BaseModel):
     """Bed status update request"""
     status: str = Field(..., description="New bed status (AVAILABLE, OCCUPIED, MAINTENANCE, RESERVED)")
-    maintenance_notes: Optional[str] = Field(
-        None, description="Notes when moving to MAINTENANCE"
-    )
+    maintenance_notes: Optional[str] = Field(None, description="Notes when moving to MAINTENANCE")
     patient_id: Optional[str] = Field(
         None,
         description="When status is OCCUPIED: patient_profiles.id (UUID) or hospital patient ref (e.g. PAT-001)",
     )
-
 
 class AdmissionCreate(BaseModel):
     """Admission creation request"""
