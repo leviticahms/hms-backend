@@ -157,6 +157,7 @@ class TreatmentPlan(TenantBaseModel):
     medications = Column(JSON_TYPE, nullable=False, default=lambda: [])
     procedures = Column(JSON_TYPE, nullable=False, default=lambda: [])
     therapies = Column(JSON_TYPE, nullable=False, default=lambda: [])
+    tests = Column(JSON_TYPE, nullable=False, default=lambda: [])
     lifestyle_modifications = Column(JSON_TYPE, nullable=False, default=lambda: [])
     
     # Timeline

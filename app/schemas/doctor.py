@@ -54,6 +54,28 @@ class OutcomeStatus(str, Enum):
     GOOD = "GOOD"
     FAIR = "FAIR"
     POOR = "POOR"
+    
+class TestCategory(str, Enum):
+    BLOOD_TEST = "Blood Test"
+    URINE_TEST = "Urine Test"
+    X_RAY = "X-Ray"
+    ECG = "ECG"
+    THYROID_PANEL = "Thyroid Panel"
+    CT_SCAN = "CT Scan"
+    MRI = "MRI"
+    ULTRASOUND = "Ultrasound"
+    SCANNING = "Scanning"
+
+
+class TestItem(BaseModel):
+    test_name: str
+    category: TestCategory
+    priority: str = "Routine"
+    instructions: Optional[str] = None
+
+
+class TestCreateRequest(BaseModel):
+    tests: List[TestItem]
 
 
 # ============================================================================

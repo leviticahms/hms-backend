@@ -40,6 +40,8 @@ from app.schemas.doctor import (
     PlanPriority, TreatmentType, MilestoneStatus, OutcomeStatus, ReviewFrequency,
     TreatmentPlanStatus
 )
+from app.models.doctor import TreatmentPlan
+from app.schemas.doctor import TestCreateRequest
 # from app.services.clinical_service import get_checked_in_patients, ClinicalService
 # from app.dependencies.auth import require_doctor
 # from app.schemas.appointment import CheckedInPatientsListResponse
@@ -1799,4 +1801,61 @@ async def get_treatment_plan_analytics(
             "invalid_dates_skipped": invalid_dates_count,
             "data_quality_score": round(((total_plans - invalid_dates_count) / total_plans * 100), 1) if total_plans > 0 else 100
         }
+    }
+    
+
+@router.post(
+    "/plans/{plan_id}/tests",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create Tests for Treatment Plan"
+)
+async def create_tests(
+    plan_id: str,
+    request: TestCreateRequest,
+    current_user: User = Depends(get_current_user),
+    tenant_db: AsyncSession = Depends(get_db_session),
+):
+    """
+    Create tests (Blood Test, X-Ray, ECG, Urine Test, CT Scan, etc.)
+    for an existing treatment plan.
+    """
+
+    treatment_plan = (
+        await tenant_db.execute(
+            select(TreatmentPlan).where(TreatmentPlan.id == plan_id)
+        )
+    ).scalar_one_or_none()
+
+    if not treatment_plan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Treatment plan not found"
+        )
+
+    existing_tests = treatment_plan.tests or []
+
+    for item in request.tests:
+        existing_tests.append(
+            {
+                "id": str(uuid4()),
+                "test_name": item.test_name,
+                "category": item.category,
+                "priority": item.priority,
+                "instructions": item.instructions,
+                "status": "PENDING",
+                "created_at": datetime.utcnow().isoformat()
+            }
+        )
+
+    treatment_plan.tests = existing_tests
+
+    tenant_db.add(treatment_plan)
+    await tenant_db.commit()
+    await tenant_db.refresh(treatment_plan)
+
+    return {
+        "success": True,
+        "message": "Tests created successfully",
+        "plan_id": str(treatment_plan.id),
+        "tests": treatment_plan.tests
     }
