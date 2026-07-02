@@ -3694,6 +3694,7 @@ class HospitalAdminService:
             st = dict(ward.settings or {})
             st["facilities"] = facilities_update
             ward.settings = st
+            flag_modified(ward, "settings")
 
         visiting_hours_start = None
         visiting_hours_end = None
@@ -3831,9 +3832,10 @@ class HospitalAdminService:
         return ward
 
     async def create_room(self, room_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Add a room to a ward, identified by ward_name."""
+        """Add a room to a ward, identified by exact ward_name. Stores daily_price per-room in JSON."""
         ward_name = room_data["ward_name"]
         room_number = str(room_data["room_number"]).strip()
+        daily_price = room_data.get("daily_price")
 
         ward = await self._get_ward_by_name_or_404(ward_name)
 
@@ -3844,10 +3846,15 @@ class HospitalAdminService:
                 detail={"code": "ROOM_EXISTS", "message": f"Room '{room_number}' already exists in this ward"},
             )
 
-        rooms.append({"room_number": room_number})
+        room_entry: Dict[str, Any] = {"room_number": room_number}
+        if daily_price is not None:
+            room_entry["daily_price"] = float(daily_price)
+
+        rooms.append(room_entry)
         st = dict(ward.settings or {})
         st["rooms"] = rooms
         ward.settings = st
+        flag_modified(ward, "settings")
         ward.updated_at = datetime.utcnow()
 
         ward_id_str = str(ward.id)
@@ -3858,6 +3865,7 @@ class HospitalAdminService:
             "ward_id": ward_id_str,
             "ward_name": ward_name_str,
             "room_number": room_number,
+            "daily_price": daily_price,
             "total_rooms": len(rooms),
             "message": "Room created successfully",
         }
@@ -3878,7 +3886,11 @@ class HospitalAdminService:
             bed_counts = {rn: cnt for rn, cnt in bed_result.all()}
 
         room_list = [
-            {"room_number": r["room_number"], "total_beds": bed_counts.get(r["room_number"], 0)}
+            {
+                "room_number": r["room_number"],
+                "daily_price": r.get("daily_price"),
+                "total_beds": bed_counts.get(r["room_number"], 0),
+            }
             for r in rooms
         ]
 
@@ -3886,10 +3898,11 @@ class HospitalAdminService:
 
 
     async def update_room(self, ward_id: str, room_number: str, room_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Rename a room, cascading the change to any beds currently in it"""
+        """Update a room's number and/or daily_price; cascade room_number rename to beds."""
         from app.models.hospital import Bed
         ward = await self._get_ward_or_404(ward_id)
         new_room_number = room_data.get("room_number")
+        new_daily_price = room_data.get("daily_price")
 
         # Deep copy so we never touch the same dict objects that live inside ward.settings
         rooms = copy.deepcopy((ward.settings or {}).get("rooms", []))
@@ -3900,29 +3913,39 @@ class HospitalAdminService:
                 detail={"code": "ROOM_NOT_FOUND", "message": f"Room '{room_number}' not found in this ward"},
             )
 
-        if not new_room_number or new_room_number == room_number:
-            return {"ward_id": str(ward.id), "room_number": room_number, "message": "No changes made"}
+        changed = False
+        final_room_number = room_number
 
-        if any(r["room_number"] == new_room_number for r in rooms):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"code": "ROOM_EXISTS", "message": f"Room '{new_room_number}' already exists in this ward"},
+        # Handle room_number rename
+        if new_room_number and new_room_number != room_number:
+            if any(r["room_number"] == new_room_number for r in rooms):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": "ROOM_EXISTS", "message": f"Room '{new_room_number}' already exists in this ward"},
+                )
+            match["room_number"] = new_room_number
+            final_room_number = new_room_number
+            # Cascade rename to beds
+            await self.db.execute(
+                Bed.__table__.update()
+                .where(and_(Bed.hospital_id == self.hospital_id, Bed.ward_id == ward.id, Bed.room_number == room_number))
+                .values(room_number=new_room_number, updated_at=datetime.utcnow())
             )
+            changed = True
 
-        match["room_number"] = new_room_number
+        # Handle daily_price update
+        if new_daily_price is not None:
+            match["daily_price"] = float(new_daily_price)
+            changed = True
+
+        if not changed:
+            return {"ward_id": str(ward.id), "room_number": room_number, "message": "No changes made"}
 
         st = copy.deepcopy(ward.settings or {})
         st["rooms"] = rooms
         ward.settings = st
-        flag_modified(ward, "settings")   
+        flag_modified(ward, "settings")
         ward.updated_at = datetime.utcnow()
-
-        # Cascade: keep beds pointing at the correct room
-        await self.db.execute(
-            Bed.__table__.update()
-            .where(and_(Bed.hospital_id == self.hospital_id, Bed.ward_id == ward.id, Bed.room_number == room_number))
-            .values(room_number=new_room_number, updated_at=datetime.utcnow())
-        )
 
         ward_id_str = str(ward.id)
         await self.db.commit()
@@ -3930,7 +3953,8 @@ class HospitalAdminService:
         return {
             "ward_id": ward_id_str,
             "old_room_number": room_number,
-            "new_room_number": new_room_number,
+            "new_room_number": final_room_number,
+            "daily_price": match.get("daily_price"),
             "message": "Room updated successfully",
         }
 
@@ -3961,6 +3985,7 @@ class HospitalAdminService:
         st = dict(ward.settings or {})
         st["rooms"] = rooms
         ward.settings = st
+        flag_modified(ward, "settings")
         ward.updated_at = datetime.utcnow()
 
         ward_id_str = str(ward.id)
@@ -4015,7 +4040,7 @@ class HospitalAdminService:
                 detail={"code": "BED_CODE_EXISTS", "message": "Bed with this code already exists"}
             )
 
-        bed_status = bed_data.get('status', BedStatus.AVAILABLE)
+        bed_status = bed_data.get('status', BedStatus.AVAILABLE.value)
         if bed_status not in [bs.value for bs in BedStatus]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -4047,6 +4072,9 @@ class HospitalAdminService:
         ward_id_str = str(ward.id)
         self.db.add(bed)
         await self.db.flush()
+        # Keep ward's total_beds counter in sync
+        ward.total_beds = (ward.total_beds or 0) + 1
+        ward.updated_at = datetime.utcnow()
         out = {
             "bed_id": str(bed.id),
             "bed_code": bed.bed_code,
@@ -4321,6 +4349,15 @@ class HospitalAdminService:
             )
 
         bed_id_str = str(bed.id)
+        # Keep ward's total_beds counter in sync
+        from app.models.hospital import Ward as _Ward
+        ward_result = await self.db.execute(
+            select(_Ward).where(and_(_Ward.id == bed.ward_id, _Ward.hospital_id == self.hospital_id))
+        )
+        ward_obj = ward_result.scalar_one_or_none()
+        if ward_obj:
+            ward_obj.total_beds = max(0, (ward_obj.total_beds or 0) - 1)
+            ward_obj.updated_at = datetime.utcnow()
         await self.db.delete(bed)
         await self.db.commit()
 
@@ -6603,17 +6640,17 @@ class HospitalAdminService:
         return result.scalar_one_or_none()
     
     async def _get_ward_by_name(self, ward_name: str) -> Optional['Ward']:
-        """Get ward by name within this hospital"""
+        """Get active ward by exact name within this hospital."""
         from app.models.hospital import Ward
         query = (
             select(Ward)
             .where(
                 and_(
                     Ward.hospital_id == self.hospital_id,
-                    Ward.name.ilike(f"%{ward_name}%")
+                    Ward.name == ward_name,
+                    Ward.is_active == True,
                 )
             )
-            .order_by(Ward.name.asc(), Ward.id.asc())
             .limit(1)
         )
         result = await self.db.execute(query)
