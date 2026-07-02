@@ -503,7 +503,6 @@ async def get_receptionist_avatar(
 ):
     avatar_url = await get_staff_avatar_url(
         staff_user_id=current_user.id,
-        role="receptionist",
         current_user=current_user,
         db=db,
     )

@@ -1085,7 +1085,6 @@ async def get_doctor_avatar(
     avatar_url = await get_staff_avatar_url(
         staff_user_id=current_user.id,
         current_user=current_user,
-        role="doctor",
         db=db,  
     )
 
