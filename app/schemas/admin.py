@@ -413,10 +413,12 @@ class RoomCreate(BaseModel):
     """Room creation request — ward identified by name, not ID."""
     ward_name: str = Field(..., description="Name of the ward this room belongs to")
     room_number: str = Field(..., min_length=1, max_length=20, description="Room Number")
+    daily_price: Optional[float] = Field(None, ge=0, description="Daily room charge rate (stored per-room)")
 
 
 class RoomUpdate(BaseModel):
-    room_number: str = Field(..., min_length=1, max_length=20, description="New room number")
+    room_number: Optional[str] = Field(None, min_length=1, max_length=20, description="New room number (omit to keep existing)")
+    daily_price: Optional[float] = Field(None, ge=0, description="Daily room charge rate")
 
 
 class WardCreate(BaseModel):
